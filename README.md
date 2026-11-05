@@ -5,7 +5,8 @@ Anchor escrow on Solana, a Rust maker daemon, a static taker web app, and quotes
 central operator, and a server-free refund path for every user.
 
 Status: early implementation, for testnet and devnet only. Nothing here is audited or handles real funds. The Liquid
-contract library exists and is tested on a local node; the Solana program, maker daemon and client don't exist yet.
+contract library and the Solana program exist and are tested locally. The maker daemon and client don't exist yet, and nothing
+has run on a public network.
 
 | Document | Contents |
 |---|---|

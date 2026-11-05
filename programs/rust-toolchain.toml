@@ -1,0 +1,5 @@
+# Host builds and tests only. `cargo build-sbf` uses the Solana platform-tools compiler.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

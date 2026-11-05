@@ -103,8 +103,10 @@ USDT mint for a mainnet build, a stand-in for devnet.
 
 | Field | Type | Notes |
 |---|---|---|
-| `initiator` | Pubkey | Funded the lock. Receives refund and rent. |
+| `initiator` | Pubkey | Funded the lock: a wallet, or a maker vault PDA. |
 | `recipient` | Pubkey | Receives the claim. |
+| `refund_token` | Pubkey | The only token account a refund may pay: the wallet's canonical account, or the vault's own. |
+| `rent_payer` | Pubkey | Receives the rent, and may close early: the wallet, or the vault's operator. |
 | `amount` | u64 | Base units, greater than 0. |
 | `payment_hash` | [u8; 32] | |
 | `created_slot` | u64 | |
@@ -122,7 +124,7 @@ The seeds include the initiator, so nobody can front-run a lock with the same ha
 
 **The preimage stays in the account after claim.** Reading the transaction instead would be fragile: a claim made
 through CPI with deliberately noisy logs could hide it, and free RPCs drop history. A plain `getAccountInfo` on a PDA
-the maker can derive always works, and only the initiator can close the account early.
+the maker can derive always works, and only the rent payer can close the account early.
 
 ### Instructions
 
@@ -138,10 +140,10 @@ can_refund = state == Open && !can_claim
 |---|---|---|---|
 | `lock(hash, recipient, amount, deadline_slot, close_on_restart)` | initiator | Mint matches. `amount > 0`. `deadline_slot > slot`. `recipient != initiator`. | Creates escrow and vault, moves `amount` in. |
 | `claim(preimage)` | anyone | `can_claim`. `sha256(preimage) == hash`. Recipient token account is the canonical ATA for the mint and owned by `recipient`. | Moves funds to recipient, stores preimage, sets `Claimed`, closes vault. |
-| `refund` | anyone | `can_refund`. Destination token account is owned by `initiator`. | Moves funds to the initiator, sets `Refunded`, closes vault. |
+| `refund` | anyone | `can_refund`. Destination is exactly `refund_token`, still owned by `initiator`. **An owner check alone is unsafe:** anyone can create a token account owned by a vault PDA, and a refund sent there would be stuck forever (found in review, covered by tests). | Moves funds to the initiator, sets `Refunded`, closes vault. |
 | `extend(new_deadline)` | recipient | `state == Open`. `!close_on_restart`. `!extended`. `slot < deadline_slot`. `deadline_slot < new_deadline ≤ deadline_slot + MAX_EXTENSION` (3,000,000 slots, about 7 days). | Moves the deadline, sets `extended` (D1). |
 | `release` | recipient | `state == Open` | Returns funds to the initiator at once, sets `Refunded`. For a maker who can't fill the swap. |
-| `close` | initiator any time, anyone after `RETENTION` (3,000,000 slots) | `state != Open` | Closes the escrow, rent goes to the initiator. |
+| `close` | rent payer any time, anyone after `RETENTION` (3,000,000 slots) | `state != Open` | Closes the escrow, rent goes to the rent payer. |
 
 The claimer adds an idempotent ATA creation before `claim` when needed. A refund destination that doesn't exist or is
 frozen makes the refund fail with no state change, so it can be retried. It never pays someone else.
@@ -151,19 +153,19 @@ frozen makes the refund fail with no state change, so it can be retried. It neve
 | # | Invariant |
 |---|---|
 | S1 | Vault balance equals `amount` while `Open`, and the vault is gone afterwards. |
-| S2 | Funds only ever leave to the recipient's account or the initiator's account. |
+| S2 | Funds only ever leave to the recipient's canonical account or `refund_token`. |
 | S3 | Claim requires the 32-byte preimage of `payment_hash`. |
 | S4 | `can_claim` and `can_refund` are never both true, and for an `Open` escrow exactly one is. |
 | S5 | `state` moves from `Open` to `Claimed` or `Refunded` and never changes again. |
-| S6 | Once `Claimed`, the preimage stays readable until `close`, and only the initiator can close before `RETENTION`. |
+| S6 | Once `Claimed`, the preimage stays readable until `close`, and only the rent payer can close before `RETENTION`. |
 | S7 | The deadline moves only through `extend`: once, later only, by the recipient, on a long-leg escrow, and capped. |
 | S8 | Only the configured mint and the legacy Token program are accepted. Token-2022 is rejected. |
 | S9 | The program holds no global authority, admin key or fee switch. |
 
 ### Compute and rent
 
-Claim is one SHA-256 (under 200 CU in syscalls) plus a token transfer CPI and a close. It should comfortably fit the
-default limit, **to be measured in Phase 2**. Rent for the escrow and vault is returned at settlement or `close`.
+A claim measures about 17,300 CU in LiteSVM, well under the 200,000 default. The binary is 332 KB. Trailing bytes after a
+32-byte preimage are ignored by Anchor, and they aren't hashed or stored. Rent for the escrow and vault is returned at settlement or `close`.
 
 ### Modules beyond the core
 

@@ -1,0 +1,22 @@
+[toolchain]
+anchor_version = "1.2.2"
+
+[features]
+resolution = true
+skip-lint = false
+
+[workspace]
+members = ["solana-escrow"]
+
+[programs.localnet]
+solana_escrow = "DxVq5iSzKfRMAyis8RyLUeLggidM2Jvk1FZyyEauCRQ1"
+
+[programs.devnet]
+solana_escrow = "DxVq5iSzKfRMAyis8RyLUeLggidM2Jvk1FZyyEauCRQ1"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "cargo test"

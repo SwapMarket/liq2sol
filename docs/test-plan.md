@@ -87,7 +87,11 @@ checks in the contract, one at a time, made at least one test fail.
 | Vault: withdrawal by operator; over window cap; cap resets; refund returns to vault; rotation | Per contracts.md |
 | Bond module, only if later adopted (not in v1, D2) | Claim returns it. Refund forfeits it. Restart returns it. Unbound reclaim. |
 
-**Property tests** (random sequences of instructions, slots and restarts): invariants S1–S9 hold after each step.
+**Property tests** (random sequences of instructions, slots and restarts): invariants S1, S2, S4, S5 and S6 hold after each step.
+
+**Status:** these run in `programs/solana-escrow/tests/escrow.rs` against the compiled binary, with the real Token program.
+Mutation check: each of 26 removed or weakened checks made at least one test fail. Not yet written: the CPI wrapper with heavy logging (needs a second test program), and the bond module (not in v1). Accounts
+are frozen and restarts are set directly in LiteSVM, so neither a real freeze authority nor a real cluster restart is exercised yet.
 
 ## 5. End-to-end and adversarial scenarios
 

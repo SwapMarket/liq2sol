@@ -51,7 +51,7 @@ Status: Phase 1 design, for review. "Protocol" below refers to [protocol.md](pro
 | Compiler or CMR tampering | Pin CMR per template in released code. Reproducible build. | Compiler bugs: formal verification targets the compiled program, not the source |
 | Compromised maintainer keys | Hardware-backed signing, immutable mainnet program (D8) | Future releases only. Deployed programs can't change. |
 | Compromised wallet adapter or WalletConnect library | Pinned, loaded only on connect. The user approves each transaction in its own wallet. | Blind signing, and a larger dependency tree than the rest of the client |
-| WalletConnect relay outage or censorship | Messages are end-to-end encrypted. Funds stay recoverable without it (client.md section 3). | New swaps and L→S claims stop during an outage. Reown is a central dependency. |
+| WalletConnect relay outage or censorship | Messages are end-to-end encrypted. Funds stay recoverable without it (client.md section 3). | WalletConnect users can't start swaps or make L→S claims during an outage. Extension wallets aren't affected. |
 | Malicious browser extension | Not addressable from the page. Ephemeral keys limit what's at stake to current swaps. | Open-swap funds |
 
 ## 5. Infrastructure and AI-assisted probing

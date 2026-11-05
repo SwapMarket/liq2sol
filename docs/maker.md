@@ -88,6 +88,8 @@ to lose in a single incident.
 - **Solana stalled, or `LastRestartSlot` changed:** stop new locks, refund any eligible escrows after restart.
 - **Liquid tip height decreased, or a confirmed tx disappears:** stop everything and page the operator. Don't try to
   automate recovery from a rollback.
+- **Never refund an HTLC whose Solana escrow this maker has already claimed.** After a rollback, that coin belongs to a
+  taker who hasn't rebroadcast yet (protocol section 7.3). The signer's policy enforces this as well as the engine.
 
 ## 5. Rebalancing
 

@@ -184,7 +184,7 @@ lost the funds.
 | `LOCK_GATE` | Gate from section 3, exposure limits, halt detection | `LOCKED`, or abandon |
 | `LOCKED` | Watch the HTLC outpoint, mempool included | `CLAIMED_LIQ` on spend, `REFUND_LIQ` at `LOCK_HEIGHT` |
 | `CLAIMED_LIQ` | Extract `p` from the witness, claim on Solana at once | `DONE` |
-| `REFUND_LIQ` | Broadcast as soon as the tip reaches `LOCK_HEIGHT`, so it mines in the first block that allows it, racing any late taker claim | `DONE` |
+| `REFUND_LIQ` | Broadcast as soon as the tip reaches `LOCK_HEIGHT`, so it mines in the first block that allows it, racing any late taker claim. Refused if this swap's Solana escrow is `Claimed` (section 7.3). | `DONE` |
 
 ## 6. Message formats
 
@@ -249,8 +249,11 @@ time. It has no meaningful lower bound either, and each leader chooses it. Slots
   transactions. Depth and replay coverage aren't stated in the post-mortem (**UNVERIFIED**).
   - L→S: a rollback that drops the taker's lock after the maker has locked lets the taker claim on Solana and then
     double-spend its Liquid inputs. The maker loses the amount.
-  - S→L: a rollback that drops the taker's claim lets the maker's refund win, after the maker has already claimed on
-    Solana. The taker loses the amount.
+  - S→L: a rollback that drops the taker's claim leaves the coin unspent, after the maker has already claimed on Solana.
+    The claim has no height limit, so the taker recovers by rebroadcasting it. **An honest maker that has claimed on
+    Solana must never refund that coin**, even past `LOCK_HEIGHT`, which leaves the taker able to collect whenever it
+    returns. A dishonest maker can still refund after `LOCK_HEIGHT` and keep both sides, so the taker must rebroadcast
+    promptly.
   - These can't be fully mitigated by a contract. They are accepted federation trust, bounded by exposure caps (D7).
 - **Solana.** Act only at `finalized`. The exception is the taker's send of `claim`, which must leave the cutoff margin.
 

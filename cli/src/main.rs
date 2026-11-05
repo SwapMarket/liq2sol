@@ -12,8 +12,7 @@
 //!
 //! Environment: SOLANA_RPC (default http://127.0.0.1:8899), LIQ2SOL_KEYS (default cli/.keys).
 
-mod liquid;
-mod sol;
+use liq2sol_cli::{liquid, sol};
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -21,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use anchor_lang::prelude::Pubkey;
 use liq2sol_htlc::{asset_param, script_hash, Htlc, HtlcParams};
-use liquid::{address_of, exact_coin, keypair_from, lbtc, pay, random32, spend_htlc, txout, usdt, Coin, Esplora, HtlcSpend, Res, FEE, NET};
+use liquid::{address_of, exact_coin, keypair_from, lbtc, network, pay, random32, spend_htlc, txout, usdt, Coin, Esplora, HtlcSpend, Res, FEE};
 use simplicityhl::elements::hashes::sha256;
 use simplicityhl::elements::secp256k1_zkp::Keypair as LiquidKey;
 use simplicityhl::elements::{BlockHash, OutPoint, Script};
@@ -90,8 +89,8 @@ struct Net {
 }
 
 fn connect() -> Res<Net> {
-    let esplora = Esplora(PRIMARY_ESPLORA.into());
-    let second = Esplora(SECOND_ESPLORA.into());
+    let esplora = Esplora::Http(PRIMARY_ESPLORA.into());
+    let second = Esplora::Http(SECOND_ESPLORA.into());
     let genesis = esplora.genesis()?;
     if genesis != liquid::LIQUID_TESTNET_GENESIS {
         return Err(format!("refusing to run: not Liquid testnet (genesis {genesis})"));
@@ -154,7 +153,7 @@ fn new_swap(lock_height: u32, claim_key: LiquidKey, refund_key: LiquidKey, recip
         recipient_script_hash: script_hash(&recipient_script),
     };
     let htlc = Htlc::new(&params).map_err(|e| e.to_string())?;
-    println!("    HTLC address {} (CMR {})", htlc.address(NET), hex(&htlc.cmr()));
+    println!("    HTLC address {} (CMR {})", htlc.address(network().params), hex(&htlc.cmr()));
     println!("    lock height {lock_height}, payment hash {}", hex(&payment_hash));
     let fee_key = keypair_from(&random32()?)?;
     Ok(Swap { params, htlc, preimage, payment_hash, claim_key, refund_key, fee_key, recipient_script })
@@ -166,7 +165,7 @@ fn hex(b: &[u8]) -> String {
 
 /// Wait for the exact explicit coin at the expected depth. Other coins at the address are ignored.
 fn wait_exact_coin(esplora: &Esplora, swap: &Swap, confs: u32, who: &str) -> Res<Coin> {
-    let address = swap.htlc.address(NET);
+    let address = swap.htlc.address(network().params);
     wait_for(&format!("{who} to see the exact coin with {confs} confirmations"), Duration::from_secs(900), || {
         let tip = esplora.tip()?;
         Ok(exact_coin(&esplora.coins(&address)?, usdt(), LIQ_AMOUNT, tip, confs))
@@ -227,7 +226,7 @@ fn swap_l2s(net: &Net, w: &Wallets, abort: bool) -> Res<()> {
     let (start_taker, start_maker) = (liquid_balance(&net.esplora, &w.taker_liq)?, liquid_balance(&net.esplora, &w.maker_liq)?);
 
     step("Taker pays the exact amount to the HTLC");
-    let address = swap.htlc.address(NET);
+    let address = swap.htlc.address(network().params);
     let txid = pay(&net.esplora, &w.taker_liq, vec![txout(usdt(), LIQ_AMOUNT, address.script_pubkey())], net.genesis)?;
     println!("    {txid}");
 
@@ -357,7 +356,7 @@ fn swap_s2l(net: &Net, w: &Wallets, abort: bool) -> Res<()> {
     if e.deadline_slot.saturating_sub(net.sol.slot()?) < min_left {
         return Err("maker gate: too few slots left".into());
     }
-    let address = swap.htlc.address(NET);
+    let address = swap.htlc.address(network().params);
     let fee_address = address_of(&swap.fee_key);
     let txid = pay(
         &net.esplora,
@@ -414,19 +413,19 @@ fn wait_spent(esplora: &Esplora, outpoint: &OutPoint) -> Res<()> {
 
 /// The Liquid leg on the real testnet, with no Solana involved.
 fn liquid_check(w: &Wallets) -> Res<()> {
-    let esplora = Esplora(PRIMARY_ESPLORA.into());
+    let esplora = Esplora::Http(PRIMARY_ESPLORA.into());
     let genesis = esplora.genesis()?;
     if genesis != liquid::LIQUID_TESTNET_GENESIS {
         return Err(format!("refusing to run: not Liquid testnet (genesis {genesis})"));
     }
     let genesis = BlockHash::from_str(&genesis).map_err(|e| e.to_string())?;
-    let second = Esplora(SECOND_ESPLORA.into());
+    let second = Esplora::Http(SECOND_ESPLORA.into());
     println!("Liquid testnet tip {}", esplora.tip()?);
 
     step("Claim: lock, wait for confirmations on both endpoints, claim, and read the preimage back");
     let script = address_of(&w.maker_liq).script_pubkey();
     let swap = new_swap(esplora.tip()? + 100, keypair_from(&random32()?)?, keypair_from(&random32()?)?, script.clone())?;
-    let lock = pay(&esplora, &w.taker_liq, vec![txout(usdt(), LIQ_AMOUNT, swap.htlc.address(NET).script_pubkey())], genesis)?;
+    let lock = pay(&esplora, &w.taker_liq, vec![txout(usdt(), LIQ_AMOUNT, swap.htlc.address(network().params).script_pubkey())], genesis)?;
     println!("    lock {lock}");
     let coin = wait_exact_coin(&esplora, &swap, LIQ_CONFS, "first endpoint")?;
     wait_exact_coin(&second, &swap, LIQ_CONFS, "second endpoint")?;
@@ -451,7 +450,7 @@ fn liquid_check(w: &Wallets) -> Res<()> {
     step("Refund: an early attempt must fail, and the refund must work at the lock height");
     let lock_height = esplora.tip()? + 5;
     let swap = new_swap(lock_height, keypair_from(&random32()?)?, keypair_from(&random32()?)?, address_of(&w.maker_liq).script_pubkey())?;
-    let lock = pay(&esplora, &w.taker_liq, vec![txout(usdt(), LIQ_AMOUNT, swap.htlc.address(NET).script_pubkey())], genesis)?;
+    let lock = pay(&esplora, &w.taker_liq, vec![txout(usdt(), LIQ_AMOUNT, swap.htlc.address(network().params).script_pubkey())], genesis)?;
     println!("    lock {lock}");
     let coin = wait_exact_coin(&esplora, &swap, 1, "first endpoint")?;
     let fee = pay_fee_coin(&esplora, &w.taker_liq, &swap.fee_key, genesis)?;

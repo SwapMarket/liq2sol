@@ -31,8 +31,8 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
   (`docs/protocol.md` section 9) on 2026-11-05. 
 - **Phase 2: started, with approval (2026-11-05).** Build order: contracts with tests, CLI end-to-end, maker, client.
   `contracts/liquid` (HTLC library and tests) and `contracts/liquid-wasm` are done, and proofs F1, F2, F3 and F5 pass. `programs/solana-escrow` has all core and vault instructions with tests. `cli/` ran full swaps and aborts in both
-  directions on Liquid testnet and Solana devnet, using stand-in assets. Next: the maker daemon, then the static client. Scenarios E4 onward are still open, and E11–E15
-  need local chains.
+  directions on Liquid testnet and Solana devnet, using stand-in assets. `cli/tests/failures.rs` runs the failure scenarios on regtest plus devnet. Next: the maker
+  daemon, then the static client. E14 and E16 still need a real restart and a real freeze authority.
 
 ## Design points that are easy to get wrong
 
@@ -69,7 +69,8 @@ Details and sources are in the docs. These are recorded because older assumption
   Compile-check the draft: `simc contracts/liquid/src/htlc.simf --args contracts/liquid/htlc.args`. It has no `--version` flag.
 - End-to-end, from `cli/`: `SOLANA_RPC=https://api.devnet.solana.com cargo run -- swap l2s` (also `swap s2l`, `abort l2s|s2l`, `liquid-check`, `balances`). It refuses mainnet.
   Test wallets are in `cli/.keys/` (gitignored). The Liquid faucet is rate-limited, and the devnet CLI faucet often refuses this machine, so use faucet.solana.com.
-- `solana-test-validator` from the prebuilt install aborts here (no AVX in this VM).
+- Failure scenarios, from `cli/`: `ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli SOLANA_RPC=https://api.devnet.solana.com cargo test --test failures -- --ignored --nocapture`.
+- `solana-test-validator` aborts here without AVX, prebuilt or built from source (`reed-solomon-erasure` runs AVX2 code unchecked). Passing the host CPU through to the VM should fix both.
 - `/tmp` is wiped on reboot. Keep anything worth keeping in the repo.
 - Free Solana RPC (publicnode) blocks `getProgramAccounts`/token-account indexing and old history; plan clients around
   that (remember accounts locally, derive PDAs).

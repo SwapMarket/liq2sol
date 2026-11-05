@@ -97,8 +97,14 @@ are frozen and restarts are set directly in LiteSVM, so neither a real freeze au
 
 **Status (2026-11-05):** E1 ran in both directions on the public networks with `cli/` (`swap l2s`, `swap s2l`), and the abort runs cover E2 and E3
 (`abort l2s`, `abort s2l`), including a refused early refund. Funds were conserved. These runs use the faucet's `TEST` asset and a stand-in mint, one
-process plays both roles, and RFQ is not involved. The L→S reveal used the single-endpoint override. E4 onward are not run yet. E11–E15 need local
-chains, because a public network can't be halted or reorganized.
+process plays both roles, and RFQ is not involved. The L→S reveal used the single-endpoint override.
+
+E4, E5, E9, E11, E12, E13 and E15 run in `cli/tests/failures.rs`, on an Elements regtest node and real devnet: not mining is a halt, and `invalidateblock` with
+an emptied mempool is a rollback. E12 and E15 pass only if the predicted loss actually happens. They exercise the chains, not the daemon, so the daemon's
+reactions (calling `extend`, refusing to refund) are still to be tested. A real federation rollback may also differ, since it replays transactions.
+
+Still open: E14 (needs a cluster restart), E16 (needs a mint with a real freeze authority; the devnet stand-in has none), blinded coins in E9 (Bit Machine only), E6–E8 and E10 (need RFQ and client
+logic), E17 onward (need the daemon and client). Also open: `solana-test-validator` from source still dies on this CPU, because `reed-solomon-erasure` runs AVX2 code unchecked.
 
 Each runs both directions where applicable, first locally and then on testnet and devnet.
 

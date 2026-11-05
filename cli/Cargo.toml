@@ -9,6 +9,14 @@ description = "CLI-only end-to-end liq2sol swaps on Liquid testnet and Solana de
 license = "MIT"
 publish = false
 
+[lib]
+name = "liq2sol_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "liq2sol-cli"
+path = "src/main.rs"
+
 [dependencies]
 liq2sol-htlc = { path = "../contracts/liquid" }
 solana-escrow = { path = "../programs/solana-escrow", features = ["no-entrypoint"] }

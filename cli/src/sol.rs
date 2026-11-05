@@ -31,7 +31,7 @@ pub fn escrow_pda(initiator: &Pubkey, hash: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[ESCROW_SEED, initiator.as_ref(), hash.as_ref()], &solana_escrow::id()).0
 }
 
-fn vault_pda(escrow: &Pubkey) -> Pubkey {
+pub fn vault_pda(escrow: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[ESCROW_VAULT_SEED, escrow.as_ref()], &solana_escrow::id()).0
 }
 
@@ -100,7 +100,9 @@ impl Sol {
             let create = anchor_lang::solana_program::system_instruction::create_account(&authority.pubkey(), &USDT_MINT, rent, MINT_LEN as u64, &TOKEN_PROGRAM);
             let mut data = vec![20u8, 6];
             data.extend_from_slice(authority.pubkey().as_ref());
-            data.push(0);
+            // A freeze authority, as real USDT has.
+            data.push(1);
+            data.extend_from_slice(authority.pubkey().as_ref());
             let init = Instruction { program_id: TOKEN_PROGRAM, accounts: vec![AccountMeta::new(USDT_MINT, false)], data };
             self.send(&[create, init], authority, &[mint])?;
         }
@@ -177,6 +179,26 @@ impl Sol {
             payer,
             &[],
         )
+    }
+
+    /// Freeze (`freeze = true`) or thaw a token account, as Tether could. Only works on a mint with a freeze authority.
+    pub fn set_frozen(&self, authority: &Keypair, account: &Pubkey, freeze: bool) -> Res<Signature> {
+        let ix = Instruction {
+            program_id: TOKEN_PROGRAM,
+            accounts: vec![
+                AccountMeta::new(*account, false),
+                AccountMeta::new_readonly(USDT_MINT, false),
+                AccountMeta::new_readonly(authority.pubkey(), true),
+            ],
+            data: vec![if freeze { 10 } else { 11 }],
+        };
+        self.send(&[ix], authority, &[])
+    }
+
+    pub fn extend(&self, recipient: &Keypair, address: &Pubkey, new_deadline: u64) -> Res<Signature> {
+        let accounts = solana_escrow::accounts::Extend { recipient: recipient.pubkey(), escrow: *address }.to_account_metas(None);
+        let data = solana_escrow::instruction::Extend { new_deadline }.data();
+        self.send(&[Instruction { program_id: solana_escrow::id(), accounts, data }], recipient, &[])
     }
 
     pub fn refund(&self, payer: &Keypair, address: &Pubkey, escrow: &Escrow) -> Res<Signature> {

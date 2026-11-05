@@ -139,6 +139,16 @@ These were checked while writing the design. Several update or close items above
 | Asset byte order | The jets compare internal byte order, the reverse of explorer display. | `asset_param_is_the_reverse_of_display_order` test |
 | Claim size | 379 vB with one fee input. | Regtest measurement |
 
+### Public networks
+
+| Item | Finding | Source |
+|---|---|---|
+| Simplicity on Liquid testnet | Active. A third-party spend was seen at height 2,692,247, and our own claim and refund confirmed. | [claim](https://blockstream.info/liquidtestnet/tx/bd400dbfdead7d43aae3ef4c6f5bef63f4786e5a7979d691be6787b27e05aa51), [refund](https://blockstream.info/liquidtestnet/tx/06c42327edf7b8dbe02457bf5e8897cb90cb18775215d5916b7e69ea5b3525bf) |
+| Liquid testnet test assets | Faucet gives explicit coins to non-confidential addresses: 100,000 sats of L-BTC and 5,000 units of `TEST` (`38fca2d9…50a5`). It rate-limits with HTTP 429. Official Tether test assets remain **UNVERIFIED**. | [faucet](https://liquidtestnet.com/faucet) |
+| Devnet deployment | Escrow at `DxVq5iSzKfRMAyis8RyLUeLggidM2Jvk1FZyyEauCRQ1`, upgradeable (D8), 332,664 bytes, about 1.7 SOL of rent. Stand-in mint `8BXimW8mCEfhdD1fhv9aoCfQgSj3KxFc52jMAbLvaFwi`. | `solana program show` |
+| Devnet slot time | About 240 ms, slower than mainnet's 213 ms. | Live `getRecentPerformanceSamples` |
+| `solana-test-validator` | The prebuilt binary aborts on CPUs without AVX. The check is set at build time by `perf/build.rs`, so a local build should avoid it. Not yet tried. | Local run, [perf/build.rs](https://github.com/anza-xyz/agave/blob/v4.4.0/perf/build.rs) |
+
 ### WalletConnect
 
 | Item | Finding | Source |

@@ -9,7 +9,7 @@ an issued asset on Liquid testnet and an SPL mint on devnet.
 |---|---|---|
 | Unit | Simplicity execution against a constructed `ElementsEnv` | `solana-program-test` or LiteSVM |
 | Local integration | `elementsd` regtest (needs Simplicity active) | `solana-test-validator` |
-| Public | Liquid testnet (Esplora reachable, tip height about 2.69M; **UNVERIFIED** that Simplicity is active there) | Devnet (CORS and Agave 4.4.0-beta confirmed) |
+| Public | Liquid testnet (Simplicity is active: our claims and refunds confirmed there) | Devnet (CORS and Agave 4.4.0-beta confirmed) |
 
 Local integration is what makes timeouts testable, since regtest can mine blocks at will and the validator can warp
 slots. Restart behaviour needs a `solana-test-validator` or local cluster run with a hard fork, **whether this is
@@ -17,7 +17,7 @@ practical is UNVERIFIED**. If not, `LastRestartSlot` is set directly in LiteSVM.
 
 ## 2. First feasibility proofs (Phase 2, before anything else)
 
-Status (2026-11-05): F1, F2, F3 and F5 pass, on Elements 23.3.4 regtest. F4 needs real wallets and is still open.
+Status (2026-11-05): F1, F2, F3 and F5 pass, on Elements 23.3.4 regtest, and a claim and a refund also ran on live Liquid testnet. F4 needs real wallets and is still open.
 Run them with `ELEMENTSD=... ELEMENTS_CLI=... cargo test -p liq2sol-htlc --test regtest -- --ignored --nocapture` and
 `scripts/check-wasm-parity.sh`.
 
@@ -94,6 +94,11 @@ Mutation check: each of 26 removed or weakened checks made at least one test fai
 are frozen and restarts are set directly in LiteSVM, so neither a real freeze authority nor a real cluster restart is exercised yet.
 
 ## 5. End-to-end and adversarial scenarios
+
+**Status (2026-11-05):** E1 ran in both directions on the public networks with `cli/` (`swap l2s`, `swap s2l`), and the abort runs cover E2 and E3
+(`abort l2s`, `abort s2l`), including a refused early refund. Funds were conserved. These runs use the faucet's `TEST` asset and a stand-in mint, one
+process plays both roles, and RFQ is not involved. The L→S reveal used the single-endpoint override. E4 onward are not run yet. E11–E15 need local
+chains, because a public network can't be halted or reorganized.
 
 Each runs both directions where applicable, first locally and then on testnet and devnet.
 

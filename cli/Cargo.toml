@@ -1,0 +1,23 @@
+# Separate workspace: this is the only crate that needs both the Elements and the Solana dependency graphs.
+[workspace]
+
+[package]
+name = "liq2sol-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI-only end-to-end liq2sol swaps on Liquid testnet and Solana devnet. Refuses mainnet."
+license = "MIT"
+publish = false
+
+[dependencies]
+liq2sol-htlc = { path = "../contracts/liquid" }
+solana-escrow = { path = "../programs/solana-escrow", features = ["no-entrypoint"] }
+simplicityhl = "=0.9.0"
+anchor-lang = "=1.2.2"
+anchor-spl = "=1.2.2"
+solana-client = "3"
+solana-sdk = "3"
+solana-commitment-config = "3"
+ureq = "2"
+serde_json = "1"
+getrandom = "0.2"

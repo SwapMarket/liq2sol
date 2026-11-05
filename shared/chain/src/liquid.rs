@@ -10,8 +10,9 @@ use simplicityhl::elements::schnorr::{TapTweak, UntweakedKeypair};
 use simplicityhl::elements::secp256k1_zkp::{Keypair, Message, Secp256k1};
 use simplicityhl::elements::sighash::{Prevouts, SighashCache};
 use simplicityhl::elements::{
-    Address, AddressParams, AssetId, AssetIssuance, BlockHash, LockTime, OutPoint, SchnorrSighashType, Script, Sequence,
-    Transaction, TxIn, TxInWitness, TxOut, TxOutWitness, Txid, Witness,
+    Address, AddressParams, AssetId, AssetIssuance, BlockHash, LockTime, OutPoint,
+    SchnorrSighashType, Script, Sequence, Transaction, TxIn, TxInWitness, TxOut, TxOutWitness,
+    Txid, Witness,
 };
 
 /// The network this process works on, chosen once before any address is derived.
@@ -36,7 +37,11 @@ pub fn network() -> &'static NetworkConfig {
     })
 }
 
-pub const LIQUID_TESTNET_GENESIS: &str = "a771da8e52ee6ad581ed1e9a99825e5b3b7992225534eaa2ae23244fe26ab1c1";
+pub const LIQUID_TESTNET_GENESIS: &str =
+    "a771da8e52ee6ad581ed1e9a99825e5b3b7992225534eaa2ae23244fe26ab1c1";
+/// Liquid mainnet. Nothing in this project may run against it.
+pub const LIQUID_MAINNET_GENESIS: &str =
+    "1466275836220db2944ca059a3a10ef6fd2ea684b0688d2c379296888a206003";
 /// The faucet's registered test asset, standing in for L-USDt.
 pub const TEST_ASSET: &str = "38fca2d939696061a8f76d4e6b5eecd54e3b4221c846f24a6b279e79952850a5";
 /// L-BTC on Liquid testnet.
@@ -57,7 +62,10 @@ pub fn lbtc() -> AssetId {
 fn get(url: &str) -> Res<String> {
     let mut last = String::new();
     for _ in 0..5 {
-        match ureq::get(url).timeout(std::time::Duration::from_secs(20)).call() {
+        match ureq::get(url)
+            .timeout(std::time::Duration::from_secs(20))
+            .call()
+        {
             Ok(r) => return r.into_string().map_err(|e| e.to_string()),
             Err(e) => last = format!("GET {url}: {e}"),
         }
@@ -70,7 +78,9 @@ fn unhex(s: &str) -> Res<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return Err("odd hex".into());
     }
-    (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())).collect()
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string()))
+        .collect()
 }
 
 /// A local node driven through `elements-cli`, for regtest.
@@ -90,7 +100,11 @@ impl Rpc {
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
         } else {
-            Err(format!("{:?}: {}", args.first(), String::from_utf8_lossy(&out.stderr).trim()))
+            Err(format!(
+                "{:?}: {}",
+                args.first(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
         }
     }
 
@@ -117,8 +131,35 @@ pub struct Coin {
 impl Esplora {
     pub fn tip(&self) -> Res<u32> {
         match self {
-            Esplora::Http(u) => get(&format!("{u}/blocks/tip/height"))?.trim().parse().map_err(|e| format!("tip: {e}")),
-            Esplora::Node(n) => n.call(&["getblockcount"])?.parse().map_err(|e| format!("tip: {e}")),
+            Esplora::Http(u) => get(&format!("{u}/blocks/tip/height"))?
+                .trim()
+                .parse()
+                .map_err(|e| format!("tip: {e}")),
+            Esplora::Node(n) => n
+                .call(&["getblockcount"])?
+                .parse()
+                .map_err(|e| format!("tip: {e}")),
+        }
+    }
+
+    /// The tip block's own timestamp, used to tell how long the chain has been stalled.
+    pub fn tip_time(&self) -> Res<u64> {
+        match self {
+            Esplora::Http(u) => {
+                let hash = get(&format!("{u}/blocks/tip/hash"))?;
+                let block: Json =
+                    serde_json::from_str(&get(&format!("{u}/block/{}", hash.trim()))?)
+                        .map_err(|e| e.to_string())?;
+                block["timestamp"]
+                    .as_u64()
+                    .ok_or_else(|| "block timestamp".to_string())
+            }
+            Esplora::Node(n) => {
+                let hash = n.call(&["getbestblockhash"])?;
+                n.json(&["getblockheader", &hash])?["time"]
+                    .as_u64()
+                    .ok_or_else(|| "block time".to_string())
+            }
         }
     }
 
@@ -141,23 +182,30 @@ impl Esplora {
         match self {
             Esplora::Http(u) => {
                 let url = format!("{u}/tx");
-                match ureq::post(&url).timeout(std::time::Duration::from_secs(30)).send_string(&serialize_hex(tx)) {
-                    Ok(r) => Txid::from_str(r.into_string().map_err(|e| e.to_string())?.trim()).map_err(|e| e.to_string()),
-                    Err(ureq::Error::Status(code, r)) => {
-                        Err(format!("broadcast {code}: {}", r.into_string().unwrap_or_default()))
-                    }
+                match ureq::post(&url)
+                    .timeout(std::time::Duration::from_secs(30))
+                    .send_string(&serialize_hex(tx))
+                {
+                    Ok(r) => Txid::from_str(r.into_string().map_err(|e| e.to_string())?.trim())
+                        .map_err(|e| e.to_string()),
+                    Err(ureq::Error::Status(code, r)) => Err(format!(
+                        "broadcast {code}: {}",
+                        r.into_string().unwrap_or_default()
+                    )),
                     Err(e) => Err(format!("broadcast: {e}")),
                 }
             }
             Esplora::Node(n) => {
-                Txid::from_str(&n.call(&["sendrawtransaction", &serialize_hex(tx)])?).map_err(|e| e.to_string())
+                Txid::from_str(&n.call(&["sendrawtransaction", &serialize_hex(tx)])?)
+                    .map_err(|e| e.to_string())
             }
         }
     }
 
     /// (txid, vout, confirmed height) of each unspent output at an address.
     fn unspent(&self, address: &Address) -> Res<Vec<(Txid, u32, Option<u32>)>> {
-        let parse = |t: &Json| Txid::from_str(t.as_str().unwrap_or_default()).map_err(|e| e.to_string());
+        let parse =
+            |t: &Json| Txid::from_str(t.as_str().unwrap_or_default()).map_err(|e| e.to_string());
         match self {
             Esplora::Http(u) => {
                 let body = get(&format!("{u}/address/{address}/utxo"))?;
@@ -165,7 +213,11 @@ impl Esplora {
                 list.iter()
                     .map(|c| {
                         let height = c["status"]["block_height"].as_u64().map(|h| h as u32);
-                        Ok((parse(&c["txid"])?, c["vout"].as_u64().ok_or("utxo vout")? as u32, height))
+                        Ok((
+                            parse(&c["txid"])?,
+                            c["vout"].as_u64().ok_or("utxo vout")? as u32,
+                            height,
+                        ))
                     })
                     .collect()
             }
@@ -178,7 +230,11 @@ impl Esplora {
                     .iter()
                     .map(|c| {
                         let height = c["height"].as_u64().map(|h| h as u32);
-                        Ok((parse(&c["txid"])?, c["vout"].as_u64().ok_or("utxo vout")? as u32, height))
+                        Ok((
+                            parse(&c["txid"])?,
+                            c["vout"].as_u64().ok_or("utxo vout")? as u32,
+                            height,
+                        ))
                     })
                     .collect()
             }
@@ -190,11 +246,22 @@ impl Esplora {
         let mut coins = vec![];
         for (txid, vout, height) in self.unspent(address)? {
             let tx = self.tx(&txid)?;
-            let out = tx.output.get(vout as usize).ok_or("utxo vout range")?.clone();
-            if out.script_pubkey != address.script_pubkey() || !out.asset.is_explicit() || !out.value.is_explicit() {
+            let out = tx
+                .output
+                .get(vout as usize)
+                .ok_or("utxo vout range")?
+                .clone();
+            if out.script_pubkey != address.script_pubkey()
+                || !out.asset.is_explicit()
+                || !out.value.is_explicit()
+            {
                 continue;
             }
-            coins.push(Coin { outpoint: OutPoint::new(txid, vout), out, height });
+            coins.push(Coin {
+                outpoint: OutPoint::new(txid, vout),
+                out,
+                height,
+            });
         }
         Ok(coins)
     }
@@ -203,18 +270,28 @@ impl Esplora {
     pub fn spender(&self, outpoint: &OutPoint) -> Res<Option<Transaction>> {
         match self {
             Esplora::Http(u) => {
-                let body = get(&format!("{u}/tx/{}/outspend/{}", outpoint.txid, outpoint.vout))?;
+                let body = get(&format!(
+                    "{u}/tx/{}/outspend/{}",
+                    outpoint.txid, outpoint.vout
+                ))?;
                 let status: Json = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-                match status["txid"].as_str().filter(|_| status["spent"].as_bool() == Some(true)) {
-                    Some(txid) => Ok(Some(self.tx(&Txid::from_str(txid).map_err(|e| e.to_string())?)?)),
+                match status["txid"]
+                    .as_str()
+                    .filter(|_| status["spent"].as_bool() == Some(true))
+                {
+                    Some(txid) => Ok(Some(
+                        self.tx(&Txid::from_str(txid).map_err(|e| e.to_string())?)?,
+                    )),
                     None => Ok(None),
                 }
             }
             Esplora::Node(n) => {
                 // Regtest chains here are short, so scanning the mempool and all blocks is fine.
-                let spends = |tx: &Transaction| tx.input.iter().any(|i| i.previous_output == *outpoint);
+                let spends =
+                    |tx: &Transaction| tx.input.iter().any(|i| i.previous_output == *outpoint);
                 for id in n.json(&["getrawmempool"])?.as_array().ok_or("mempool")? {
-                    let tx = self.tx(&Txid::from_str(id.as_str().unwrap_or_default()).map_err(|e| e.to_string())?)?;
+                    let tx = self.tx(&Txid::from_str(id.as_str().unwrap_or_default())
+                        .map_err(|e| e.to_string())?)?;
                     if spends(&tx) {
                         return Ok(Some(tx));
                     }
@@ -223,7 +300,8 @@ impl Esplora {
                     let hash = n.call(&["getblockhash", &height.to_string()])?;
                     let block = n.json(&["getblock", &hash])?;
                     for id in block["tx"].as_array().ok_or("block txs")? {
-                        let tx = self.tx(&Txid::from_str(id.as_str().unwrap_or_default()).map_err(|e| e.to_string())?)?;
+                        let tx = self.tx(&Txid::from_str(id.as_str().unwrap_or_default())
+                            .map_err(|e| e.to_string())?)?;
                         if spends(&tx) {
                             return Ok(Some(tx));
                         }
@@ -236,7 +314,13 @@ impl Esplora {
 }
 
 /// Exactly `amount` of `asset`, explicit, at a confirmed depth of `confs`.
-pub fn exact_coin(coins: &[Coin], asset: AssetId, amount: u64, tip: u32, confs: u32) -> Option<Coin> {
+pub fn exact_coin(
+    coins: &[Coin],
+    asset: AssetId,
+    amount: u64,
+    tip: u32,
+    confs: u32,
+) -> Option<Coin> {
     coins
         .iter()
         .find(|c| {
@@ -279,24 +363,54 @@ pub fn random32() -> Res<[u8; 32]> {
 }
 
 pub fn address_of(key: &Keypair) -> Address {
-    Address::p2tr(&Secp256k1::new(), key.x_only_public_key().0, None, None, network().params)
+    Address::p2tr(
+        &Secp256k1::new(),
+        key.x_only_public_key().0,
+        None,
+        None,
+        network().params,
+    )
 }
 
-fn sign_keypath(tx: &mut Transaction, utxos: &[TxOut], index: usize, key: &Keypair, genesis: BlockHash) -> Res<()> {
+fn sign_keypath(
+    tx: &mut Transaction,
+    utxos: &[TxOut],
+    index: usize,
+    key: &Keypair,
+    genesis: BlockHash,
+) -> Res<()> {
     let secp = Secp256k1::new();
     let hash = SighashCache::new(&*tx)
-        .taproot_key_spend_signature_hash(index, &Prevouts::All(utxos), SchnorrSighashType::All, genesis)
+        .taproot_key_spend_signature_hash(
+            index,
+            &Prevouts::All(utxos),
+            SchnorrSighashType::All,
+            genesis,
+        )
         .map_err(|e| e.to_string())?;
     let tweaked = UntweakedKeypair::tap_tweak(*key, &secp, None);
-    let sig = secp.sign_schnorr_no_aux_rand(&Message::from_digest(hash.to_byte_array()), &tweaked.to_inner());
+    let sig = secp.sign_schnorr_no_aux_rand(
+        &Message::from_digest(hash.to_byte_array()),
+        &tweaked.to_inner(),
+    );
     let mut bytes = sig.as_ref().to_vec();
     bytes.push(SchnorrSighashType::All as u8);
     tx.input[index].witness.script_witness = Witness::from_slice(&[bytes]);
     Ok(())
 }
 
-/// Pay exact explicit outputs from a key-path wallet, returning change to it and using `FEE` sats of L-BTC as the fee.
+/// Pay exact explicit outputs from a key-path wallet and broadcast.
 pub fn pay(esplora: &Esplora, key: &Keypair, outputs: Vec<TxOut>, genesis: BlockHash) -> Res<Txid> {
+    esplora.broadcast(&build_pay(esplora, key, outputs, genesis)?)
+}
+
+/// A signed payment of exact explicit outputs, returning change to the wallet and using `FEE` sats of L-BTC as the fee.
+pub fn build_pay(
+    esplora: &Esplora,
+    key: &Keypair,
+    outputs: Vec<TxOut>,
+    genesis: BlockHash,
+) -> Res<Transaction> {
     let address = address_of(key);
     let coins = esplora.coins(&address)?;
     let (mut need_usdt, mut need_lbtc) = (0u64, FEE);
@@ -310,7 +424,10 @@ pub fn pay(esplora: &Esplora, key: &Keypair, outputs: Vec<TxOut>, genesis: Block
     let pick = |asset: AssetId, need: u64| -> Res<(Vec<Coin>, u64)> {
         let mut total = 0;
         let mut chosen = vec![];
-        for c in coins.iter().filter(|c| c.out.asset == Asset::Explicit(asset)) {
+        for c in coins
+            .iter()
+            .filter(|c| c.out.asset == Asset::Explicit(asset))
+        {
             if total >= need {
                 break;
             }
@@ -318,11 +435,17 @@ pub fn pay(esplora: &Esplora, key: &Keypair, outputs: Vec<TxOut>, genesis: Block
             chosen.push(c.clone());
         }
         if total < need {
-            return Err(format!("wallet {address} has {total} of {asset}, needs {need}. Fund it from the faucet."));
+            return Err(format!(
+                "wallet {address} has {total} of {asset}, needs {need}. Fund it from the faucet."
+            ));
         }
         Ok((chosen, total - need))
     };
-    let (usdt_coins, usdt_change) = if need_usdt > 0 { pick(usdt(), need_usdt)? } else { (vec![], 0) };
+    let (usdt_coins, usdt_change) = if need_usdt > 0 {
+        pick(usdt(), need_usdt)?
+    } else {
+        (vec![], 0)
+    };
     let (lbtc_coins, lbtc_change) = pick(lbtc(), need_lbtc)?;
 
     let chosen: Vec<Coin> = usdt_coins.into_iter().chain(lbtc_coins).collect();
@@ -338,22 +461,33 @@ pub fn pay(esplora: &Esplora, key: &Keypair, outputs: Vec<TxOut>, genesis: Block
     let mut tx = Transaction {
         version: 2,
         lock_time: LockTime::ZERO,
-        input: chosen.iter().map(|c| input(c.outpoint, Sequence::MAX)).collect(),
+        input: chosen
+            .iter()
+            .map(|c| input(c.outpoint, Sequence::MAX))
+            .collect(),
         output,
     };
     for i in 0..tx.input.len() {
         sign_keypath(&mut tx, &utxos, i, key, genesis)?;
     }
-    esplora.broadcast(&tx)
+    Ok(tx)
 }
 
 /// What the HTLC coin is being spent for, and who signs.
 pub enum HtlcSpend {
-    Claim { preimage: [u8; 32], recipient: Keypair, to: Script },
-    Refund { sender: Keypair, lock_height: u32, to: Script },
+    Claim {
+        preimage: [u8; 32],
+        recipient: Keypair,
+        to: Script,
+    },
+    Refund {
+        sender: Keypair,
+        lock_height: u32,
+        to: Script,
+    },
 }
 
-/// Spend an HTLC coin plus one L-BTC fee coin, keeping any fee coin value above `FEE` as change.
+/// Spend an HTLC coin plus one L-BTC fee coin and broadcast.
 pub fn spend_htlc(
     esplora: &Esplora,
     params: &HtlcParams,
@@ -363,13 +497,31 @@ pub fn spend_htlc(
     how: HtlcSpend,
     genesis: BlockHash,
 ) -> Res<Txid> {
+    esplora.broadcast(&build_spend(params, coin, fee_coin, fee_key, how, genesis)?)
+}
+
+/// A signed spend of an HTLC coin plus one L-BTC fee coin, keeping any fee coin value above `FEE` as change.
+pub fn build_spend(
+    params: &HtlcParams,
+    coin: &Coin,
+    fee_coin: &Coin,
+    fee_key: &Keypair,
+    how: HtlcSpend,
+    genesis: BlockHash,
+) -> Res<Transaction> {
     let htlc = Htlc::new(params).map_err(|e| e.to_string())?;
     let (Asset::Explicit(asset), Value::Explicit(amount)) = (coin.out.asset, coin.out.value) else {
         return Err("blinded HTLC coin".into());
     };
     let (to, lock_time, sequence) = match &how {
         HtlcSpend::Claim { to, .. } => (to.clone(), LockTime::ZERO, Sequence::MAX),
-        HtlcSpend::Refund { to, lock_height, .. } => (to.clone(), LockTime::from_consensus(*lock_height), Sequence::ZERO),
+        HtlcSpend::Refund {
+            to, lock_height, ..
+        } => (
+            to.clone(),
+            LockTime::from_consensus(*lock_height),
+            Sequence::ZERO,
+        ),
     };
     let mut output = vec![txout(asset, amount, to)];
     let fee_value = fee_coin.out.value.explicit().ok_or("blinded fee coin")?;
@@ -381,28 +533,50 @@ pub fn spend_htlc(
     let tx = Transaction {
         version: 2,
         lock_time,
-        input: vec![input(coin.outpoint, sequence), input(fee_coin.outpoint, sequence)],
+        input: vec![
+            input(coin.outpoint, sequence),
+            input(fee_coin.outpoint, sequence),
+        ],
         output,
     };
     let utxos = vec![coin.out.clone(), fee_coin.out.clone()];
-    let digest = htlc.sighash_all(&tx, &utxos, 0, genesis).map_err(|e| e.to_string())?;
+    let digest = htlc
+        .sighash_all(&tx, &utxos, 0, genesis)
+        .map_err(|e| e.to_string())?;
     let secp = Secp256k1::new();
     let spend = match &how {
-        HtlcSpend::Claim { preimage, recipient, .. } => Spend::Claim {
+        HtlcSpend::Claim {
+            preimage,
+            recipient,
+            ..
+        } => Spend::Claim {
             preimage: *preimage,
-            signature: *secp.sign_schnorr_no_aux_rand(&Message::from_digest(digest), recipient).as_ref(),
+            signature: *secp
+                .sign_schnorr_no_aux_rand(&Message::from_digest(digest), recipient)
+                .as_ref(),
         },
-        HtlcSpend::Refund { sender, .. } => {
-            Spend::Refund { signature: *secp.sign_schnorr_no_aux_rand(&Message::from_digest(digest), sender).as_ref() }
-        }
+        HtlcSpend::Refund { sender, .. } => Spend::Refund {
+            signature: *secp
+                .sign_schnorr_no_aux_rand(&Message::from_digest(digest), sender)
+                .as_ref(),
+        },
     };
-    let (mut tx, report) = htlc.finalize(tx, &utxos, 0, genesis, spend).map_err(|e| e.to_string())?;
-    println!("    pruned program {} bytes, cost {} of {} WU", report.program_bytes, report.cost_wu, report.budget_wu);
+    let (mut tx, report) = htlc
+        .finalize(tx, &utxos, 0, genesis, spend)
+        .map_err(|e| e.to_string())?;
+    println!(
+        "    pruned program {} bytes, cost {} of {} WU",
+        report.program_bytes, report.cost_wu, report.budget_wu
+    );
     sign_keypath(&mut tx, &utxos, 1, fee_key, genesis)?;
-    esplora.broadcast(&tx)
+    Ok(tx)
 }
 
-pub fn unhex_tx_witness_preimage(tx: &Transaction, outpoint: &OutPoint, payment_hash: &[u8; 32]) -> Option<[u8; 32]> {
+pub fn unhex_tx_witness_preimage(
+    tx: &Transaction,
+    outpoint: &OutPoint,
+    payment_hash: &[u8; 32],
+) -> Option<[u8; 32]> {
     let spend = tx.input.iter().find(|i| i.previous_output == *outpoint)?;
     if spend.witness.script_witness.is_empty() {
         return None;

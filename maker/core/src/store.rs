@@ -88,14 +88,11 @@ impl Store {
     pub fn state(&self, hash: &[u8; 32]) -> Result<Option<(Terms, State)>> {
         let row: Option<(String, String)> = self
             .conn
-            .query_row(
-                "SELECT terms, state FROM swaps WHERE hash = ?1",
-                params![hash.as_slice()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            .query_row("SELECT terms, state FROM swaps WHERE hash = ?1", params![hash.as_slice()], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .optional()?;
-        row.map(|(t, s)| Ok((from_json(&t)?, from_json(&s)?)))
-            .transpose()
+        row.map(|(t, s)| Ok((from_json(&t)?, from_json(&s)?))).transpose()
     }
 
     /// Swaps not yet finished, for restart and for each tick.
@@ -114,23 +111,12 @@ impl Store {
     }
 
     /// Commit a new state together with the actions it requires, atomically, before attempting any of them.
-    pub fn commit_step(
-        &self,
-        hash: &[u8; 32],
-        state: &State,
-        actions: &[Action],
-    ) -> Result<Vec<i64>> {
+    pub fn commit_step(&self, hash: &[u8; 32], state: &State, actions: &[Action]) -> Result<Vec<i64>> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE swaps SET state = ?1 WHERE hash = ?2",
-            params![json(state)?, hash.as_slice()],
-        )?;
+        tx.execute("UPDATE swaps SET state = ?1 WHERE hash = ?2", params![json(state)?, hash.as_slice()])?;
         let mut ids = vec![];
         for action in actions {
-            tx.execute(
-                "INSERT INTO intents (hash, action) VALUES (?1, ?2)",
-                params![hash.as_slice(), json(action)?],
-            )?;
+            tx.execute("INSERT INTO intents (hash, action) VALUES (?1, ?2)", params![hash.as_slice(), json(action)?])?;
             ids.push(tx.last_insert_rowid());
         }
         tx.commit()?;
@@ -141,9 +127,7 @@ impl Store {
     pub fn store_lock_tx(&self, hash: &[u8; 32], raw_tx: &[u8]) -> Result<()> {
         if let Some(existing) = self.stored_lock_tx(hash)? {
             if existing != raw_tx {
-                return Err(StoreError(
-                    "a different lock transaction is already stored for this swap".into(),
-                ));
+                return Err(StoreError("a different lock transaction is already stored for this swap".into()));
             }
             return Ok(());
         }
@@ -170,29 +154,19 @@ impl Store {
     }
 
     pub fn finish_intent(&self, id: i64) -> Result<()> {
-        self.conn
-            .execute("UPDATE intents SET finished = 1 WHERE id = ?1", params![id])?;
+        self.conn.execute("UPDATE intents SET finished = 1 WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     /// Intents that may or may not have happened, which a restart must reconcile against the chains.
     pub fn unfinished_intents(&self) -> Result<Vec<(i64, [u8; 32], Action)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, hash, action FROM intents WHERE finished = 0 ORDER BY id")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, Vec<u8>>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })?;
+        let mut stmt = self.conn.prepare("SELECT id, hash, action FROM intents WHERE finished = 0 ORDER BY id")?;
+        let rows =
+            stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, String>(2)?)))?;
         let mut out = vec![];
         for row in rows {
             let (id, hash, action) = row?;
-            let hash: [u8; 32] = hash
-                .try_into()
-                .map_err(|_| StoreError("bad hash in store".into()))?;
+            let hash: [u8; 32] = hash.try_into().map_err(|_| StoreError("bad hash in store".into()))?;
             out.push((id, hash, from_json(&action)?));
         }
         Ok(out)
@@ -208,12 +182,8 @@ impl Store {
     }
 
     pub fn rollback(&self) -> Result<bool> {
-        let value: Option<i64> = self
-            .conn
-            .query_row("SELECT value FROM flags WHERE name = 'rollback'", [], |r| {
-                r.get(0)
-            })
-            .optional()?;
+        let value: Option<i64> =
+            self.conn.query_row("SELECT value FROM flags WHERE name = 'rollback'", [], |r| r.get(0)).optional()?;
         Ok(value == Some(1))
     }
 }
@@ -228,9 +198,18 @@ impl SignerLedger {
         let conn = open(
             path,
             "CREATE TABLE IF NOT EXISTS records (hash BLOB PRIMARY KEY, record TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS locks (at_secs INTEGER NOT NULL, amount INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS locks (at_secs INTEGER NOT NULL, amount INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS lock_txs (hash BLOB PRIMARY KEY, raw_tx BLOB NOT NULL);",
         )?;
         Ok(Self { conn })
+    }
+
+    /// The one Liquid lock signed for this swap, if any. A retry gets these exact bytes, so we can't pay twice.
+    pub fn lock_tx(&self, hash: &[u8; 32]) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .conn
+            .query_row("SELECT raw_tx FROM lock_txs WHERE hash = ?1", params![hash.as_slice()], |r| r.get(0))
+            .optional()?)
     }
 
     /// Persist, and fsync, before the signature leaves the signer.
@@ -239,17 +218,18 @@ impl SignerLedger {
         hash: &[u8; 32],
         record: &SwapRecord,
         newly_locked: Option<(u64, u64)>,
+        lock_tx: Option<&[u8]>,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        if let Some(raw) = lock_tx {
+            tx.execute("INSERT INTO lock_txs (hash, raw_tx) VALUES (?1, ?2)", params![hash.as_slice(), raw])?;
+        }
         tx.execute(
             "INSERT INTO records (hash, record) VALUES (?1, ?2) ON CONFLICT(hash) DO UPDATE SET record = ?2",
             params![hash.as_slice(), json(record)?],
         )?;
         if let Some((at, amount)) = newly_locked {
-            tx.execute(
-                "INSERT INTO locks (at_secs, amount) VALUES (?1, ?2)",
-                params![at as i64, amount as i64],
-            )?;
+            tx.execute("INSERT INTO locks (at_secs, amount) VALUES (?1, ?2)", params![at as i64, amount as i64])?;
         }
         tx.commit()?;
         Ok(())
@@ -261,11 +241,7 @@ impl Ledger for SignerLedger {
     fn record(&self, hash: &[u8; 32]) -> SwapRecord {
         let row: rusqlite::Result<Option<String>> = self
             .conn
-            .query_row(
-                "SELECT record FROM records WHERE hash = ?1",
-                params![hash.as_slice()],
-                |r| r.get(0),
-            )
+            .query_row("SELECT record FROM records WHERE hash = ?1", params![hash.as_slice()], |r| r.get(0))
             .optional();
         match row {
             Ok(None) => SwapRecord::default(),
@@ -277,11 +253,9 @@ impl Ledger for SignerLedger {
     fn locked_in_window(&self, now_secs: u64, window_secs: u64) -> u64 {
         let since = now_secs.saturating_sub(window_secs) as i64;
         self.conn
-            .query_row(
-                "SELECT COALESCE(SUM(amount), 0) FROM locks WHERE at_secs > ?1",
-                params![since],
-                |r| r.get::<_, i64>(0),
-            )
+            .query_row("SELECT COALESCE(SUM(amount), 0) FROM locks WHERE at_secs > ?1", params![since], |r| {
+                r.get::<_, i64>(0)
+            })
             .map(|sum| sum as u64)
             .unwrap_or(u64::MAX)
     }

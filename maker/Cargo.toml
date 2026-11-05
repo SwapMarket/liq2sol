@@ -1,4 +1,4 @@
 # Separate workspace. `core` has no chain or network dependencies, so its rules can be tested exhaustively.
 [workspace]
-members = ["core"]
+members = ["core", "signer"]
 resolver = "2"

@@ -234,14 +234,13 @@ fn within_limits(cfg: &Config, terms: &Terms, v: &View) -> bool {
         Direction::S2L => cfg.max_open_s2l,
     };
     terms.solana_amount <= cfg.max_per_swap
-        && v.open_exposure
-            .checked_add(terms.solana_amount)
-            .is_some_and(|total| total <= max_open)
+        && v.open_exposure.checked_add(terms.solana_amount).is_some_and(|total| total <= max_open)
 }
 
 /// The L→S gate: maker.md section 3.
 pub fn l2s_may_lock(cfg: &Config, terms: &Terms, v: &View) -> bool {
-    let coin_ok = matches!(v.htlc, HtlcView::Unspent { confirmations } if confirmations >= required_confirmations(cfg, terms));
+    let coin_ok =
+        matches!(v.htlc, HtlcView::Unspent { confirmations } if confirmations >= required_confirmations(cfg, terms));
     coin_ok
         && terms.lock_height.saturating_sub(v.liquid_tip) >= cfg.l2s_gate_blocks
         && v.liquid_tip <= terms.h_accept.saturating_add(cfg.l2s_fund_window_blocks)
@@ -294,10 +293,7 @@ fn step_l2s(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
         State::WatchLock => {
             if l2s_may_lock(cfg, terms, v) {
                 let deadline_slot = v.solana_slot.saturating_add(cfg.l2s_deadline_slots);
-                (
-                    State::LockedSolana { deadline_slot },
-                    vec![Action::LockSolana { deadline_slot }],
-                )
+                (State::LockedSolana { deadline_slot }, vec![Action::LockSolana { deadline_slot }])
             } else if v.liquid_tip > terms.h_accept.saturating_add(cfg.l2s_fund_window_blocks) {
                 // Nothing of ours moved. A coin the taker sent late is theirs to refund.
                 (State::Abandoned, vec![])
@@ -308,49 +304,25 @@ fn step_l2s(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
         State::LockedSolana { .. } => l2s_locked(cfg, terms, state, v),
         State::LockedLiquid => wrong_direction(state),
         State::Claiming { preimage } => match &v.htlc {
-            HtlcView::SpentByClaim {
-                confirmed: true, ..
-            } => (
-                State::Done {
-                    outcome: Outcome::Completed,
-                },
-                vec![],
-            ),
+            HtlcView::SpentByClaim { confirmed: true, .. } => (State::Done { outcome: Outcome::Completed }, vec![]),
             // Ours is in the mempool. Sending it again is harmless, and it survives a dropped transaction.
-            HtlcView::SpentByClaim {
-                confirmed: false, ..
-            } => (
-                state.clone(),
-                vec![Action::ClaimLiquid {
-                    preimage: *preimage,
-                }],
-            ),
-            HtlcView::SpentByRefund { confirmed: true } => (
-                State::Done {
-                    outcome: Outcome::Lost,
-                },
-                vec![Action::Page(Page::Lost)],
-            ),
+            HtlcView::SpentByClaim { confirmed: false, .. } => {
+                (state.clone(), vec![Action::ClaimLiquid { preimage: *preimage }])
+            }
+            HtlcView::SpentByRefund { confirmed: true } => {
+                (State::Done { outcome: Outcome::Lost }, vec![Action::Page(Page::Lost)])
+            }
             _ => {
-                let mut actions = vec![Action::ClaimLiquid {
-                    preimage: *preimage,
-                }];
+                let mut actions = vec![Action::ClaimLiquid { preimage: *preimage }];
                 let left = terms.lock_height.saturating_sub(v.liquid_tip);
                 if left <= cfg.urgent_blocks {
-                    actions.push(Action::Page(Page::ClaimUrgent {
-                        left: u64::from(left),
-                    }));
+                    actions.push(Action::Page(Page::ClaimUrgent { left: u64::from(left) }));
                 }
                 (state.clone(), actions)
             }
         },
         State::Refunding => match v.escrow.as_ref().map(|e| e.state) {
-            Some(EscrowState::Refunded) => (
-                State::Done {
-                    outcome: Outcome::Refunded,
-                },
-                vec![],
-            ),
+            Some(EscrowState::Refunded) => (State::Done { outcome: Outcome::Refunded }, vec![]),
             // A claim that landed first still pays us on Liquid, so go back and take it.
             Some(EscrowState::Claimed) => l2s_locked(cfg, terms, state, v),
             _ => (state.clone(), vec![Action::RefundSolana]),
@@ -361,12 +333,7 @@ fn step_l2s(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
 
 /// A stored state from the other direction means the store is corrupt, so do nothing and wake a human.
 fn wrong_direction(state: &State) -> (State, Vec<Action>) {
-    (
-        state.clone(),
-        vec![Action::Page(Page::Impossible(
-            "state does not match the swap's direction".into(),
-        ))],
-    )
+    (state.clone(), vec![Action::Page(Page::Impossible("state does not match the swap's direction".into()))])
 }
 
 fn l2s_locked(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec<Action>) {
@@ -381,13 +348,7 @@ fn l2s_locked(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, V
         // Repeating is safe, because the PDA can only be created once. It keeps the same deadline, and stops once a
         // late landing would no longer leave the margin the gate promises.
         let safe = terms.lock_height.saturating_sub(v.liquid_tip) >= cfg.l2s_gate_blocks;
-        let actions = if safe {
-            vec![Action::LockSolana {
-                deadline_slot: *deadline_slot,
-            }]
-        } else {
-            vec![]
-        };
+        let actions = if safe { vec![Action::LockSolana { deadline_slot: *deadline_slot }] } else { vec![] };
         return (state.clone(), actions);
     };
     match escrow.state {
@@ -396,17 +357,10 @@ fn l2s_locked(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, V
                 let page = Page::Impossible("stored preimage does not match the hash".into());
                 return (state.clone(), vec![Action::Page(page)]);
             }
-            let next = State::Claiming {
-                preimage: escrow.preimage,
-            };
+            let next = State::Claiming { preimage: escrow.preimage };
             step_l2s(cfg, terms, &next, v)
         }
-        EscrowState::Refunded => (
-            State::Done {
-                outcome: Outcome::Refunded,
-            },
-            vec![],
-        ),
+        EscrowState::Refunded => (State::Done { outcome: Outcome::Refunded }, vec![]),
         EscrowState::Open => {
             if v.solana_slot >= escrow.deadline_slot || escrow.restarted {
                 (State::Refunding, vec![Action::RefundSolana])
@@ -424,14 +378,8 @@ fn step_s2l(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
                 (State::LockedLiquid, vec![Action::LockLiquid])
             } else if v.liquid_tip > terms.h_accept.saturating_add(cfg.s2l_lock_window_blocks) {
                 // We won't fill this. If the taker locked, hand its funds back rather than make it wait.
-                let open = v
-                    .escrow
-                    .as_ref()
-                    .is_some_and(|e| e.state == EscrowState::Open && e.recipient_ok);
-                (
-                    State::Abandoned,
-                    if open { vec![Action::Release] } else { vec![] },
-                )
+                let open = v.escrow.as_ref().is_some_and(|e| e.state == EscrowState::Open && e.recipient_ok);
+                (State::Abandoned, if open { vec![Action::Release] } else { vec![] })
             } else {
                 (state.clone(), vec![])
             }
@@ -439,22 +387,12 @@ fn step_s2l(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
         State::LockedLiquid => s2l_locked(cfg, terms, state, v),
         State::LockedSolana { .. } => wrong_direction(state),
         State::Claiming { preimage } => match v.escrow.as_ref() {
-            Some(e) if e.state == EscrowState::Claimed => (
-                State::Done {
-                    outcome: Outcome::Completed,
-                },
-                vec![],
-            ),
-            Some(e) if e.state == EscrowState::Refunded => (
-                State::Done {
-                    outcome: Outcome::Lost,
-                },
-                vec![Action::Page(Page::Lost)],
-            ),
+            Some(e) if e.state == EscrowState::Claimed => (State::Done { outcome: Outcome::Completed }, vec![]),
+            Some(e) if e.state == EscrowState::Refunded => {
+                (State::Done { outcome: Outcome::Lost }, vec![Action::Page(Page::Lost)])
+            }
             escrow => {
-                let mut actions = vec![Action::ClaimSolana {
-                    preimage: *preimage,
-                }];
+                let mut actions = vec![Action::ClaimSolana { preimage: *preimage }];
                 if let Some(e) = escrow {
                     let left = e.deadline_slot.saturating_sub(v.solana_slot);
                     if left <= cfg.extend_within_slots {
@@ -465,12 +403,7 @@ fn step_s2l(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
             }
         },
         State::Refunding => match &v.htlc {
-            HtlcView::SpentByRefund { confirmed: true } => (
-                State::Done {
-                    outcome: Outcome::Refunded,
-                },
-                vec![],
-            ),
+            HtlcView::SpentByRefund { confirmed: true } => (State::Done { outcome: Outcome::Refunded }, vec![]),
             HtlcView::SpentByRefund { confirmed: false } => (state.clone(), s2l_refund_actions(v)),
             // The taker's late claim won the race. It pays us on Solana.
             HtlcView::SpentByClaim { .. } => s2l_spent_by_claim(cfg, terms, state, v),
@@ -482,22 +415,14 @@ fn step_s2l(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
 
 /// A coin whose Solana escrow we have already claimed belongs to the taker, even past the lock height.
 fn s2l_refund_actions(v: &View) -> Vec<Action> {
-    if v.escrow
-        .as_ref()
-        .is_some_and(|e| e.state == EscrowState::Claimed)
-    {
+    if v.escrow.as_ref().is_some_and(|e| e.state == EscrowState::Claimed) {
         vec![]
     } else {
         vec![Action::RefundLiquid]
     }
 }
 
-fn s2l_spent_by_claim(
-    cfg: &Config,
-    terms: &Terms,
-    state: &State,
-    v: &View,
-) -> (State, Vec<Action>) {
+fn s2l_spent_by_claim(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec<Action>) {
     let HtlcView::SpentByClaim { preimage, .. } = &v.htlc else {
         return (state.clone(), vec![]);
     };
@@ -505,30 +430,16 @@ fn s2l_spent_by_claim(
         let page = Page::Impossible("claim witness preimage does not match the hash".into());
         return (state.clone(), vec![Action::Page(page)]);
     }
-    step_s2l(
-        cfg,
-        terms,
-        &State::Claiming {
-            preimage: *preimage,
-        },
-        v,
-    )
+    step_s2l(cfg, terms, &State::Claiming { preimage: *preimage }, v)
 }
 
 fn s2l_locked(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec<Action>) {
     match &v.htlc {
         HtlcView::SpentByClaim { .. } => s2l_spent_by_claim(cfg, terms, state, v),
-        HtlcView::SpentByRefund { confirmed: true } => (
-            State::Done {
-                outcome: Outcome::Refunded,
-            },
-            vec![],
-        ),
+        HtlcView::SpentByRefund { confirmed: true } => (State::Done { outcome: Outcome::Refunded }, vec![]),
         HtlcView::SpentByRefund { confirmed: false } => (State::Refunding, vec![]),
         // Our lock isn't visible. Only ever resend the same transaction, so we can't pay twice.
-        HtlcView::Absent if v.liquid_tip < terms.lock_height => {
-            (state.clone(), vec![Action::RebroadcastLock])
-        }
+        HtlcView::Absent if v.liquid_tip < terms.lock_height => (state.clone(), vec![Action::RebroadcastLock]),
         HtlcView::Absent => (state.clone(), vec![Action::Page(Page::LockMissing)]),
         HtlcView::Unspent { .. } => {
             if v.liquid_tip >= terms.lock_height {
@@ -548,15 +459,8 @@ fn s2l_extend_if_stalled(cfg: &Config, v: &View) -> Vec<Action> {
     let Some(e) = &v.escrow else { return vec![] };
     let stalled = v.liquid_tip_age_secs >= cfg.extend_after_stall_secs;
     let near = e.deadline_slot.saturating_sub(v.solana_slot) <= cfg.extend_within_slots;
-    if e.state == EscrowState::Open
-        && stalled
-        && near
-        && !e.extended
-        && v.solana_slot < e.deadline_slot
-    {
-        vec![Action::Extend {
-            new_deadline: e.deadline_slot.saturating_add(cfg.extend_by_slots),
-        }]
+    if e.state == EscrowState::Open && stalled && near && !e.extended && v.solana_slot < e.deadline_slot {
+        vec![Action::Extend { new_deadline: e.deadline_slot.saturating_add(cfg.extend_by_slots) }]
     } else {
         vec![]
     }

@@ -1,0 +1,23 @@
+# Used by both the CLI and the maker's signer, and needs both the Elements and the Solana dependency graphs.
+[package]
+name = "liq2sol-chain"
+version = "0.1.0"
+edition = "2021"
+description = "Liquid and Solana plumbing shared by the liq2sol CLI and maker"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[dependencies]
+liq2sol-htlc = { path = "../../contracts/liquid" }
+solana-escrow = { path = "../../programs/solana-escrow", features = ["no-entrypoint"] }
+simplicityhl = "=0.9.0"
+anchor-lang = "=1.2.2"
+anchor-spl = "=1.2.2"
+solana-client = "3"
+solana-sdk = "3"
+solana-commitment-config = "3"
+ureq = "2"
+serde_json = "1"
+getrandom = "0.2"

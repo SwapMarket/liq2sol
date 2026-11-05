@@ -27,20 +27,10 @@ fn a_payment_hash_is_never_accepted_twice_even_after_finishing() {
     let s = Store::open(&p).unwrap();
     assert!(s.accept(&terms(1), &State::WatchLock).unwrap());
     assert!(!s.accept(&terms(1), &State::WatchLock).unwrap());
-    s.commit_step(
-        &[1; 32],
-        &State::Done {
-            outcome: Outcome::Completed,
-        },
-        &[],
-    )
-    .unwrap();
+    s.commit_step(&[1; 32], &State::Done { outcome: Outcome::Completed }, &[]).unwrap();
     drop(s);
     let s = Store::open(&p).unwrap();
-    assert!(
-        !s.accept(&terms(1), &State::WatchLock).unwrap(),
-        "remembered forever"
-    );
+    assert!(!s.accept(&terms(1), &State::WatchLock).unwrap(), "remembered forever");
 }
 
 #[test]
@@ -49,9 +39,7 @@ fn state_and_intents_survive_a_restart_together() {
     let s = Store::open(&p).unwrap();
     s.accept(&terms(1), &State::WatchLock).unwrap();
     s.accept(&terms(2), &State::WatchLock).unwrap();
-    let ids = s
-        .commit_step(&[1; 32], &State::LockedLiquid, &[Action::LockLiquid])
-        .unwrap();
+    let ids = s.commit_step(&[1; 32], &State::LockedLiquid, &[Action::LockLiquid]).unwrap();
     s.commit_step(&[2; 32], &State::Abandoned, &[]).unwrap();
     drop(s);
 
@@ -73,18 +61,14 @@ fn only_one_lock_transaction_can_ever_be_stored() {
     let s = Store::open(&p).unwrap();
     s.accept(&terms(1), &State::WatchLock).unwrap();
     assert!(s.store_lock_tx(&[1; 32], b"tx").is_err(), "no intent yet");
-    s.commit_step(&[1; 32], &State::LockedLiquid, &[Action::LockLiquid])
-        .unwrap();
+    s.commit_step(&[1; 32], &State::LockedLiquid, &[Action::LockLiquid]).unwrap();
     s.store_lock_tx(&[1; 32], b"tx").unwrap();
     s.store_lock_tx(&[1; 32], b"tx").unwrap();
     assert!(s.store_lock_tx(&[1; 32], b"different").is_err());
     drop(s);
     let s = Store::open(&p).unwrap();
     assert_eq!(s.stored_lock_tx(&[1; 32]).unwrap().unwrap(), b"tx");
-    assert!(
-        s.store_lock_tx(&[1; 32], b"different").is_err(),
-        "still refused after a restart"
-    );
+    assert!(s.store_lock_tx(&[1; 32], b"different").is_err(), "still refused after a restart");
 }
 
 #[test]

@@ -16,11 +16,11 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use anchor_lang::prelude::Pubkey;
-use liq2sol_cli::liquid::{
+use liq2sol_chain::liquid::{
     address_of, exact_coin, keypair_from, lbtc, pay, random32, spend_htlc, txout, unhex_tx_witness_preimage, use_network,
     usdt, Coin, Esplora, HtlcSpend, NetworkConfig, Res, Rpc, FEE,
 };
-use liq2sol_cli::sol::{ata, vault_pda, Sol, MAINNET_GENESIS};
+use liq2sol_chain::sol::{ata, vault_pda, Sol, MAINNET_GENESIS};
 use liq2sol_htlc::{asset_param, script_hash, Htlc, HtlcParams};
 use simplicityhl::elements::hashes::sha256;
 use simplicityhl::elements::secp256k1_zkp::Keypair as LiquidKey;

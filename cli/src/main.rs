@@ -12,7 +12,7 @@
 //!
 //! Environment: SOLANA_RPC (default http://127.0.0.1:8899), LIQ2SOL_KEYS (default cli/.keys).
 
-use liq2sol_cli::{liquid, sol};
+use liq2sol_chain::{liquid, sol};
 
 use std::path::PathBuf;
 use std::str::FromStr;

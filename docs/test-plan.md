@@ -105,8 +105,10 @@ reactions (calling `extend`, refusing to refund) are still to be tested. A real 
 
 E16 needs a mint with a real freeze authority, which the devnet stand-in lacks, so it only runs on a local validator. Skip it on devnet by setting `SCENARIO` to another scenario's name.
 
+E22 runs in `maker/signer/tests/process.rs`: the real signer binary, attacked through its socket on a regtest node and devnet. Its policy has its own mutation check.
+
 Still open: E14 (needs a cluster restart), blinded coins in E9 (Bit Machine only), E6–E8 and E10 (need RFQ and client
-logic), E17 onward (need the daemon and client). `solana-test-validator` dies on the VirtualBox VM, prebuilt or from source, because `reed-solomon-erasure` runs AVX2 code unchecked. It runs under WSL, and the VM reaches it through a Windows port proxy. It runs with Alpenglow switched off, so it doesn't match mainnet consensus.
+logic), E17–E21 (need the daemon and client). `solana-test-validator` dies on the VirtualBox VM, prebuilt or from source, because `reed-solomon-erasure` runs AVX2 code unchecked. It runs under WSL, and the VM reaches it through a Windows port proxy. It runs with Alpenglow switched off, so it doesn't match mainnet consensus.
 
 Each runs both directions where applicable, first locally and then on testnet and devnet.
 

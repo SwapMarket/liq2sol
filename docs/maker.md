@@ -28,15 +28,28 @@ needed.
 | Key | Use | Where |
 |---|---|---|
 | Nostr key | Signs offers and terms. Identity and reputation. | Hot. Can be rotated at the cost of reputation. |
-| Liquid per-swap keys | HTLC claim and refund | Derived from a hot seed by swap index (BIP-32) |
+| Liquid per-swap keys | HTLC claim and refund | Derived from a hot seed and the payment hash |
 | Liquid wallet key | Funds locks, pays fees | Hot, balance limited |
 | Solana operator key | Calls `lock_from_vault`, `extend`, pays fees | Hot, rate-capped by the vault (D6) |
 | Solana vault owner | Withdraws, changes operator | **Cold.** Never on the daemon's host. |
 | Liquid treasury | Refills the hot wallet | **Cold.** Never on the daemon's host. |
 
-- The `signer` runs as a separate process and OS user, and the rest of the daemon reaches it through a Unix socket. Its
-  own policy applies, regardless of what the engine asks for: per-swap and per-window caps, the HTLC template only, and
-  its own check of the timeouts. A compromised RFQ parser then can't simply ask for arbitrary signatures.
+- The `signer` is a separate process, reached only through a Unix socket in a private directory. It treats whoever is on
+  the socket as possibly compromised:
+  - **It builds every transaction itself.** Our claims and refunds pay our own wallet, because nothing else can be asked for.
+    It signs and returns transactions, and it never broadcasts.
+  - **It reads heights, slots, coins and escrows through its own chain connections.** It signs a Solana lock only after seeing
+    the taker's exact coin confirmed at the HTLC, and a Liquid lock only after seeing a matching escrow. Otherwise a
+    compromised engine could lock our funds to a colluding taker who never paid.
+  - **It runs its own policy and ledger**, and commits before releasing a signature: per-swap and per-window caps, no payout
+    above what is received, its own check of the timeouts, and no refund after collecting or release after locking.
+  - **A Liquid lock is signed once.** A retry returns the identical stored bytes, so the HTLC can't be paid twice.
+  - Requests are handled one at a time so policy checks can't race, and read outside that lock so a stalled client blocks nobody.
+- Per-swap Liquid keys are derived as SHA-256 of a domain tag, a seed and the payment hash, rather than BIP-32. A restored seed
+  can still spend every open swap.
+- **Limits of this separation.** It needs a separate OS user to mean much, because the same user can read the key files. Root on
+  the host defeats it. The signer also trusts its own chain source, so a lying node or RPC could feed it false evidence, which is
+  why a maker should run its own node.
 - An optional remote signer or HSM can replace it later.
 - Keys are never logged. The swap log contains preimages only after they are public.
 - **Testnet and devnet only at this stage.** Mainnet key ceremony is out of scope until after audit.

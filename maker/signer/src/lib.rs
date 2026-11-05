@@ -57,6 +57,9 @@ pub struct Config {
     pub limits: Limits,
     /// Regtest assets as (stand-in USDt, L-BTC). Liquid testnet is the default.
     pub regtest_assets: Option<(String, String)>,
+    /// The cold owner of the maker vault this signer operates, if any. With one, Solana locks draw from the vault under
+    /// its on-chain window cap, and a stolen hot key can't exceed that. The owner's key is never on this host.
+    pub vault_owner: Option<String>,
 }
 
 /// L→S terms from `rfq-terms`: the taker pays the HTLC, and we pay the taker on Solana.
@@ -85,15 +88,44 @@ pub struct S2lTerms {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Call {
     Identity,
-    SwapKey { payment_hash: [u8; 32] },
-    LockSolana { terms: L2sTerms, deadline_slot: u64 },
-    LockLiquid { terms: S2lTerms },
-    ClaimLiquid { terms: L2sTerms, preimage: [u8; 32] },
-    ClaimSolana { taker_solana: String, payment_hash: [u8; 32], preimage: [u8; 32] },
-    RefundLiquid { terms: S2lTerms },
-    RefundSolana { payment_hash: [u8; 32] },
-    Extend { taker_solana: String, payment_hash: [u8; 32], new_deadline: u64 },
-    Release { taker_solana: String, payment_hash: [u8; 32] },
+    SwapKey {
+        payment_hash: [u8; 32],
+    },
+    LockSolana {
+        terms: L2sTerms,
+        deadline_slot: u64,
+    },
+    LockLiquid {
+        terms: S2lTerms,
+    },
+    ClaimLiquid {
+        terms: L2sTerms,
+        preimage: [u8; 32],
+    },
+    ClaimSolana {
+        taker_solana: String,
+        payment_hash: [u8; 32],
+        preimage: [u8; 32],
+    },
+    RefundLiquid {
+        terms: S2lTerms,
+    },
+    RefundSolana {
+        payment_hash: [u8; 32],
+    },
+    /// Move collected tokens from the hot wallet into the vault, so they are back under the cap.
+    DepositToVault {
+        amount: u64,
+    },
+    Extend {
+        taker_solana: String,
+        payment_hash: [u8; 32],
+        new_deadline: u64,
+    },
+    Release {
+        taker_solana: String,
+        payment_hash: [u8; 32],
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +134,8 @@ pub enum Reply {
         liquid_address: String,
         liquid_script: Vec<u8>,
         solana: String,
+        /// What our Solana escrows are seeded with: the vault if there is one, or `solana`.
+        escrow_initiator: String,
     },
     SwapKey {
         x_only: [u8; 32],
@@ -147,6 +181,32 @@ fn load_or_create_secret(path: &Path) -> Result<[u8; 32], String> {
     std::fs::read(path).map_err(|e| e.to_string())?.try_into().map_err(|_| "bad key file".to_string())
 }
 
+/// The HTLC for an L→S swap. Shared with the daemon, so both derive the same address.
+pub fn l2s_params(t: &L2sTerms, our_swap_key: [u8; 32], our_script: &Script) -> HtlcParams {
+    HtlcParams {
+        payment_hash: t.payment_hash,
+        recipient_pk: our_swap_key,
+        sender_pk: t.taker_pk,
+        lock_height: t.lock_height,
+        usdt_asset: asset_param(&usdt()),
+        amount: t.liquid_amount,
+        recipient_script_hash: script_hash(our_script),
+    }
+}
+
+/// The HTLC for an S→L swap. Shared with the daemon, so both derive the same address.
+pub fn s2l_params(t: &S2lTerms, our_swap_key: [u8; 32]) -> HtlcParams {
+    HtlcParams {
+        payment_hash: t.payment_hash,
+        recipient_pk: t.taker_pk,
+        sender_pk: our_swap_key,
+        lock_height: t.lock_height,
+        usdt_asset: asset_param(&usdt()),
+        amount: t.liquid_amount,
+        recipient_script_hash: script_hash(&Script::from(t.taker_script.clone())),
+    }
+}
+
 pub struct Signer {
     limits: Limits,
     chain: Esplora,
@@ -156,6 +216,7 @@ pub struct Signer {
     wallet: LiquidKey,
     solana: Keypair,
     swap_seed: [u8; 32],
+    vault_owner: Option<Pubkey>,
 }
 
 /// Refuse, or fail, without signing anything.
@@ -219,6 +280,7 @@ impl Signer {
             wallet,
             solana,
             swap_seed,
+            vault_owner: cfg.vault_owner.as_deref().map(parse_pubkey).transpose()?,
         })
     }
 
@@ -242,27 +304,11 @@ impl Signer {
     }
 
     fn l2s_params(&self, t: &L2sTerms) -> Result<HtlcParams, String> {
-        Ok(HtlcParams {
-            payment_hash: t.payment_hash,
-            recipient_pk: Self::x_only(&self.swap_key(&t.payment_hash)?),
-            sender_pk: t.taker_pk,
-            lock_height: t.lock_height,
-            usdt_asset: asset_param(&usdt()),
-            amount: t.liquid_amount,
-            recipient_script_hash: script_hash(&self.wallet_script()),
-        })
+        Ok(l2s_params(t, Self::x_only(&self.swap_key(&t.payment_hash)?), &self.wallet_script()))
     }
 
     fn s2l_params(&self, t: &S2lTerms) -> Result<HtlcParams, String> {
-        Ok(HtlcParams {
-            payment_hash: t.payment_hash,
-            recipient_pk: t.taker_pk,
-            sender_pk: Self::x_only(&self.swap_key(&t.payment_hash)?),
-            lock_height: t.lock_height,
-            usdt_asset: asset_param(&usdt()),
-            amount: t.liquid_amount,
-            recipient_script_hash: script_hash(&Script::from(t.taker_script.clone())),
-        })
+        Ok(s2l_params(t, Self::x_only(&self.swap_key(&t.payment_hash)?)))
     }
 
     /// The exact coin at this HTLC, as this process's own chain connection sees it.
@@ -279,6 +325,16 @@ impl Signer {
             .into_iter()
             .find(|c| c.out.asset.explicit() == Some(liquid::lbtc()) && c.out.value.explicit().unwrap_or(0) >= FEE)
             .ok_or_else(|| "the Liquid wallet has no L-BTC for the fee".to_string())
+    }
+
+    fn escrow_initiator(&self) -> Pubkey {
+        self.vault_owner.map_or_else(|| self.solana.pubkey(), |owner| sol::maker_vault_pda(&owner))
+    }
+
+    fn deposit_to_vault(&self, amount: u64) -> Outcome {
+        let owner = self.vault_owner.ok_or("no vault is configured")?;
+        // The destination is fixed to our own vault, so this needs no limit.
+        self.solana_reply(&[sol::vault_deposit_ix(&self.solana.pubkey(), &owner, amount)])
     }
 
     fn escrow(&self, address: &Pubkey) -> Result<Option<Escrow>, String> {
@@ -325,7 +381,13 @@ impl Signer {
             taker_coin,
         };
         let record = self.check(&request)?;
-        let ix = sol::lock_ix(&self.solana.pubkey(), t.payment_hash, taker, t.solana_amount, deadline_slot, true);
+        let operator = self.solana.pubkey();
+        let ix = match &self.vault_owner {
+            Some(owner) => {
+                sol::lock_from_vault_ix(&operator, owner, t.payment_hash, taker, t.solana_amount, deadline_slot, true)
+            }
+            None => sol::lock_ix(&operator, t.payment_hash, taker, t.solana_amount, deadline_slot, true),
+        };
         let reply = self.solana_reply(&[ix])?;
         self.commit(&t.payment_hash, &request, &record, None)?;
         Ok(reply)
@@ -419,7 +481,7 @@ impl Signer {
     fn refund_solana(&self, payment_hash: [u8; 32]) -> Outcome {
         let request = Request::RefundSolana { payment_hash };
         let record = self.check(&request)?;
-        let address = escrow_pda(&self.solana.pubkey(), &payment_hash);
+        let address = escrow_pda(&self.escrow_initiator(), &payment_hash);
         let escrow = self.escrow(&address)?.ok_or("the escrow is not there")?;
         let reply = self.solana_reply(&[sol::refund_ix(&address, &escrow)])?;
         self.commit(&payment_hash, &request, &record, None)?;
@@ -457,6 +519,7 @@ impl Signer {
                 liquid_address: address_of(&self.wallet).to_string(),
                 liquid_script: self.wallet_script().to_bytes(),
                 solana: self.solana.pubkey().to_string(),
+                escrow_initiator: self.escrow_initiator().to_string(),
             }),
             Call::SwapKey { payment_hash } => {
                 self.swap_key(payment_hash).map(|k| Reply::SwapKey { x_only: Self::x_only(&k) }).map_err(Stop::Failed)
@@ -469,6 +532,7 @@ impl Signer {
             }
             Call::RefundLiquid { terms } => self.refund_liquid(terms),
             Call::RefundSolana { payment_hash } => self.refund_solana(*payment_hash),
+            Call::DepositToVault { amount } => self.deposit_to_vault(*amount),
             Call::Extend { taker_solana, payment_hash, new_deadline } => {
                 self.extend(taker_solana, *payment_hash, *new_deadline)
             }
@@ -520,7 +584,18 @@ fn serve(signer: &Mutex<Signer>, stream: UnixStream) -> std::io::Result<()> {
 pub fn run(config_path: &Path) -> Result<(), String> {
     let text = std::fs::read_to_string(config_path).map_err(|e| e.to_string())?;
     let cfg: Config = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let signer = Arc::new(Mutex::new(Signer::new(&cfg)?));
+    // A chain outage must not stop us coming back up, or we couldn't sign claims when it ends. The mainnet check stays
+    // fail-closed: nothing is served until it has actually passed.
+    let signer = loop {
+        match Signer::new(&cfg) {
+            Ok(signer) => break Arc::new(Mutex::new(signer)),
+            Err(e) if e.starts_with("refusing") => return Err(e),
+            Err(e) => {
+                eprintln!("waiting for the chains: {e}");
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    };
     let _ = std::fs::remove_file(&cfg.socket);
     // The socket's own mode is set just after binding, so the directory must already keep everyone else out.
     let parent = cfg.socket.parent().ok_or("socket has no parent directory")?;

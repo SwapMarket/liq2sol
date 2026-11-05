@@ -46,6 +46,7 @@ fn open(path: &Path, schema: &str) -> Result<Connection> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "FULL")?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
     conn.execute_batch(schema)?;
     Ok(conn)
 }
@@ -71,7 +72,10 @@ impl Store {
                  stored_tx BLOB,
                  finished INTEGER NOT NULL DEFAULT 0
              );
-             CREATE TABLE IF NOT EXISTS flags (name TEXT PRIMARY KEY, value INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS flags (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS details (hash BLOB PRIMARY KEY, body TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS seen_coins (hash BLOB PRIMARY KEY, txid TEXT NOT NULL, vout INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS last_tip (id INTEGER PRIMARY KEY CHECK (id = 1), height INTEGER NOT NULL, hash TEXT NOT NULL);",
         )?;
         Ok(Self { conn })
     }
@@ -172,12 +176,68 @@ impl Store {
         Ok(out)
     }
 
-    /// Latch a rollback alarm. Only an operator clears it.
-    pub fn set_rollback(&self, on: bool) -> Result<()> {
+    /// The full terms for a swap, in whatever form the daemon keeps them.
+    pub fn set_details(&self, hash: &[u8; 32], body: &str) -> Result<()> {
         self.conn.execute(
+            "INSERT INTO details (hash, body) VALUES (?1, ?2) ON CONFLICT(hash) DO UPDATE SET body = ?2",
+            params![hash.as_slice(), body],
+        )?;
+        Ok(())
+    }
+
+    pub fn details(&self, hash: &[u8; 32]) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT body FROM details WHERE hash = ?1", params![hash.as_slice()], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// Remember the HTLC coin the first time it is seen, because a spent coin can't be found at its address any more.
+    pub fn remember_coin(&self, hash: &[u8; 32], txid: &str, vout: u32) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO seen_coins (hash, txid, vout) VALUES (?1, ?2, ?3)",
+            params![hash.as_slice(), txid, vout],
+        )?;
+        Ok(())
+    }
+
+    pub fn seen_coin(&self, hash: &[u8; 32]) -> Result<Option<(String, u32)>> {
+        Ok(self
+            .conn
+            .query_row("SELECT txid, vout FROM seen_coins WHERE hash = ?1", params![hash.as_slice()], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?)
+    }
+
+    /// The last Liquid tip seen, kept across restarts so a rollback during downtime is still noticed.
+    pub fn last_tip(&self) -> Result<Option<(u32, String)>> {
+        Ok(self
+            .conn
+            .query_row("SELECT height, hash FROM last_tip WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?)
+    }
+
+    pub fn set_last_tip(&self, height: u32, hash: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO last_tip (id, height, hash) VALUES (1, ?1, ?2) ON CONFLICT(id) DO UPDATE SET height = ?1, hash = ?2",
+            params![height, hash],
+        )?;
+        Ok(())
+    }
+
+    /// Latch a rollback alarm. Only an operator clears it. Clearing also forgets the last tip seen, because that block
+    /// may no longer exist, and comparing against it would raise the alarm again straight away.
+    pub fn set_rollback(&self, on: bool) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO flags (name, value) VALUES ('rollback', ?1) ON CONFLICT(name) DO UPDATE SET value = ?1",
             params![on as i64],
         )?;
+        if !on {
+            tx.execute("DELETE FROM last_tip", [])?;
+        }
+        tx.commit()?;
         Ok(())
     }
 

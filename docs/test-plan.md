@@ -107,8 +107,11 @@ E16 needs a mint with a real freeze authority, which the devnet stand-in lacks, 
 
 E22 runs in `maker/signer/tests/process.rs`: the real signer binary, attacked through its socket on a regtest node and devnet. Its policy has its own mutation check.
 
+E1, E3, E9, E11, E15 and E17 also run against the real daemon, in `maker/daemon/tests/e2e.rs`: the daemon and signer processes with the maker vault on, a regtest node, a real Solana
+cluster, and a simulated taker. E17 kills the daemon mid-swap, and also starts it from the state a crash leaves between saving and sending. Still only unit-tested in the daemon: disagreement between Liquid sources, and chain outages during a tick.
+
 Still open: E14 (needs a cluster restart), blinded coins in E9 (Bit Machine only), E6–E8 and E10 (need RFQ and client
-logic), E17–E21 (need the daemon and client). `solana-test-validator` dies on the VirtualBox VM, prebuilt or from source, because `reed-solomon-erasure` runs AVX2 code unchecked. It runs under WSL, and the VM reaches it through a Windows port proxy. It runs with Alpenglow switched off, so it doesn't match mainnet consensus.
+logic), E18–E21 (need the client). `solana-test-validator` dies on the VirtualBox VM, prebuilt or from source, because `reed-solomon-erasure` runs AVX2 code unchecked. It runs under WSL, and the VM reaches it through a Windows port proxy. It runs with Alpenglow switched off, so it doesn't match mainnet consensus.
 
 Each runs both directions where applicable, first locally and then on testnet and devnet.
 

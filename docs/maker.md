@@ -94,6 +94,8 @@ These limit the damage from the risks contracts can't remove.
 Defaults are set after testnet, so they are deliberately absent here. They should scale with what the operator can afford
 to lose in a single incident.
 
+**Recovering from a rollback alarm:** check the chain by hand, then run `liq2sol-maker clear-rollback <config.json>`. Nothing else clears it.
+
 **Automatic reactions:**
 
 - **Liquid tip older than 10 min:** stop new locks. With S→L swaps open, call `extend` once the tip is older than

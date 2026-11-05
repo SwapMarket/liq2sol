@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use liq2sol_chain::liquid::{
     address_of, keypair_from, pay, random32, txout, usdt, use_network, Esplora, NetworkConfig, Rpc,
 };
-use liq2sol_chain::sol::{ata, escrow_pda, vault_pda, Sol};
+use liq2sol_chain::sol::{self, ata, escrow_pda, vault_pda, Sol};
 use liq2sol_htlc::{asset_param, script_hash, Htlc, HtlcParams};
 use liq2sol_maker_core::engine::Config as EngineConfig;
 use liq2sol_maker_core::hash_preimage;
@@ -205,6 +205,7 @@ fn the_signer_process_resists_a_compromised_engine() {
         solana_rpc: solana_rpc.clone(),
         limits,
         regtest_assets: Some((usdt_id.clone(), lbtc_id.clone())),
+        vault_owner: None,
     };
     let config_path = root.join("signer.json");
     std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
@@ -232,7 +233,7 @@ fn the_signer_process_resists_a_compromised_engine() {
     println!("    ok: socket and key files are private");
 
     let mut client = Client::connect(&socket).unwrap();
-    let Reply::Identity { liquid_address, liquid_script, solana } = client.call(&Call::Identity).unwrap() else {
+    let Reply::Identity { liquid_address, liquid_script, solana, .. } = client.call(&Call::Identity).unwrap() else {
         panic!()
     };
     node.fund(&liquid_address, 500_000, "bitcoin");
@@ -267,8 +268,11 @@ fn the_signer_process_resists_a_compromised_engine() {
     let _ = preimage;
     println!("    ok: the refund is still refused after the signer restarts");
 
-    // Stop the node before deleting its directory.
+    drop(client);
     drop(signer);
+    vault_cap(&world, &config, &root, &private);
+
+    // Stop the node before deleting its directory.
     drop(world);
     let _ = std::fs::remove_dir_all(&root);
     println!("\nALL SIGNER ATTACKS REFUSED");
@@ -564,6 +568,93 @@ fn s2l_attacks(world: &World, client: &mut Client) {
         Refusal::WrongPreimage,
     );
     let _ = (preimage, vault_pda(&escrow), ata(&maker));
+}
+
+/// A hot key limited by the vault: it locks from the vault under the cap, and a stolen key can't get past it.
+fn vault_cap(world: &World, config: &Config, root: &Path, private: &Path) {
+    println!("\n==> The maker vault caps a stolen hot key");
+    let operator = read_keypair_file(config.keys_dir.join("solana.json")).unwrap();
+    // The cold owner is a separate key, which the signer never sees.
+    let owner = Keypair::new();
+    let mut transfer = vec![2, 0, 0, 0];
+    transfer.extend_from_slice(&50_000_000u64.to_le_bytes());
+    let fund = solana_sdk::instruction::Instruction {
+        program_id: anchor_lang::system_program::ID,
+        accounts: vec![
+            solana_sdk::instruction::AccountMeta::new(operator.pubkey(), true),
+            solana_sdk::instruction::AccountMeta::new(owner.pubkey(), true),
+        ],
+        data: transfer,
+    };
+    world.sol.send(&[fund], &operator, &[&owner]).unwrap();
+    let cap = 2 * SOL_AMOUNT;
+    world.sol.send(&[sol::vault_init_ix(&owner.pubkey(), operator.pubkey(), 1_000_000, cap)], &owner, &[]).unwrap();
+    let vault = sol::maker_vault_pda(&owner.pubkey());
+    let vault_token = sol::maker_vault_token_pda(&vault);
+
+    let cfg = Config {
+        socket: private.join("vault.sock"),
+        ledger: root.join("vault-signer.db"),
+        vault_owner: Some(owner.pubkey().to_string()),
+        ..config.clone()
+    };
+    let path = root.join("vault.json");
+    std::fs::write(&path, serde_json::to_string(&cfg).unwrap()).unwrap();
+    let _signer = SignerProcess::start(&path, &cfg.socket);
+    let mut client = Client::connect(&cfg.socket).unwrap();
+    let Reply::Identity { escrow_initiator, .. } = client.call(&Call::Identity).unwrap() else { panic!() };
+    assert_eq!(escrow_initiator, vault.to_string(), "escrows are seeded with the vault");
+
+    // Tokens the hot key collected go back under the cap.
+    let deposit = solana_tx(client.call(&Call::DepositToVault { amount: 5 * SOL_AMOUNT }).unwrap());
+    world.send_solana(&deposit).unwrap();
+    assert_eq!(world.sol.token_balance(&vault_token).unwrap(), 5 * SOL_AMOUNT);
+    println!("    ok: collected tokens moved into the vault");
+
+    let lock_once = |client: &mut Client, amount: u64, deadline: u64| {
+        let (hash, _) = hash_and_preimage();
+        let liquid = amount * 100;
+        let (terms, params) = l2s_params(world, client, hash, world.chain.tip().unwrap() + 300, liquid);
+        let terms = L2sTerms { solana_amount: amount, ..terms };
+        let htlc = Htlc::new(&params).unwrap().address(&AddressParams::ELEMENTS);
+        pay(&world.chain, &world.taker, vec![txout(usdt(), liquid, htlc.script_pubkey())], world.genesis).unwrap();
+        world.node.mine(2);
+        (client.call(&Call::LockSolana { terms, deadline_slot: deadline }).unwrap(), hash)
+    };
+
+    let deadline = world.sol.slot().unwrap() + 2_000;
+    let (reply, hash) = lock_once(&mut client, SOL_AMOUNT, deadline);
+    world.send_solana(&solana_tx(reply)).unwrap();
+    let e = world.sol.escrow(&sol::escrow_pda(&vault, &hash)).unwrap().unwrap();
+    assert_eq!((e.initiator, e.refund_token, e.rent_payer), (vault, vault_token, operator.pubkey()));
+    assert_eq!(world.sol.token_balance(&vault_token).unwrap(), 4 * SOL_AMOUNT);
+    println!("    ok: the lock drew from the vault, and a refund would return there");
+
+    // The signer's own limits would allow this. The chain doesn't: this is the protection against a stolen key.
+    let (reply, _) = lock_once(&mut client, cap, deadline);
+    let err = world.send_solana(&solana_tx(reply)).unwrap_err();
+    // 0x177c is 6012, the program's OverWindowCap. Any other failure wouldn't prove the cap did this.
+    assert!(err.contains("0x177c"), "refused for the wrong reason: {err}");
+    println!("    ok: a lock over the window cap is refused on-chain (OverWindowCap), even with a valid signature");
+    assert_eq!(world.sol.token_balance(&vault_token).unwrap(), 4 * SOL_AMOUNT, "nothing moved");
+
+    // The hot key can't withdraw: it isn't the owner, so the vault's address doesn't even derive from it.
+    let withdraw = solana_sdk::instruction::Instruction {
+        program_id: solana_escrow::id(),
+        accounts: anchor_lang::ToAccountMetas::to_account_metas(
+            &solana_escrow::accounts::VaultWithdraw {
+                owner: operator.pubkey(),
+                maker_vault: vault,
+                vault_token,
+                to: sol::ata(&operator.pubkey()),
+                token_program: Pubkey58::parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+            },
+            None,
+        ),
+        data: anchor_lang::InstructionData::data(&solana_escrow::instruction::VaultWithdraw { amount: 1 }),
+    };
+    assert!(world.sol.send(&[withdraw], &operator, &[]).is_err(), "the hot key can't withdraw");
+    println!("    ok: the hot key can't withdraw from the vault");
 }
 
 fn liquid_chain_fee() -> u64 {

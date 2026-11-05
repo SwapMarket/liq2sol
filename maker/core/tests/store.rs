@@ -80,6 +80,8 @@ fn the_rollback_alarm_stays_until_cleared() {
     drop(s);
     let s = Store::open(&p).unwrap();
     assert!(s.rollback().unwrap());
+    s.set_last_tip(50, "gone").unwrap();
     s.set_rollback(false).unwrap();
     assert!(!s.rollback().unwrap());
+    assert_eq!(s.last_tip().unwrap(), None, "the old tip is forgotten, or the alarm would return at once");
 }

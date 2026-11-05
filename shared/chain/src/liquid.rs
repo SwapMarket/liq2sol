@@ -163,6 +163,28 @@ impl Esplora {
         }
     }
 
+    /// The block hash at a height, to notice the chain changing underneath us.
+    pub fn block_hash(&self, height: u32) -> Res<String> {
+        match self {
+            Esplora::Http(u) => Ok(get(&format!("{u}/block-height/{height}"))?.trim().to_string()),
+            Esplora::Node(n) => n.call(&["getblockhash", &height.to_string()]),
+        }
+    }
+
+    /// Whether a transaction is in a block, not just the mempool.
+    pub fn is_confirmed(&self, txid: &Txid) -> Res<bool> {
+        match self {
+            Esplora::Http(u) => {
+                let status: Json = serde_json::from_str(&get(&format!("{u}/tx/{txid}/status"))?).map_err(|e| e.to_string())?;
+                Ok(status["confirmed"].as_bool() == Some(true))
+            }
+            Esplora::Node(n) => {
+                let tx = n.json(&["getrawtransaction", &txid.to_string(), "1"])?;
+                Ok(tx["confirmations"].as_u64().unwrap_or(0) > 0)
+            }
+        }
+    }
+
     pub fn genesis(&self) -> Res<String> {
         match self {
             Esplora::Http(u) => Ok(get(&format!("{u}/block-height/0"))?.trim().to_string()),

@@ -1,10 +1,12 @@
 //! Solana side: instructions for the escrow program, plus devnet-only setup of the stand-in mint.
 
+use std::str::FromStr;
+
 use anchor_lang::{prelude::Pubkey, AccountDeserialize, InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address;
 use solana_client::rpc_client::RpcClient;
 use solana_commitment_config::CommitmentConfig;
-use solana_escrow::{state::Escrow, ESCROW_SEED, ESCROW_VAULT_SEED, USDT_MINT};
+use solana_escrow::{state::Escrow, ESCROW_SEED, ESCROW_VAULT_SEED, MAKER_VAULT_SEED, MAKER_VAULT_TOKEN_SEED, USDT_MINT};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     signature::{Keypair, Signature},
@@ -347,6 +349,86 @@ pub fn claim_ixs(
             data,
         },
     ]
+}
+
+pub fn maker_vault_pda(owner: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[MAKER_VAULT_SEED, owner.as_ref()], &solana_escrow::id()).0
+}
+
+pub fn maker_vault_token_pda(maker_vault: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[MAKER_VAULT_TOKEN_SEED, maker_vault.as_ref()], &solana_escrow::id()).0
+}
+
+/// Create a maker vault. Signed by the cold owner, never by the daemon's host.
+pub fn vault_init_ix(owner: &Pubkey, operator: Pubkey, window_slots: u64, window_cap: u64) -> Instruction {
+    let maker_vault = maker_vault_pda(owner);
+    let accounts = solana_escrow::accounts::VaultInit {
+        owner: *owner,
+        maker_vault,
+        vault_token: maker_vault_token_pda(&maker_vault),
+        mint: USDT_MINT,
+        token_program: TOKEN_PROGRAM,
+        system_program: anchor_lang::system_program::ID,
+    }
+    .to_account_metas(None);
+    let data = solana_escrow::instruction::VaultInit { operator, window_slots, window_cap }.data();
+    Instruction { program_id: solana_escrow::id(), accounts, data }
+}
+
+/// Move tokens from the depositor's canonical account into a vault.
+pub fn vault_deposit_ix(depositor: &Pubkey, vault_owner: &Pubkey, amount: u64) -> Instruction {
+    let maker_vault = maker_vault_pda(vault_owner);
+    let accounts = solana_escrow::accounts::VaultDeposit {
+        depositor: *depositor,
+        maker_vault,
+        vault_token: maker_vault_token_pda(&maker_vault),
+        from: ata(depositor),
+        token_program: TOKEN_PROGRAM,
+    }
+    .to_account_metas(None);
+    let data = solana_escrow::instruction::VaultDeposit { amount }.data();
+    Instruction { program_id: solana_escrow::id(), accounts, data }
+}
+
+pub fn lock_from_vault_ix(operator: &Pubkey, vault_owner: &Pubkey, payment_hash: [u8; 32], recipient: Pubkey, amount: u64, deadline_slot: u64, close_on_restart: bool) -> Instruction {
+    let maker_vault = maker_vault_pda(vault_owner);
+    let escrow = escrow_pda(&maker_vault, &payment_hash);
+    let accounts = solana_escrow::accounts::LockFromVault {
+        operator: *operator,
+        maker_vault,
+        vault_token: maker_vault_token_pda(&maker_vault),
+        escrow,
+        vault: vault_pda(&escrow),
+        mint: USDT_MINT,
+        token_program: TOKEN_PROGRAM,
+        system_program: anchor_lang::system_program::ID,
+    }
+    .to_account_metas(None);
+    let data = solana_escrow::instruction::LockFromVault { payment_hash, recipient, amount, deadline_slot, close_on_restart }.data();
+    Instruction { program_id: solana_escrow::id(), accounts, data }
+}
+
+/// Whether a token account exists and isn't frozen.
+impl Sol {
+    /// The latest hard-fork slot, as the program itself sees it.
+    pub fn last_restart_slot(&self) -> Res<u64> {
+        let sysvar = Pubkey::from_str("SysvarLastRestartS1ot1111111111111111111111").map_err(|e| e.to_string())?;
+        let account = self.rpc.get_account_with_commitment(&sysvar, CommitmentConfig::finalized()).map_err(|e| e.to_string())?;
+        let data = account.value.ok_or("no LastRestartSlot sysvar")?.data;
+        Ok(u64::from_le_bytes(data.get(..8).ok_or("short sysvar")?.try_into().map_err(|_| "short sysvar")?))
+    }
+
+    /// Send without waiting. The engine sees the result at `finalized` on a later tick, so the loop never blocks.
+    pub fn send_signed(&self, tx: &Transaction) -> Res<Signature> {
+        self.rpc.send_transaction(tx).map_err(|e| e.to_string())
+    }
+
+    pub fn token_usable(&self, address: &Pubkey) -> Res<bool> {
+        match self.rpc.get_account_with_commitment(address, CommitmentConfig::finalized()) {
+            Ok(r) => Ok(r.value.is_some_and(|a| a.data.get(108) == Some(&1))),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
 
 pub fn refund_ix(address: &Pubkey, escrow: &Escrow) -> Instruction {

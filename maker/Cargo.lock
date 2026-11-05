@@ -2465,6 +2465,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "liq2sol-maker"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "bincode",
+ "liq2sol-chain",
+ "liq2sol-htlc",
+ "liq2sol-maker-core",
+ "liq2sol-signer",
+ "serde",
+ "serde_json",
+ "simplicityhl",
+ "solana-escrow",
+ "solana-sdk",
+]
+
+[[package]]
 name = "liq2sol-maker-core"
 version = "0.1.0"
 dependencies = [

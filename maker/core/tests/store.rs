@@ -1,12 +1,19 @@
-//! Restart behaviour: nothing committed is forgotten, and a payment hash is never accepted twice.
+//! Restart behaviour: nothing committed is forgotten, and a swap id is never accepted twice.
 
 use liq2sol_maker_core::engine::*;
 use liq2sol_maker_core::store::Store;
+use liq2sol_maker_core::LockPoint;
+
+fn point(n: u8) -> [u8; 33] {
+    let mut p = [n; 33];
+    p[0] = 2;
+    p
+}
 
 fn terms(n: u8) -> Terms {
     Terms {
         direction: Direction::S2L,
-        payment_hash: [n; 32],
+        lock_point: LockPoint(point(n)),
         liquid_amount: 100,
         solana_amount: 1,
         h_accept: 10,
@@ -22,7 +29,7 @@ fn path(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn a_payment_hash_is_never_accepted_twice_even_after_finishing() {
+fn a_swap_id_is_never_accepted_twice_even_after_finishing() {
     let p = path("once");
     let s = Store::open(&p).unwrap();
     assert!(s.accept(&terms(1), &State::WatchLock).unwrap());
@@ -47,7 +54,7 @@ fn state_and_intents_survive_a_restart_together() {
     assert_eq!(s.state(&[1; 32]).unwrap().unwrap().1, State::LockedLiquid);
     let open = s.open_swaps().unwrap();
     assert_eq!(open.len(), 1, "finished swaps are not reloaded");
-    assert_eq!(open[0].0.payment_hash, [1; 32]);
+    assert_eq!(open[0].0.swap_id(), [1; 32]);
     let pending = s.unfinished_intents().unwrap();
     assert_eq!(pending, vec![(ids[0], [1; 32], Action::LockLiquid)]);
     s.finish_intent(ids[0]).unwrap();

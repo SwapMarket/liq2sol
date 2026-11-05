@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{Config, Direction};
+use crate::LockPoint;
 
 /// What the signer's own chain connections show about the taker's Liquid coin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,7 +17,7 @@ pub struct CoinEvidence {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EscrowEvidence {
     pub amount: u64,
-    /// Open, with this payment hash and our recipient key, a long-leg escrow that has not been extended.
+    /// Open, locked to this swap's point and our recipient key, a long-leg escrow that has not been extended.
     pub matches_terms: bool,
     pub slots_left: u64,
 }
@@ -28,7 +29,7 @@ pub struct EscrowEvidence {
 pub enum Request {
     /// L→S: lock Solana funds, always with `close_on_restart`.
     LockSolana {
-        payment_hash: [u8; 32],
+        swap_id: [u8; 32],
         amount: u64,
         deadline_slot: u64,
         solana_slot: u64,
@@ -38,39 +39,50 @@ pub enum Request {
     },
     /// S→L: lock Liquid funds.
     LockLiquid {
-        payment_hash: [u8; 32],
+        swap_id: [u8; 32],
         liquid_amount: u64,
         lock_height: u32,
         liquid_tip: u32,
         taker_escrow: Option<EscrowEvidence>,
     },
+    /// L→S: keep a checked adapter signature. Nothing leaves the signer, but a Solana lock depends on it.
+    HoldAdaptor {
+        swap_id: [u8; 32],
+    },
+    /// S→L: keep the taker's adapter signature, and release our own share, which lets the taker finish the claim. Once
+    /// only: a signature from any other session couldn't be read for the secret, and we would lose the Solana side.
+    GiveShare {
+        swap_id: [u8; 32],
+        lock_height: u32,
+        liquid_tip: u32,
+    },
     /// The claim pays our own wallet, because the signer builds it that way.
     ClaimLiquid {
-        payment_hash: [u8; 32],
-        preimage: [u8; 32],
+        lock_point: LockPoint,
+        secret: [u8; 32],
     },
     ClaimSolana {
-        payment_hash: [u8; 32],
-        preimage: [u8; 32],
+        lock_point: LockPoint,
+        secret: [u8; 32],
     },
     /// The refund pays our own wallet, because the signer builds it that way.
     RefundLiquid {
-        payment_hash: [u8; 32],
+        swap_id: [u8; 32],
         lock_height: u32,
         liquid_tip: u32,
     },
     RefundSolana {
-        payment_hash: [u8; 32],
+        swap_id: [u8; 32],
     },
     Extend {
-        payment_hash: [u8; 32],
+        swap_id: [u8; 32],
         current_deadline: u64,
         new_deadline: u64,
         liquid_tip_age_secs: u64,
     },
     /// Give the taker's S→L escrow back. Only ever before we locked anything for this swap.
     Release {
-        payment_hash: [u8; 32],
+        swap_id: [u8; 32],
     },
 }
 
@@ -80,7 +92,11 @@ pub enum Refusal {
     OverWindowLimit,
     AlreadyLocked,
     UnknownSwap,
-    WrongPreimage,
+    WrongSecret,
+    /// L→S: we'd have no way to collect the taker's coin after the taker claims.
+    NoAdaptor,
+    /// A swap has one signing session. Its result is kept and resent, never replaced.
+    AdaptorAlreadyHeld,
     BadTimeout(String),
     /// Refused: we have claimed the taker's escrow, so the Liquid coin is the taker's (protocol section 7.3).
     RefundAfterClaim,
@@ -143,33 +159,36 @@ pub struct SwapRecord {
     pub deadline_slot: u64,
     pub solana_claimed: bool,
     pub liquid_refunded: bool,
+    /// L→S: a checked adapter signature is stored. S→L: and our share of it has been given out.
+    pub adaptor_held: bool,
 }
 
 /// What the check needs from the signer's ledger.
 pub trait Ledger {
-    fn record(&self, payment_hash: &[u8; 32]) -> SwapRecord;
+    fn record(&self, swap_id: &[u8; 32]) -> SwapRecord;
     /// Total locked in the current window, in Solana base units.
     fn locked_in_window(&self, now_secs: u64, window_secs: u64) -> u64;
 }
 
-fn hash_of(request: &Request) -> &[u8; 32] {
+fn id_of(request: &Request) -> [u8; 32] {
     use Request::*;
     match request {
-        LockSolana { payment_hash, .. }
-        | LockLiquid { payment_hash, .. }
-        | ClaimLiquid { payment_hash, .. }
-        | ClaimSolana { payment_hash, .. }
-        | RefundLiquid { payment_hash, .. }
-        | RefundSolana { payment_hash }
-        | Extend { payment_hash, .. }
-        | Release { payment_hash } => payment_hash,
+        LockSolana { swap_id, .. }
+        | LockLiquid { swap_id, .. }
+        | HoldAdaptor { swap_id }
+        | GiveShare { swap_id, .. }
+        | RefundLiquid { swap_id, .. }
+        | RefundSolana { swap_id }
+        | Extend { swap_id, .. }
+        | Release { swap_id } => *swap_id,
+        ClaimLiquid { lock_point, .. } | ClaimSolana { lock_point, .. } => lock_point.id(),
     }
 }
 
 /// Check one request. On `Ok`, the caller must persist the returned record, and only then release a signature.
 pub fn check(limits: &Limits, ledger: &dyn Ledger, now_secs: u64, request: &Request) -> Result<SwapRecord, Refusal> {
     use Request::*;
-    let mut record = ledger.record(hash_of(request));
+    let mut record = ledger.record(&id_of(request));
     let check_lock = |amount: u64| -> Result<(), Refusal> {
         if record.direction.is_some() {
             return Err(Refusal::AlreadyLocked);
@@ -185,6 +204,9 @@ pub fn check(limits: &Limits, ledger: &dyn Ledger, now_secs: u64, request: &Requ
     };
     match request {
         LockSolana { amount, deadline_slot, solana_slot, liquid_lock_height, liquid_tip, taker_coin, .. } => {
+            if !record.adaptor_held {
+                return Err(Refusal::NoAdaptor);
+            }
             // A lost transaction may be signed again with a new blockhash, if every term is identical.
             let retry = record.direction == Some(Direction::L2S)
                 && record.locked_amount == *amount
@@ -228,20 +250,41 @@ pub fn check(limits: &Limits, ledger: &dyn Ledger, now_secs: u64, request: &Requ
             record.direction = Some(Direction::S2L);
             record.locked_amount = amount;
         }
-        ClaimLiquid { payment_hash, preimage } => {
-            if record.direction != Some(Direction::L2S) {
-                return Err(Refusal::UnknownSwap);
+        HoldAdaptor { .. } => {
+            if record.direction.is_some() {
+                return Err(Refusal::AlreadyLocked);
             }
-            if crate::hash_preimage(preimage) != *payment_hash {
-                return Err(Refusal::WrongPreimage);
+            if record.adaptor_held {
+                return Err(Refusal::AdaptorAlreadyHeld);
             }
+            record.adaptor_held = true;
         }
-        ClaimSolana { payment_hash, preimage } => {
+        GiveShare { lock_height, liquid_tip, .. } => {
             if record.direction != Some(Direction::S2L) {
                 return Err(Refusal::UnknownSwap);
             }
-            if crate::hash_preimage(preimage) != *payment_hash {
-                return Err(Refusal::WrongPreimage);
+            if record.adaptor_held {
+                return Err(Refusal::AdaptorAlreadyHeld);
+            }
+            if record.liquid_refunded || liquid_tip >= lock_height {
+                return Err(Refusal::BadTimeout("past the lock height".into()));
+            }
+            record.adaptor_held = true;
+        }
+        ClaimLiquid { lock_point, secret } => {
+            if record.direction != Some(Direction::L2S) {
+                return Err(Refusal::UnknownSwap);
+            }
+            if !lock_point.opened_by(secret) {
+                return Err(Refusal::WrongSecret);
+            }
+        }
+        ClaimSolana { lock_point, secret } => {
+            if record.direction != Some(Direction::S2L) {
+                return Err(Refusal::UnknownSwap);
+            }
+            if !lock_point.opened_by(secret) {
+                return Err(Refusal::WrongSecret);
             }
             record.solana_claimed = true;
         }

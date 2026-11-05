@@ -366,6 +366,14 @@ pub fn solana_point(secret: &[u8; 32]) -> Result<[u8; 64], Error> {
     Ok(out)
 }
 
+/// The point as the Solana program stores it, from its compressed form.
+pub fn solana_point_of(point: &[u8; 33]) -> Result<[u8; 64], Error> {
+    let uncompressed = Point::from_slice(point).map_err(|e| Error::Keys(e.to_string()))?.serialize_uncompressed();
+    let mut out = [0u8; 64];
+    out.copy_from_slice(&uncompressed[1..]);
+    Ok(out)
+}
+
 /// The compressed public point for a secret.
 pub fn point_of(secret: &[u8; 32]) -> Result<[u8; 33], Error> {
     let t = Scalar::from_slice(secret).map_err(|e| Error::Keys(e.to_string()))?;

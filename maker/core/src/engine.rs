@@ -1,12 +1,14 @@
 //! One swap's state machine. `step` is a pure function: (state, what the chains show) -> (new state, actions).
 //!
 //! Actions may be repeated if the daemon crashes or a broadcast is lost, so each must be safe to repeat. The one
-//! thing that isn't is paying twice to the Liquid HTLC, which is why `LockLiquid` is emitted once and retries use
+//! thing that isn't is paying twice to the Liquid swap address, which is why `LockLiquid` is emitted once and retries use
 //! `RebroadcastLock`, the identical stored transaction.
 
 use serde::{Deserialize, Serialize};
 
-use crate::hash_preimage;
+use liq2sol_swapkey::secret_from_solana;
+
+use crate::LockPoint;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
@@ -73,11 +75,17 @@ impl Default for Config {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Terms {
     pub direction: Direction,
-    pub payment_hash: [u8; 32],
+    pub lock_point: LockPoint,
     pub liquid_amount: u64,
     pub solana_amount: u64,
     pub h_accept: u32,
     pub lock_height: u32,
+}
+
+impl Terms {
+    pub fn swap_id(&self) -> [u8; 32] {
+        self.lock_point.id()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,8 +96,8 @@ pub enum State {
     LockedSolana { deadline_slot: u64 },
     /// S→L: our Liquid lock is sent.
     LockedLiquid,
-    /// The preimage is known, and our claim on the taker's chain is in progress.
-    Claiming { preimage: [u8; 32] },
+    /// The secret is known, and our claim on the taker's chain is in progress.
+    Claiming { secret: [u8; 32] },
     /// Our refund is in progress.
     Refunding,
     /// Nothing more to do: claimed, refunded or lost, as `outcome` says.
@@ -118,7 +126,8 @@ pub enum EscrowState {
 pub struct EscrowView {
     pub state: EscrowState,
     pub amount: u64,
-    pub payment_hash: [u8; 32],
+    /// It locks to this swap's point.
+    pub point_ok: bool,
     /// The recipient is the party that should receive this escrow under the terms.
     pub recipient_ok: bool,
     pub deadline_slot: u64,
@@ -126,21 +135,22 @@ pub struct EscrowView {
     pub extended: bool,
     /// Short-leg only: a restart after creation has closed the claim.
     pub restarted: bool,
-    pub preimage: [u8; 32],
+    /// What the claim revealed, `s = t * Gx mod n`.
+    pub revealed: [u8; 32],
 }
 
-/// What is known about the Liquid HTLC coin.
+/// What is known about the swap's Liquid coin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HtlcView {
-    /// No exact, explicit coin of the right asset and amount.
+    /// No coin that unblinds to exactly the right asset and amount. The chain doesn't check these, only we do.
     Absent,
     Unspent {
         confirmations: u32,
     },
-    /// Spent by a claim that reveals this preimage, which is checked against the hash here. A preimage is usable at
-    /// once, but a swap isn't finished until the spend is `confirmed`, because an unconfirmed one can still drop.
+    /// Spent by a key-path claim, whose signature gave this secret, which is checked against the point here. A secret is
+    /// usable at once, but a swap isn't finished until the spend is `confirmed`, because an unconfirmed one can still drop.
     SpentByClaim {
-        preimage: [u8; 32],
+        secret: [u8; 32],
         confirmed: bool,
     },
     /// Spent by the refund path.
@@ -162,6 +172,8 @@ pub struct View {
     pub sources_disagree: bool,
     /// The maker's Solana token account exists and is not frozen.
     pub maker_token_ok: bool,
+    /// L→S: the signer holds a checked adapter signature for the claim, so a Solana lock can't lose our funds.
+    pub adaptor_held: bool,
     pub htlc: HtlcView,
     pub escrow: Option<EscrowView>,
     /// Open exposure in this direction, excluding this swap.
@@ -170,21 +182,23 @@ pub struct View {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
+    /// L→S: the coin is good, so run a signing session with the taker. Safe to repeat.
+    RequestAdaptor,
     /// L→S: lock the maker's Solana funds, with `close_on_restart` set.
     LockSolana {
         deadline_slot: u64,
     },
-    /// S→L: pay the HTLC and the taker's fee coin. Emitted at most once per swap.
+    /// S→L: pay the swap address and the taker's fee coin. Emitted at most once per swap.
     LockLiquid,
     /// S→L: send the identical stored lock transaction again.
     RebroadcastLock,
     /// L→S: claim the taker's coin on Liquid.
     ClaimLiquid {
-        preimage: [u8; 32],
+        secret: [u8; 32],
     },
     /// S→L: claim the taker's escrow on Solana.
     ClaimSolana {
-        preimage: [u8; 32],
+        secret: [u8; 32],
     },
     /// L→S: take back our Solana lock.
     RefundSolana,
@@ -202,14 +216,14 @@ pub enum Action {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Page {
     Rollback,
-    /// A known preimage still isn't claimed, and time is short. In blocks for L→S, in slots for S→L.
+    /// A known secret still isn't claimed, and time is short. In blocks for L→S, in slots for S→L.
     ClaimUrgent {
         left: u64,
     },
     /// Our Liquid lock never appeared by the lock height.
     LockMissing,
     Lost,
-    /// An on-chain value that should be impossible, such as a stored preimage that doesn't hash correctly.
+    /// An on-chain value that should be impossible, such as a revealed value that doesn't open the point.
     Impossible(String),
 }
 
@@ -239,6 +253,11 @@ fn within_limits(cfg: &Config, terms: &Terms, v: &View) -> bool {
 
 /// The L→S gate: maker.md section 3.
 pub fn l2s_may_lock(cfg: &Config, terms: &Terms, v: &View) -> bool {
+    l2s_coin_acceptable(cfg, terms, v) && v.adaptor_held
+}
+
+/// Everything the L→S gate needs except the adapter signature, which is worth asking for only once this holds.
+fn l2s_coin_acceptable(cfg: &Config, terms: &Terms, v: &View) -> bool {
     let coin_ok =
         matches!(v.htlc, HtlcView::Unspent { confirmations } if confirmations >= required_confirmations(cfg, terms));
     coin_ok
@@ -254,7 +273,7 @@ pub fn s2l_escrow_acceptable(cfg: &Config, terms: &Terms, v: &View) -> bool {
     v.escrow.as_ref().is_some_and(|e| {
         e.state == EscrowState::Open
             && e.amount == terms.solana_amount
-            && e.payment_hash == terms.payment_hash
+            && e.point_ok
             && e.recipient_ok
             && !e.close_on_restart
             && !e.extended
@@ -294,6 +313,8 @@ fn step_l2s(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
             if l2s_may_lock(cfg, terms, v) {
                 let deadline_slot = v.solana_slot.saturating_add(cfg.l2s_deadline_slots);
                 (State::LockedSolana { deadline_slot }, vec![Action::LockSolana { deadline_slot }])
+            } else if l2s_coin_acceptable(cfg, terms, v) {
+                (state.clone(), vec![Action::RequestAdaptor])
             } else if v.liquid_tip > terms.h_accept.saturating_add(cfg.l2s_fund_window_blocks) {
                 // Nothing of ours moved. A coin the taker sent late is theirs to refund.
                 (State::Abandoned, vec![])
@@ -303,17 +324,17 @@ fn step_l2s(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
         }
         State::LockedSolana { .. } => l2s_locked(cfg, terms, state, v),
         State::LockedLiquid => wrong_direction(state),
-        State::Claiming { preimage } => match &v.htlc {
+        State::Claiming { secret } => match &v.htlc {
             HtlcView::SpentByClaim { confirmed: true, .. } => (State::Done { outcome: Outcome::Completed }, vec![]),
             // Ours is in the mempool. Sending it again is harmless, and it survives a dropped transaction.
             HtlcView::SpentByClaim { confirmed: false, .. } => {
-                (state.clone(), vec![Action::ClaimLiquid { preimage: *preimage }])
+                (state.clone(), vec![Action::ClaimLiquid { secret: *secret }])
             }
             HtlcView::SpentByRefund { confirmed: true } => {
                 (State::Done { outcome: Outcome::Lost }, vec![Action::Page(Page::Lost)])
             }
             _ => {
-                let mut actions = vec![Action::ClaimLiquid { preimage: *preimage }];
+                let mut actions = vec![Action::ClaimLiquid { secret: *secret }];
                 let left = terms.lock_height.saturating_sub(v.liquid_tip);
                 if left <= cfg.urgent_blocks {
                     actions.push(Action::Page(Page::ClaimUrgent { left: u64::from(left) }));
@@ -353,12 +374,13 @@ fn l2s_locked(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, V
     };
     match escrow.state {
         EscrowState::Claimed => {
-            if hash_preimage(&escrow.preimage) != terms.payment_hash {
-                let page = Page::Impossible("stored preimage does not match the hash".into());
+            // The program checked this, so a failure here means the store or the RPC is lying.
+            let Some(secret) = secret_from_solana(&escrow.revealed).ok().filter(|t| terms.lock_point.opened_by(t))
+            else {
+                let page = Page::Impossible("the revealed value does not open the lock point".into());
                 return (state.clone(), vec![Action::Page(page)]);
-            }
-            let next = State::Claiming { preimage: escrow.preimage };
-            step_l2s(cfg, terms, &next, v)
+            };
+            step_l2s(cfg, terms, &State::Claiming { secret }, v)
         }
         EscrowState::Refunded => (State::Done { outcome: Outcome::Refunded }, vec![]),
         EscrowState::Open => {
@@ -386,13 +408,13 @@ fn step_s2l(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
         }
         State::LockedLiquid => s2l_locked(cfg, terms, state, v),
         State::LockedSolana { .. } => wrong_direction(state),
-        State::Claiming { preimage } => match v.escrow.as_ref() {
+        State::Claiming { secret } => match v.escrow.as_ref() {
             Some(e) if e.state == EscrowState::Claimed => (State::Done { outcome: Outcome::Completed }, vec![]),
             Some(e) if e.state == EscrowState::Refunded => {
                 (State::Done { outcome: Outcome::Lost }, vec![Action::Page(Page::Lost)])
             }
             escrow => {
-                let mut actions = vec![Action::ClaimSolana { preimage: *preimage }];
+                let mut actions = vec![Action::ClaimSolana { secret: *secret }];
                 if let Some(e) = escrow {
                     let left = e.deadline_slot.saturating_sub(v.solana_slot);
                     if left <= cfg.extend_within_slots {
@@ -423,14 +445,15 @@ fn s2l_refund_actions(v: &View) -> Vec<Action> {
 }
 
 fn s2l_spent_by_claim(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec<Action>) {
-    let HtlcView::SpentByClaim { preimage, .. } = &v.htlc else {
+    let HtlcView::SpentByClaim { secret, .. } = &v.htlc else {
         return (state.clone(), vec![]);
     };
-    if hash_preimage(preimage) != terms.payment_hash {
-        let page = Page::Impossible("claim witness preimage does not match the hash".into());
+    // Both keys signed this spend, and we only signed the session we kept. Anything else needs a human.
+    if !terms.lock_point.opened_by(secret) {
+        let page = Page::Impossible("the claim's signature does not give the secret".into());
         return (state.clone(), vec![Action::Page(page)]);
     }
-    step_s2l(cfg, terms, &State::Claiming { preimage: *preimage }, v)
+    step_s2l(cfg, terms, &State::Claiming { secret: *secret }, v)
 }
 
 fn s2l_locked(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec<Action>) {

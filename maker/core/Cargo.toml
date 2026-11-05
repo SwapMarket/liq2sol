@@ -10,7 +10,7 @@ publish = false
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+liq2sol-swapkey = { path = "../../contracts/swapkey" }
 
 [dev-dependencies]
 proptest = "1"

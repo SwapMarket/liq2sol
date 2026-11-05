@@ -1,12 +1,17 @@
 //! Every rule in docs/protocol.md sections 4 and 5, and docs/maker.md sections 3 and 4.
 
 use liq2sol_maker_core::engine::*;
-use liq2sol_maker_core::hash_preimage;
+use liq2sol_maker_core::LockPoint;
+use liq2sol_swapkey::{point_of, solana_value};
 use proptest::prelude::*;
 
 const P: [u8; 32] = [7; 32];
 const SOL: u64 = 100_000_000;
 const ACCEPT: u32 = 1_000;
+
+fn point() -> LockPoint {
+    LockPoint(point_of(&P).unwrap())
+}
 
 fn cfg() -> Config {
     Config::default()
@@ -19,7 +24,7 @@ fn terms(direction: Direction) -> Terms {
     };
     Terms {
         direction,
-        payment_hash: hash_preimage(&P),
+        lock_point: point(),
         liquid_amount: SOL * 100,
         solana_amount: SOL,
         h_accept: ACCEPT,
@@ -36,6 +41,7 @@ fn view() -> View {
         rollback_detected: false,
         sources_disagree: false,
         maker_token_ok: true,
+        adaptor_held: true,
         htlc: HtlcView::Absent,
         escrow: None,
         open_exposure: 0,
@@ -46,13 +52,13 @@ fn taker_escrow() -> EscrowView {
     EscrowView {
         state: EscrowState::Open,
         amount: SOL,
-        payment_hash: hash_preimage(&P),
+        point_ok: true,
         recipient_ok: true,
         deadline_slot: 50_000 + 101_400,
         close_on_restart: false,
         extended: false,
         restarted: false,
-        preimage: [0; 32],
+        revealed: [0; 32],
     }
 }
 
@@ -76,6 +82,27 @@ fn l2s_locks_once_the_coin_is_confirmed() {
     let (s, a) = run(&t, &State::WatchLock, &View { htlc: coin(2), ..view() });
     assert_eq!(s, State::LockedSolana { deadline_slot: 58_400 });
     assert_eq!(a, vec![Action::LockSolana { deadline_slot: 58_400 }]);
+}
+
+#[test]
+fn l2s_asks_for_the_adapter_signature_and_never_locks_without_it() {
+    let t = terms(Direction::L2S);
+    let good = View { htlc: coin(2), adaptor_held: false, ..view() };
+    let (s, a) = run(&t, &State::WatchLock, &good);
+    assert_eq!((s, a), (State::WatchLock, vec![Action::RequestAdaptor]));
+    assert!(!l2s_may_lock(&cfg(), &t, &good));
+    // No session is worth starting while the gate is shut for any other reason.
+    for v in [
+        View { htlc: coin(1), ..good.clone() },
+        View { sources_disagree: true, ..good.clone() },
+        View { open_exposure: cfg().max_open_l2s, ..good.clone() },
+    ] {
+        let (_, a) = run(&t, &State::WatchLock, &v);
+        assert!(a.is_empty(), "{v:?} gave {a:?}");
+    }
+    // An abandoned swap stops asking.
+    let (s, a) = run(&t, &State::WatchLock, &View { liquid_tip: ACCEPT + 31, ..good });
+    assert_eq!((s, a), (State::Abandoned, vec![]));
 }
 
 #[test]
@@ -140,28 +167,29 @@ fn l2s_retries_a_lost_lock_with_the_same_deadline_while_the_gate_holds() {
 }
 
 #[test]
-fn l2s_reads_the_preimage_from_the_account_and_claims_until_confirmed() {
+fn l2s_reads_the_secret_from_the_account_and_claims_until_confirmed() {
     let t = terms(Direction::L2S);
     let s = State::LockedSolana { deadline_slot: 58_400 };
-    let claimed = EscrowView { state: EscrowState::Claimed, preimage: P, ..maker_escrow(58_400) };
+    let claimed =
+        EscrowView { state: EscrowState::Claimed, revealed: solana_value(&P).unwrap(), ..maker_escrow(58_400) };
     let v = View { escrow: Some(claimed), htlc: coin(5), ..view() };
     let (s2, a) = run(&t, &s, &v);
-    assert_eq!(s2, State::Claiming { preimage: P });
-    assert_eq!(a, vec![Action::ClaimLiquid { preimage: P }]);
+    assert_eq!(s2, State::Claiming { secret: P });
+    assert_eq!(a, vec![Action::ClaimLiquid { secret: P }]);
 
     // Unconfirmed is not finished: a dropped transaction must still be retried.
-    let mempool = View { htlc: HtlcView::SpentByClaim { preimage: P, confirmed: false }, ..v.clone() };
+    let mempool = View { htlc: HtlcView::SpentByClaim { secret: P, confirmed: false }, ..v.clone() };
     let (s3, a) = run(&t, &s2, &mempool);
-    assert_eq!((s3, a), (s2.clone(), vec![Action::ClaimLiquid { preimage: P }]));
-    let done = View { htlc: HtlcView::SpentByClaim { preimage: P, confirmed: true }, ..v };
+    assert_eq!((s3, a), (s2.clone(), vec![Action::ClaimLiquid { secret: P }]));
+    let done = View { htlc: HtlcView::SpentByClaim { secret: P, confirmed: true }, ..v };
     assert_eq!(run(&t, &s2, &done), (State::Done { outcome: Outcome::Completed }, vec![]));
 }
 
 #[test]
-fn l2s_ignores_a_stored_preimage_that_does_not_hash() {
+fn l2s_ignores_a_stored_secret_that_does_not_open_the_point() {
     let t = terms(Direction::L2S);
     let s = State::LockedSolana { deadline_slot: 58_400 };
-    let bad = EscrowView { state: EscrowState::Claimed, preimage: [9; 32], ..maker_escrow(58_400) };
+    let bad = EscrowView { state: EscrowState::Claimed, revealed: solana_value(&[9; 32]).unwrap(), ..maker_escrow(58_400) };
     let (s2, a) = run(&t, &s, &View { escrow: Some(bad), htlc: coin(5), ..view() });
     assert_eq!(s2, s);
     assert!(matches!(a.as_slice(), [Action::Page(Page::Impossible(_))]));
@@ -170,11 +198,11 @@ fn l2s_ignores_a_stored_preimage_that_does_not_hash() {
 #[test]
 fn l2s_pages_when_the_claim_is_urgent_and_when_it_is_lost() {
     let t = terms(Direction::L2S);
-    let s = State::Claiming { preimage: P };
+    let s = State::Claiming { secret: P };
     let (_, a) = run(&t, &s, &View { htlc: coin(5), liquid_tip: t.lock_height - 60, ..view() });
     assert!(a.contains(&Action::Page(Page::ClaimUrgent { left: 60 })));
     let (_, a) = run(&t, &s, &View { htlc: coin(5), liquid_tip: t.lock_height - 61, ..view() });
-    assert_eq!(a, vec![Action::ClaimLiquid { preimage: P }]);
+    assert_eq!(a, vec![Action::ClaimLiquid { secret: P }]);
     let (s2, a) = run(&t, &s, &View { htlc: HtlcView::SpentByRefund { confirmed: true }, ..view() });
     assert_eq!(s2, State::Done { outcome: Outcome::Lost });
     assert_eq!(a, vec![Action::Page(Page::Lost)]);
@@ -195,9 +223,9 @@ fn l2s_refunds_at_the_deadline_or_after_a_restart_and_prefers_a_claim_that_lande
 
     let done = EscrowView { state: EscrowState::Refunded, ..open.clone() };
     assert_eq!(run(&t, &s2, &View { escrow: Some(done), ..view() }).0, State::Done { outcome: Outcome::Refunded });
-    let claimed = EscrowView { state: EscrowState::Claimed, preimage: P, ..open };
+    let claimed = EscrowView { state: EscrowState::Claimed, revealed: solana_value(&P).unwrap(), ..open };
     let (s3, a) = run(&t, &s2, &View { escrow: Some(claimed), htlc: coin(5), ..view() });
-    assert_eq!((s3, a), (State::Claiming { preimage: P }, vec![Action::ClaimLiquid { preimage: P }]));
+    assert_eq!((s3, a), (State::Claiming { secret: P }, vec![Action::ClaimLiquid { secret: P }]));
 }
 
 // ---- S to L ----
@@ -217,7 +245,7 @@ fn s2l_will_not_lock_without_each_condition() {
     let bad = [
         View { escrow: None, ..good.clone() },
         View { escrow: Some(EscrowView { amount: SOL - 1, ..e.clone() }), ..good.clone() },
-        View { escrow: Some(EscrowView { payment_hash: [1; 32], ..e.clone() }), ..good.clone() },
+        View { escrow: Some(EscrowView { point_ok: false, ..e.clone() }), ..good.clone() },
         View { escrow: Some(EscrowView { recipient_ok: false, ..e.clone() }), ..good.clone() },
         View { escrow: Some(EscrowView { close_on_restart: true, ..e.clone() }), ..good.clone() },
         View { escrow: Some(EscrowView { extended: true, ..e.clone() }), ..good.clone() },
@@ -263,13 +291,13 @@ fn s2l_only_ever_resends_the_same_lock() {
 }
 
 #[test]
-fn s2l_reads_the_preimage_from_a_mempool_claim_and_collects() {
+fn s2l_reads_the_secret_from_a_mempool_claim_and_collects() {
     let t = terms(Direction::S2L);
     let v =
-        View { htlc: HtlcView::SpentByClaim { preimage: P, confirmed: false }, escrow: Some(taker_escrow()), ..view() };
+        View { htlc: HtlcView::SpentByClaim { secret: P, confirmed: false }, escrow: Some(taker_escrow()), ..view() };
     let (s, a) = run(&t, &State::LockedLiquid, &v);
-    assert_eq!(s, State::Claiming { preimage: P });
-    assert_eq!(a, vec![Action::ClaimSolana { preimage: P }]);
+    assert_eq!(s, State::Claiming { secret: P });
+    assert_eq!(a, vec![Action::ClaimSolana { secret: P }]);
     let claimed = EscrowView { state: EscrowState::Claimed, ..taker_escrow() };
     assert_eq!(
         run(&t, &s, &View { escrow: Some(claimed), ..v.clone() }).0,
@@ -281,10 +309,10 @@ fn s2l_reads_the_preimage_from_a_mempool_claim_and_collects() {
 }
 
 #[test]
-fn s2l_rejects_a_claim_witness_that_does_not_hash() {
+fn s2l_rejects_a_claim_witness_that_does_not_open_the_point() {
     let t = terms(Direction::S2L);
     let v = View {
-        htlc: HtlcView::SpentByClaim { preimage: [9; 32], confirmed: true },
+        htlc: HtlcView::SpentByClaim { secret: [9; 32], confirmed: true },
         escrow: Some(taker_escrow()),
         ..view()
     };
@@ -294,9 +322,9 @@ fn s2l_rejects_a_claim_witness_that_does_not_hash() {
 }
 
 #[test]
-fn s2l_pages_when_an_unclaimed_preimage_nears_the_deadline() {
+fn s2l_pages_when_an_unclaimed_secret_nears_the_deadline() {
     let t = terms(Direction::S2L);
-    let s = State::Claiming { preimage: P };
+    let s = State::Claiming { secret: P };
     let e = EscrowView { deadline_slot: 50_000 + 16_900, ..taker_escrow() };
     let (_, a) = run(&t, &s, &View { escrow: Some(e), ..view() });
     assert!(a.contains(&Action::Page(Page::ClaimUrgent { left: 16_900 })));
@@ -318,9 +346,9 @@ fn s2l_refund_timing_and_a_late_claim_racing_it() {
     let (s2, a) = run(
         &t,
         &s,
-        &View { htlc: HtlcView::SpentByClaim { preimage: P, confirmed: false }, escrow: e.clone(), ..view() },
+        &View { htlc: HtlcView::SpentByClaim { secret: P, confirmed: false }, escrow: e.clone(), ..view() },
     );
-    assert_eq!((s2, a), (State::Claiming { preimage: P }, vec![Action::ClaimSolana { preimage: P }]));
+    assert_eq!((s2, a), (State::Claiming { secret: P }, vec![Action::ClaimSolana { secret: P }]));
     let (s2, a) =
         run(&t, &s, &View { htlc: HtlcView::SpentByRefund { confirmed: false }, escrow: e.clone(), ..view() });
     assert_eq!((s2, a), (State::Refunding, vec![Action::RefundLiquid]));
@@ -354,7 +382,7 @@ fn rollback_stops_everything_and_pages() {
             State::WatchLock,
             State::LockedLiquid,
             State::LockedSolana { deadline_slot: 1 },
-            State::Claiming { preimage: P },
+            State::Claiming { secret: P },
             State::Refunding,
         ] {
             let v = View {
@@ -397,16 +425,16 @@ fn any_escrow() -> impl Strategy<Value = Option<EscrowView>> {
             any::<bool>(),
         )
             .prop_map(
-                |(state, amount, hash_ok, recipient_ok, close, extended, deadline_slot, good_preimage)| EscrowView {
+                |(state, amount, point_ok, recipient_ok, close, extended, deadline_slot, good_secret)| EscrowView {
                     state: [EscrowState::Open, EscrowState::Claimed, EscrowState::Refunded][state as usize],
                     amount: SOL - amount,
-                    payment_hash: if hash_ok { hash_preimage(&P) } else { [1; 32] },
+                    point_ok,
                     recipient_ok,
                     deadline_slot,
                     close_on_restart: close,
                     extended,
                     restarted: extended && close,
-                    preimage: if good_preimage { P } else { [3; 32] },
+                    revealed: solana_value(&if good_secret { P } else { [3; 32] }).unwrap(),
                 },
             ),
     )
@@ -443,11 +471,12 @@ fn any_view() -> impl Strategy<Value = View> {
                 rollback_detected,
                 sources_disagree,
                 maker_token_ok,
+                adaptor_held: flag,
                 htlc: match htlc {
                     0 => HtlcView::Absent,
                     1 => HtlcView::Unspent { confirmations: u32::from(flag) * 5 },
-                    2 => HtlcView::SpentByClaim { preimage: P, confirmed: flag },
-                    3 => HtlcView::SpentByClaim { preimage: [3; 32], confirmed: flag },
+                    2 => HtlcView::SpentByClaim { secret: P, confirmed: flag },
+                    3 => HtlcView::SpentByClaim { secret: [3; 32], confirmed: flag },
                     _ => HtlcView::SpentByRefund { confirmed: flag },
                 },
                 escrow,
@@ -456,11 +485,9 @@ fn any_view() -> impl Strategy<Value = View> {
         )
 }
 
-fn is_safe_preimage(a: &Action) -> bool {
+fn is_safe_secret(a: &Action) -> bool {
     match a {
-        Action::ClaimLiquid { preimage } | Action::ClaimSolana { preimage } => {
-            hash_preimage(preimage) == hash_preimage(&P)
-        }
+        Action::ClaimLiquid { secret } | Action::ClaimSolana { secret } => *secret == P,
         _ => true,
     }
 }
@@ -481,7 +508,7 @@ proptest! {
             let (next, actions) = step(&c, &t, &state, v);
 
             for a in &actions {
-                prop_assert!(is_safe_preimage(a), "only a correct preimage is ever used: {a:?}");
+                prop_assert!(is_safe_secret(a), "only a correct secret is ever used: {a:?}");
                 if v.rollback_detected {
                     prop_assert!(matches!(a, Action::Page(_)), "a rollback stops everything but pages: {a:?}");
                 }

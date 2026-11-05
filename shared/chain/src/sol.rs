@@ -6,7 +6,9 @@ use anchor_lang::{prelude::Pubkey, AccountDeserialize, InstructionData, ToAccoun
 use anchor_spl::associated_token::get_associated_token_address;
 use solana_client::rpc_client::RpcClient;
 use solana_commitment_config::CommitmentConfig;
-use solana_escrow::{state::Escrow, ESCROW_SEED, ESCROW_VAULT_SEED, MAKER_VAULT_SEED, MAKER_VAULT_TOKEN_SEED, USDT_MINT};
+use solana_escrow::{
+    state::Escrow, ESCROW_SEED, ESCROW_VAULT_SEED, MAKER_VAULT_SEED, MAKER_VAULT_TOKEN_SEED, USDT_MINT,
+};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     signature::{Keypair, Signature},
@@ -29,12 +31,8 @@ pub fn ata(owner: &Pubkey) -> Pubkey {
     get_associated_token_address(owner, &USDT_MINT)
 }
 
-pub fn escrow_pda(initiator: &Pubkey, hash: &[u8; 32]) -> Pubkey {
-    Pubkey::find_program_address(
-        &[ESCROW_SEED, initiator.as_ref(), hash.as_ref()],
-        &solana_escrow::id(),
-    )
-    .0
+pub fn escrow_pda(initiator: &Pubkey, lock_point: &[u8; 64]) -> Pubkey {
+    Pubkey::find_program_address(&[ESCROW_SEED, initiator.as_ref(), &lock_point[..32]], &solana_escrow::id()).0
 }
 
 pub fn vault_pda(escrow: &Pubkey) -> Pubkey {
@@ -43,9 +41,7 @@ pub fn vault_pda(escrow: &Pubkey) -> Pubkey {
 
 impl Sol {
     pub fn new(url: &str) -> Self {
-        Self {
-            rpc: RpcClient::new_with_commitment(url.to_string(), CommitmentConfig::finalized()),
-        }
+        Self { rpc: RpcClient::new_with_commitment(url.to_string(), CommitmentConfig::finalized()) }
     }
 
     pub fn slot(&self) -> Res<u64> {
@@ -53,21 +49,13 @@ impl Sol {
     }
 
     pub fn genesis(&self) -> Res<String> {
-        self.rpc
-            .get_genesis_hash()
-            .map(|h| h.to_string())
-            .map_err(|e| e.to_string())
+        self.rpc.get_genesis_hash().map(|h| h.to_string()).map_err(|e| e.to_string())
     }
 
     pub fn escrow(&self, address: &Pubkey) -> Res<Option<Escrow>> {
-        match self
-            .rpc
-            .get_account_with_commitment(address, CommitmentConfig::finalized())
-        {
+        match self.rpc.get_account_with_commitment(address, CommitmentConfig::finalized()) {
             Ok(r) => match r.value {
-                Some(a) => Escrow::try_deserialize(&mut &a.data[..])
-                    .map(Some)
-                    .map_err(|e| e.to_string()),
+                Some(a) => Escrow::try_deserialize(&mut &a.data[..]).map(Some).map_err(|e| e.to_string()),
                 None => Ok(None),
             },
             Err(e) => Err(e.to_string()),
@@ -75,13 +63,8 @@ impl Sol {
     }
 
     pub fn token_balance(&self, address: &Pubkey) -> Res<u64> {
-        match self
-            .rpc
-            .get_account_with_commitment(address, CommitmentConfig::finalized())
-        {
-            Ok(r) => Ok(r.value.map_or(0, |a| {
-                u64::from_le_bytes(a.data[64..72].try_into().unwrap_or_default())
-            })),
+        match self.rpc.get_account_with_commitment(address, CommitmentConfig::finalized()) {
+            Ok(r) => Ok(r.value.map_or(0, |a| u64::from_le_bytes(a.data[64..72].try_into().unwrap_or_default()))),
             Err(e) => Err(e.to_string()),
         }
     }
@@ -91,44 +74,23 @@ impl Sol {
     }
 
     /// A signed transaction with a fresh blockhash, not yet sent.
-    pub fn build(
-        &self,
-        ixs: &[Instruction],
-        payer: &Keypair,
-        signers: &[&Keypair],
-    ) -> Res<Transaction> {
+    pub fn build(&self, ixs: &[Instruction], payer: &Keypair, signers: &[&Keypair]) -> Res<Transaction> {
         let hash = self.rpc.get_latest_blockhash().map_err(|e| e.to_string())?;
         let mut all: Vec<&Keypair> = vec![payer];
         all.extend_from_slice(signers);
-        Ok(Transaction::new_signed_with_payer(
-            ixs,
-            Some(&payer.pubkey()),
-            &all,
-            hash,
-        ))
+        Ok(Transaction::new_signed_with_payer(ixs, Some(&payer.pubkey()), &all, hash))
     }
 
     /// Send, confirm at `finalized`, and refuse to send anything that fails simulation.
-    pub fn send(
-        &self,
-        ixs: &[Instruction],
-        payer: &Keypair,
-        signers: &[&Keypair],
-    ) -> Res<Signature> {
+    pub fn send(&self, ixs: &[Instruction], payer: &Keypair, signers: &[&Keypair]) -> Res<Signature> {
         let tx = self.build(ixs, payer, signers)?;
         self.simulate(&tx)?;
-        self.rpc
-            .send_and_confirm_transaction(&tx)
-            .map_err(|e| e.to_string())
+        self.rpc.send_and_confirm_transaction(&tx).map_err(|e| e.to_string())
     }
 
-    /// A failed claim would publish the preimage for nothing, so nothing is sent until this passes.
+    /// A failed claim would publish the secret for nothing, so nothing is sent until this passes.
     fn simulate(&self, tx: &Transaction) -> Res<()> {
-        let result = self
-            .rpc
-            .simulate_transaction(tx)
-            .map_err(|e| e.to_string())?
-            .value;
+        let result = self.rpc.simulate_transaction(tx).map_err(|e| e.to_string())?.value;
         match result.err {
             None => Ok(()),
             Some(e) => Err(format!("simulation failed: {e:?}\n{:#?}", result.logs)),
@@ -136,18 +98,8 @@ impl Sol {
     }
 
     /// Create the stand-in mint and an account for each owner, and mint to the first one. Devnet and local only.
-    pub fn setup_mint(
-        &self,
-        authority: &Keypair,
-        mint: &Keypair,
-        holders: &[Pubkey],
-        amount: u64,
-    ) -> Res<()> {
-        assert_eq!(
-            mint.pubkey(),
-            USDT_MINT,
-            "the mint keypair must match the program's stand-in mint"
-        );
+    pub fn setup_mint(&self, authority: &Keypair, mint: &Keypair, holders: &[Pubkey], amount: u64) -> Res<()> {
+        assert_eq!(mint.pubkey(), USDT_MINT, "the mint keypair must match the program's stand-in mint");
         if self
             .rpc
             .get_account_with_commitment(&USDT_MINT, CommitmentConfig::finalized())
@@ -155,10 +107,7 @@ impl Sol {
             .value
             .is_none()
         {
-            let rent = self
-                .rpc
-                .get_minimum_balance_for_rent_exemption(MINT_LEN)
-                .map_err(|e| e.to_string())?;
+            let rent = self.rpc.get_minimum_balance_for_rent_exemption(MINT_LEN).map_err(|e| e.to_string())?;
             let create = anchor_lang::solana_program::system_instruction::create_account(
                 &authority.pubkey(),
                 &USDT_MINT,
@@ -171,11 +120,8 @@ impl Sol {
             // A freeze authority, as real USDT has.
             data.push(1);
             data.extend_from_slice(authority.pubkey().as_ref());
-            let init = Instruction {
-                program_id: TOKEN_PROGRAM,
-                accounts: vec![AccountMeta::new(USDT_MINT, false)],
-                data,
-            };
+            let init =
+                Instruction { program_id: TOKEN_PROGRAM, accounts: vec![AccountMeta::new(USDT_MINT, false)], data };
             self.send(&[create, init], authority, &[mint])?;
         }
         for owner in holders {
@@ -222,58 +168,27 @@ impl Sol {
     pub fn lock(
         &self,
         initiator: &Keypair,
-        payment_hash: [u8; 32],
+        lock_point: [u8; 64],
         recipient: Pubkey,
         amount: u64,
         deadline_slot: u64,
         close_on_restart: bool,
     ) -> Res<Pubkey> {
-        let ix = lock_ix(
-            &initiator.pubkey(),
-            payment_hash,
-            recipient,
-            amount,
-            deadline_slot,
-            close_on_restart,
-        );
+        let ix = lock_ix(&initiator.pubkey(), lock_point, recipient, amount, deadline_slot, close_on_restart);
         self.send(&[ix], initiator, &[])?;
-        Ok(escrow_pda(&initiator.pubkey(), &payment_hash))
+        Ok(escrow_pda(&initiator.pubkey(), &lock_point))
     }
 
-    pub fn claim(
-        &self,
-        payer: &Keypair,
-        address: &Pubkey,
-        escrow: &Escrow,
-        preimage: [u8; 32],
-    ) -> Res<Signature> {
-        self.send(
-            &claim_ixs(&payer.pubkey(), address, escrow, preimage),
-            payer,
-            &[],
-        )
+    pub fn claim(&self, payer: &Keypair, address: &Pubkey, escrow: &Escrow, revealed: [u8; 32]) -> Res<Signature> {
+        self.send(&claim_ixs(&payer.pubkey(), address, escrow, revealed), payer, &[])
     }
 
-    pub fn extend(
-        &self,
-        recipient: &Keypair,
-        address: &Pubkey,
-        new_deadline: u64,
-    ) -> Res<Signature> {
-        self.send(
-            &[extend_ix(&recipient.pubkey(), address, new_deadline)],
-            recipient,
-            &[],
-        )
+    pub fn extend(&self, recipient: &Keypair, address: &Pubkey, new_deadline: u64) -> Res<Signature> {
+        self.send(&[extend_ix(&recipient.pubkey(), address, new_deadline)], recipient, &[])
     }
 
     /// Freeze (`freeze = true`) or thaw a token account, as Tether could. Only works on a mint with a freeze authority.
-    pub fn set_frozen(
-        &self,
-        authority: &Keypair,
-        account: &Pubkey,
-        freeze: bool,
-    ) -> Res<Signature> {
+    pub fn set_frozen(&self, authority: &Keypair, account: &Pubkey, freeze: bool) -> Res<Signature> {
         let ix = Instruction {
             program_id: TOKEN_PROGRAM,
             accounts: vec![
@@ -293,13 +208,13 @@ impl Sol {
 
 pub fn lock_ix(
     initiator: &Pubkey,
-    payment_hash: [u8; 32],
+    lock_point: [u8; 64],
     recipient: Pubkey,
     amount: u64,
     deadline_slot: u64,
     close_on_restart: bool,
 ) -> Instruction {
-    let escrow = escrow_pda(initiator, &payment_hash);
+    let escrow = escrow_pda(initiator, &lock_point);
     let accounts = solana_escrow::accounts::Lock {
         initiator: *initiator,
         escrow,
@@ -310,28 +225,13 @@ pub fn lock_ix(
         system_program: anchor_lang::system_program::ID,
     }
     .to_account_metas(None);
-    let data = solana_escrow::instruction::Lock {
-        payment_hash,
-        recipient,
-        amount,
-        deadline_slot,
-        close_on_restart,
-    }
-    .data();
-    Instruction {
-        program_id: solana_escrow::id(),
-        accounts,
-        data,
-    }
+    let data =
+        solana_escrow::instruction::Lock { lock_point, recipient, amount, deadline_slot, close_on_restart }.data();
+    Instruction { program_id: solana_escrow::id(), accounts, data }
 }
 
 /// A claim, preceded by creating the recipient's token account if it doesn't exist.
-pub fn claim_ixs(
-    payer: &Pubkey,
-    address: &Pubkey,
-    escrow: &Escrow,
-    preimage: [u8; 32],
-) -> Vec<Instruction> {
+pub fn claim_ixs(payer: &Pubkey, address: &Pubkey, escrow: &Escrow, revealed: [u8; 32]) -> Vec<Instruction> {
     let accounts = solana_escrow::accounts::Claim {
         escrow: *address,
         vault: vault_pda(address),
@@ -340,15 +240,8 @@ pub fn claim_ixs(
         token_program: TOKEN_PROGRAM,
     }
     .to_account_metas(None);
-    let data = solana_escrow::instruction::Claim { preimage }.data();
-    vec![
-        create_ata_ix(payer, &escrow.recipient),
-        Instruction {
-            program_id: solana_escrow::id(),
-            accounts,
-            data,
-        },
-    ]
+    let data = solana_escrow::instruction::Claim { revealed }.data();
+    vec![create_ata_ix(payer, &escrow.recipient), Instruction { program_id: solana_escrow::id(), accounts, data }]
 }
 
 pub fn maker_vault_pda(owner: &Pubkey) -> Pubkey {
@@ -390,9 +283,17 @@ pub fn vault_deposit_ix(depositor: &Pubkey, vault_owner: &Pubkey, amount: u64) -
     Instruction { program_id: solana_escrow::id(), accounts, data }
 }
 
-pub fn lock_from_vault_ix(operator: &Pubkey, vault_owner: &Pubkey, payment_hash: [u8; 32], recipient: Pubkey, amount: u64, deadline_slot: u64, close_on_restart: bool) -> Instruction {
+pub fn lock_from_vault_ix(
+    operator: &Pubkey,
+    vault_owner: &Pubkey,
+    lock_point: [u8; 64],
+    recipient: Pubkey,
+    amount: u64,
+    deadline_slot: u64,
+    close_on_restart: bool,
+) -> Instruction {
     let maker_vault = maker_vault_pda(vault_owner);
-    let escrow = escrow_pda(&maker_vault, &payment_hash);
+    let escrow = escrow_pda(&maker_vault, &lock_point);
     let accounts = solana_escrow::accounts::LockFromVault {
         operator: *operator,
         maker_vault,
@@ -404,7 +305,9 @@ pub fn lock_from_vault_ix(operator: &Pubkey, vault_owner: &Pubkey, payment_hash:
         system_program: anchor_lang::system_program::ID,
     }
     .to_account_metas(None);
-    let data = solana_escrow::instruction::LockFromVault { payment_hash, recipient, amount, deadline_slot, close_on_restart }.data();
+    let data =
+        solana_escrow::instruction::LockFromVault { lock_point, recipient, amount, deadline_slot, close_on_restart }
+            .data();
     Instruction { program_id: solana_escrow::id(), accounts, data }
 }
 
@@ -413,7 +316,8 @@ impl Sol {
     /// The latest hard-fork slot, as the program itself sees it.
     pub fn last_restart_slot(&self) -> Res<u64> {
         let sysvar = Pubkey::from_str("SysvarLastRestartS1ot1111111111111111111111").map_err(|e| e.to_string())?;
-        let account = self.rpc.get_account_with_commitment(&sysvar, CommitmentConfig::finalized()).map_err(|e| e.to_string())?;
+        let account =
+            self.rpc.get_account_with_commitment(&sysvar, CommitmentConfig::finalized()).map_err(|e| e.to_string())?;
         let data = account.value.ok_or("no LastRestartSlot sysvar")?.data;
         Ok(u64::from_le_bytes(data.get(..8).ok_or("short sysvar")?.try_into().map_err(|_| "short sysvar")?))
     }
@@ -441,11 +345,7 @@ pub fn refund_ix(address: &Pubkey, escrow: &Escrow) -> Instruction {
     }
     .to_account_metas(None);
     let data = solana_escrow::instruction::Refund {}.data();
-    Instruction {
-        program_id: solana_escrow::id(),
-        accounts,
-        data,
-    }
+    Instruction { program_id: solana_escrow::id(), accounts, data }
 }
 
 pub fn release_ix(recipient: &Pubkey, address: &Pubkey, escrow: &Escrow) -> Instruction {
@@ -459,25 +359,13 @@ pub fn release_ix(recipient: &Pubkey, address: &Pubkey, escrow: &Escrow) -> Inst
     }
     .to_account_metas(None);
     let data = solana_escrow::instruction::Release {}.data();
-    Instruction {
-        program_id: solana_escrow::id(),
-        accounts,
-        data,
-    }
+    Instruction { program_id: solana_escrow::id(), accounts, data }
 }
 
 pub fn extend_ix(recipient: &Pubkey, address: &Pubkey, new_deadline: u64) -> Instruction {
-    let accounts = solana_escrow::accounts::Extend {
-        recipient: *recipient,
-        escrow: *address,
-    }
-    .to_account_metas(None);
+    let accounts = solana_escrow::accounts::Extend { recipient: *recipient, escrow: *address }.to_account_metas(None);
     let data = solana_escrow::instruction::Extend { new_deadline }.data();
-    Instruction {
-        program_id: solana_escrow::id(),
-        accounts,
-        data,
-    }
+    Instruction { program_id: solana_escrow::id(), accounts, data }
 }
 
 fn create_ata_ix(payer: &Pubkey, owner: &Pubkey) -> Instruction {

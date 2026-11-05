@@ -61,38 +61,38 @@ impl Store {
         let conn = open(
             path,
             "CREATE TABLE IF NOT EXISTS swaps (
-                 hash BLOB PRIMARY KEY,
+                 swap BLOB PRIMARY KEY,
                  terms TEXT NOT NULL,
                  state TEXT NOT NULL
              );
              CREATE TABLE IF NOT EXISTS intents (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 hash BLOB NOT NULL,
+                 swap BLOB NOT NULL,
                  action TEXT NOT NULL,
                  stored_tx BLOB,
                  finished INTEGER NOT NULL DEFAULT 0
              );
              CREATE TABLE IF NOT EXISTS flags (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS details (hash BLOB PRIMARY KEY, body TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS seen_coins (hash BLOB PRIMARY KEY, txid TEXT NOT NULL, vout INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS details (swap BLOB PRIMARY KEY, body TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS seen_coins (swap BLOB PRIMARY KEY, txid TEXT NOT NULL, vout INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS last_tip (id INTEGER PRIMARY KEY CHECK (id = 1), height INTEGER NOT NULL, hash TEXT NOT NULL);",
         )?;
         Ok(Self { conn })
     }
 
-    /// Register a new swap. Refuses a payment hash ever seen before, forever: a used preimage is public.
+    /// Register a new swap. Refuses a payment swap ever seen before, forever: a used preimage is public.
     pub fn accept(&self, terms: &Terms, state: &State) -> Result<bool> {
         let added = self.conn.execute(
-            "INSERT OR IGNORE INTO swaps (hash, terms, state) VALUES (?1, ?2, ?3)",
-            params![terms.payment_hash.as_slice(), json(terms)?, json(state)?],
+            "INSERT OR IGNORE INTO swaps (swap, terms, state) VALUES (?1, ?2, ?3)",
+            params![terms.swap_id().as_slice(), json(terms)?, json(state)?],
         )?;
         Ok(added == 1)
     }
 
-    pub fn state(&self, hash: &[u8; 32]) -> Result<Option<(Terms, State)>> {
+    pub fn state(&self, swap: &[u8; 32]) -> Result<Option<(Terms, State)>> {
         let row: Option<(String, String)> = self
             .conn
-            .query_row("SELECT terms, state FROM swaps WHERE hash = ?1", params![hash.as_slice()], |r| {
+            .query_row("SELECT terms, state FROM swaps WHERE swap = ?1", params![swap.as_slice()], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .optional()?;
@@ -115,12 +115,12 @@ impl Store {
     }
 
     /// Commit a new state together with the actions it requires, atomically, before attempting any of them.
-    pub fn commit_step(&self, hash: &[u8; 32], state: &State, actions: &[Action]) -> Result<Vec<i64>> {
+    pub fn commit_step(&self, swap: &[u8; 32], state: &State, actions: &[Action]) -> Result<Vec<i64>> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute("UPDATE swaps SET state = ?1 WHERE hash = ?2", params![json(state)?, hash.as_slice()])?;
+        tx.execute("UPDATE swaps SET state = ?1 WHERE swap = ?2", params![json(state)?, swap.as_slice()])?;
         let mut ids = vec![];
         for action in actions {
-            tx.execute("INSERT INTO intents (hash, action) VALUES (?1, ?2)", params![hash.as_slice(), json(action)?])?;
+            tx.execute("INSERT INTO intents (swap, action) VALUES (?1, ?2)", params![swap.as_slice(), json(action)?])?;
             ids.push(tx.last_insert_rowid());
         }
         tx.commit()?;
@@ -128,16 +128,16 @@ impl Store {
     }
 
     /// Keep the exact lock transaction, before its first broadcast, so a retry can only ever send the same one.
-    pub fn store_lock_tx(&self, hash: &[u8; 32], raw_tx: &[u8]) -> Result<()> {
-        if let Some(existing) = self.stored_lock_tx(hash)? {
+    pub fn store_lock_tx(&self, swap: &[u8; 32], raw_tx: &[u8]) -> Result<()> {
+        if let Some(existing) = self.stored_lock_tx(swap)? {
             if existing != raw_tx {
                 return Err(StoreError("a different lock transaction is already stored for this swap".into()));
             }
             return Ok(());
         }
         let updated = self.conn.execute(
-            "UPDATE intents SET stored_tx = ?1 WHERE id = (SELECT id FROM intents WHERE hash = ?2 AND action LIKE '%LockLiquid%' ORDER BY id LIMIT 1)",
-            params![raw_tx, hash.as_slice()],
+            "UPDATE intents SET stored_tx = ?1 WHERE id = (SELECT id FROM intents WHERE swap = ?2 AND action LIKE '%LockLiquid%' ORDER BY id LIMIT 1)",
+            params![raw_tx, swap.as_slice()],
         )?;
         if updated == 1 {
             Ok(())
@@ -146,12 +146,12 @@ impl Store {
         }
     }
 
-    pub fn stored_lock_tx(&self, hash: &[u8; 32]) -> Result<Option<Vec<u8>>> {
+    pub fn stored_lock_tx(&self, swap: &[u8; 32]) -> Result<Option<Vec<u8>>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT stored_tx FROM intents WHERE hash = ?1 AND stored_tx IS NOT NULL ORDER BY id LIMIT 1",
-                params![hash.as_slice()],
+                "SELECT stored_tx FROM intents WHERE swap = ?1 AND stored_tx IS NOT NULL ORDER BY id LIMIT 1",
+                params![swap.as_slice()],
                 |r| r.get(0),
             )
             .optional()?)
@@ -164,47 +164,47 @@ impl Store {
 
     /// Intents that may or may not have happened, which a restart must reconcile against the chains.
     pub fn unfinished_intents(&self) -> Result<Vec<(i64, [u8; 32], Action)>> {
-        let mut stmt = self.conn.prepare("SELECT id, hash, action FROM intents WHERE finished = 0 ORDER BY id")?;
+        let mut stmt = self.conn.prepare("SELECT id, swap, action FROM intents WHERE finished = 0 ORDER BY id")?;
         let rows =
             stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, String>(2)?)))?;
         let mut out = vec![];
         for row in rows {
-            let (id, hash, action) = row?;
-            let hash: [u8; 32] = hash.try_into().map_err(|_| StoreError("bad hash in store".into()))?;
-            out.push((id, hash, from_json(&action)?));
+            let (id, swap, action) = row?;
+            let swap: [u8; 32] = swap.try_into().map_err(|_| StoreError("bad swap in store".into()))?;
+            out.push((id, swap, from_json(&action)?));
         }
         Ok(out)
     }
 
     /// The full terms for a swap, in whatever form the daemon keeps them.
-    pub fn set_details(&self, hash: &[u8; 32], body: &str) -> Result<()> {
+    pub fn set_details(&self, swap: &[u8; 32], body: &str) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO details (hash, body) VALUES (?1, ?2) ON CONFLICT(hash) DO UPDATE SET body = ?2",
-            params![hash.as_slice(), body],
+            "INSERT INTO details (swap, body) VALUES (?1, ?2) ON CONFLICT(swap) DO UPDATE SET body = ?2",
+            params![swap.as_slice(), body],
         )?;
         Ok(())
     }
 
-    pub fn details(&self, hash: &[u8; 32]) -> Result<Option<String>> {
+    pub fn details(&self, swap: &[u8; 32]) -> Result<Option<String>> {
         Ok(self
             .conn
-            .query_row("SELECT body FROM details WHERE hash = ?1", params![hash.as_slice()], |r| r.get(0))
+            .query_row("SELECT body FROM details WHERE swap = ?1", params![swap.as_slice()], |r| r.get(0))
             .optional()?)
     }
 
-    /// Remember the HTLC coin the first time it is seen, because a spent coin can't be found at its address any more.
-    pub fn remember_coin(&self, hash: &[u8; 32], txid: &str, vout: u32) -> Result<()> {
+    /// Remember the swap's coin the first time it is seen, because a spent coin can't be found at its address any more.
+    pub fn remember_coin(&self, swap: &[u8; 32], txid: &str, vout: u32) -> Result<()> {
         self.conn.execute(
-            "INSERT OR IGNORE INTO seen_coins (hash, txid, vout) VALUES (?1, ?2, ?3)",
-            params![hash.as_slice(), txid, vout],
+            "INSERT OR IGNORE INTO seen_coins (swap, txid, vout) VALUES (?1, ?2, ?3)",
+            params![swap.as_slice(), txid, vout],
         )?;
         Ok(())
     }
 
-    pub fn seen_coin(&self, hash: &[u8; 32]) -> Result<Option<(String, u32)>> {
+    pub fn seen_coin(&self, swap: &[u8; 32]) -> Result<Option<(String, u32)>> {
         Ok(self
             .conn
-            .query_row("SELECT txid, vout FROM seen_coins WHERE hash = ?1", params![hash.as_slice()], |r| {
+            .query_row("SELECT txid, vout FROM seen_coins WHERE swap = ?1", params![swap.as_slice()], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .optional()?)
@@ -257,36 +257,83 @@ impl SignerLedger {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = open(
             path,
-            "CREATE TABLE IF NOT EXISTS records (hash BLOB PRIMARY KEY, record TEXT NOT NULL);
+            "CREATE TABLE IF NOT EXISTS records (swap BLOB PRIMARY KEY, record TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS locks (at_secs INTEGER NOT NULL, amount INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS lock_txs (hash BLOB PRIMARY KEY, raw_tx BLOB NOT NULL);",
+             CREATE TABLE IF NOT EXISTS lock_txs (swap BLOB PRIMARY KEY, raw_tx BLOB NOT NULL);
+             CREATE TABLE IF NOT EXISTS adaptors (swap BLOB PRIMARY KEY, body TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS fee_coins (swap BLOB PRIMARY KEY, outpoint TEXT NOT NULL UNIQUE);",
         )?;
         Ok(Self { conn })
     }
 
     /// The one Liquid lock signed for this swap, if any. A retry gets these exact bytes, so we can't pay twice.
-    pub fn lock_tx(&self, hash: &[u8; 32]) -> Result<Option<Vec<u8>>> {
+    pub fn lock_tx(&self, swap: &[u8; 32]) -> Result<Option<Vec<u8>>> {
         Ok(self
             .conn
-            .query_row("SELECT raw_tx FROM lock_txs WHERE hash = ?1", params![hash.as_slice()], |r| r.get(0))
+            .query_row("SELECT raw_tx FROM lock_txs WHERE swap = ?1", params![swap.as_slice()], |r| r.get(0))
             .optional()?)
+    }
+
+    /// The adapter session's result together with the record that says so. Losing this after a lock would lose the
+    /// taker's coin, so it is fsynced before the Solana lock or our share can happen.
+    pub fn commit_adaptor(&self, swap: &[u8; 32], record: &SwapRecord, body: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("INSERT INTO adaptors (swap, body) VALUES (?1, ?2)", params![swap.as_slice(), body])?;
+        tx.execute(
+            "INSERT INTO records (swap, record) VALUES (?1, ?2) ON CONFLICT(swap) DO UPDATE SET record = ?2",
+            params![swap.as_slice(), json(record)?],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn adaptor(&self, swap: &[u8; 32]) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT body FROM adaptors WHERE swap = ?1", params![swap.as_slice()], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// Give this swap one fee coin. An adapter signature commits to the exact inputs, so the coin must never be spent on
+    /// anything else, or the claim it signs would become invalid. Refuses a coin that is already taken.
+    pub fn reserve_fee_coin(&self, swap: &[u8; 32], outpoint: &str) -> Result<bool> {
+        let added = self.conn.execute(
+            "INSERT OR IGNORE INTO fee_coins (swap, outpoint) VALUES (?1, ?2)",
+            params![swap.as_slice(), outpoint],
+        )?;
+        Ok(added == 1)
+    }
+
+    pub fn fee_coin(&self, swap: &[u8; 32]) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT outpoint FROM fee_coins WHERE swap = ?1", params![swap.as_slice()], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn is_reserved(&self, outpoint: &str) -> Result<bool> {
+        let found: Option<i64> = self
+            .conn
+            .query_row("SELECT 1 FROM fee_coins WHERE outpoint = ?1", params![outpoint], |r| r.get(0))
+            .optional()?;
+        Ok(found.is_some())
     }
 
     /// Persist, and fsync, before the signature leaves the signer.
     pub fn commit(
         &self,
-        hash: &[u8; 32],
+        swap: &[u8; 32],
         record: &SwapRecord,
         newly_locked: Option<(u64, u64)>,
         lock_tx: Option<&[u8]>,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         if let Some(raw) = lock_tx {
-            tx.execute("INSERT INTO lock_txs (hash, raw_tx) VALUES (?1, ?2)", params![hash.as_slice(), raw])?;
+            tx.execute("INSERT INTO lock_txs (swap, raw_tx) VALUES (?1, ?2)", params![swap.as_slice(), raw])?;
         }
         tx.execute(
-            "INSERT INTO records (hash, record) VALUES (?1, ?2) ON CONFLICT(hash) DO UPDATE SET record = ?2",
-            params![hash.as_slice(), json(record)?],
+            "INSERT INTO records (swap, record) VALUES (?1, ?2) ON CONFLICT(swap) DO UPDATE SET record = ?2",
+            params![swap.as_slice(), json(record)?],
         )?;
         if let Some((at, amount)) = newly_locked {
             tx.execute("INSERT INTO locks (at_secs, amount) VALUES (?1, ?2)", params![at as i64, amount as i64])?;
@@ -298,10 +345,10 @@ impl SignerLedger {
 
 impl Ledger for SignerLedger {
     /// A read failure must refuse, so an unreadable record looks like an already-locked swap with a claim on it.
-    fn record(&self, hash: &[u8; 32]) -> SwapRecord {
+    fn record(&self, swap: &[u8; 32]) -> SwapRecord {
         let row: rusqlite::Result<Option<String>> = self
             .conn
-            .query_row("SELECT record FROM records WHERE hash = ?1", params![hash.as_slice()], |r| r.get(0))
+            .query_row("SELECT record FROM records WHERE swap = ?1", params![swap.as_slice()], |r| r.get(0))
             .optional();
         match row {
             Ok(None) => SwapRecord::default(),
@@ -328,5 +375,6 @@ fn fail_closed() -> SwapRecord {
         deadline_slot: 0,
         solana_claimed: true,
         liquid_refunded: false,
+        adaptor_held: true,
     }
 }

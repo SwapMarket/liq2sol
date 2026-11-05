@@ -111,7 +111,7 @@ E1, E3, E9, E11, E15 and E17 also run against the real daemon, in `maker/daemon/
 cluster, and a simulated taker. E17 kills the daemon mid-swap, and also starts it from the state a crash leaves between saving and sending. Still only unit-tested in the daemon: disagreement between Liquid sources, and chain outages during a tick.
 
 E6, E7 and E8 run in `shared/rfq/tests/` (rules, wrapping and the taker's real flow against a scripted, lying maker) and in the daemon suite (real swaps over a mock relay, then attacks). Each check was
-removed in turn, and a test caught it. Wrapped messages open correctly in `nostr-tools` 2.25.5. No public relay has been used yet.
+removed in turn, and a test caught it. Wrapped messages open correctly in `nostr-tools` 2.25.5. E1 has also run through `relay.coinos.pro`: set `RFQ_RELAY` and `SCENARIO="swap (E1)"`.
 
 Still open: E14 (needs a cluster restart), blinded coins in E9 (Bit Machine only), E10 (needs client logic), E18–E21 (need the client). `solana-test-validator` dies on the VirtualBox VM, prebuilt or from source, because `reed-solomon-erasure` runs AVX2 code unchecked. It runs under WSL, and the VM reaches it through a Windows port proxy. It runs with Alpenglow switched off, so it doesn't match mainnet consensus.
 

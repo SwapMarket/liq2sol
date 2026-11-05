@@ -231,6 +231,7 @@ struct World {
     _signer: Proc,
     fake_asset: AssetId,
     relay: MockRelay,
+    relay_url: String,
     maker_nostr: nostr::prelude::PublicKey,
 }
 
@@ -764,6 +765,9 @@ fn build_world(root: &Path) -> World {
     let pages = root.join("pages.log");
     let db = root.join("maker.db");
     let relay = MockRelay::start();
+    // `RFQ_RELAY` runs the swaps through a real relay. The attack scenario always stays on the mock.
+    let public_relay = std::env::var("RFQ_RELAY").ok();
+    let relay_url = public_relay.clone().unwrap_or_else(|| relay.url());
     let cfg = Config {
         db: db.clone(),
         signer_socket: socket,
@@ -777,7 +781,7 @@ fn build_world(root: &Path) -> World {
         regtest_assets: assets,
         rfq: Some(RfqConfig {
             nostr_key: root.join("nostr.key"),
-            relays: vec![relay.url()],
+            relays: vec![relay_url.clone()],
             network: NETWORK.into(),
             min_sol_units: 1,
             max_sol_units: 1_000,
@@ -787,8 +791,9 @@ fn build_world(root: &Path) -> World {
             l2s_lock_blocks: 300,
             s2l_lock_blocks: 80,
             min_deadline_slots: 5_000,
-            offer_every_secs: 2,
-            offer_ttl_secs: 60,
+            // Don't keep writing to a public relay. Offers expire soon after the run.
+            offer_every_secs: if public_relay.is_some() { 300 } else { 2 },
+            offer_ttl_secs: if public_relay.is_some() { 600 } else { 60 },
             max_requests_per_sender: FLOOD_LIMIT,
             max_requests_per_window: 10_000,
             window_secs: 300,
@@ -832,6 +837,7 @@ fn build_world(root: &Path) -> World {
         _signer: signer,
         fake_asset: AssetId::from_str(&fake).unwrap(),
         relay,
+        relay_url,
         maker_nostr,
     };
     world.start_daemon();
@@ -869,7 +875,7 @@ fn pk(key: &LiquidKey) -> [u8; 32] {
 /// E1 over Nostr: L→S, where the taker derives the HTLC itself from the agreed terms, and only then pays it.
 fn rfq_l2s_swap(w: &mut World) -> Res<()> {
     let me = Keys::generate();
-    let mut relay = Relay::connect(&w.relay.url(), Duration::from_millis(200))?;
+    let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
     let offers = find_offers(&mut relay, NETWORK, Duration::from_secs(5))?;
     check(offers.iter().any(|(k, _)| *k == w.maker_nostr), "the taker found the maker's offer")?;
 
@@ -935,7 +941,7 @@ fn rfq_l2s_swap(w: &mut World) -> Res<()> {
 /// E1 over Nostr: S→L.
 fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     let me = Keys::generate();
-    let mut relay = Relay::connect(&w.relay.url(), Duration::from_millis(200))?;
+    let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
     let preimage = random32()?;
     let hash = hash_preimage(&preimage);
     let (claim_key, fee_key) = (keypair_from(&random32()?)?, keypair_from(&random32()?)?);

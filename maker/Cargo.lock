@@ -2629,6 +2629,7 @@ name = "liq2sol-rfq"
 version = "0.1.0"
 dependencies = [
  "nostr",
+ "rustls",
  "serde",
  "serde_json",
  "tungstenite 0.24.0",

@@ -57,9 +57,11 @@ pub fn wrap(sender: &Keys, to: &PublicKey, envelope: &Envelope, now: u64) -> Res
     let throwaway = Keys::generate();
     let wrapped = nip44::encrypt(throwaway.secret_key(), to, seal.as_json(), Version::V2)
         .map_err(|_| WrapError::CannotDecrypt)?;
+    // The outer timestamp is the real time. Relays drop ephemeral events more than a few seconds old, and they see when
+    // this arrives anyway, so randomizing it would hide nothing. The seal inside keeps a randomized one.
     let event = EventBuilder::new(Kind::from(WRAP_KIND), wrapped)
         .tag(Tag::public_key(*to))
-        .custom_created_at(tweaked(now, random_byte()))
+        .custom_created_at(Timestamp::from(now))
         .finalize(&throwaway)
         .map_err(|_| WrapError::BadEvent)?;
     Ok((event, rumor_id))

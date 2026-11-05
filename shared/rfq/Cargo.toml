@@ -14,6 +14,8 @@ nostr = { version = "=0.45.7", features = ["std", "os-rng", "nip44"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+# tungstenite leaves the choice of TLS crypto to us, and connecting to a wss:// relay panics without one.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 proptest = "1"

@@ -28,6 +28,8 @@ pub enum RelayEvent {
 
 impl Relay {
     pub fn connect(url: &str, read_timeout: Duration) -> Result<Self, String> {
+        // Harmless if a provider is already installed.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let (mut socket, _) = connect(url).map_err(|e| format!("{url}: {e}"))?;
         let cfg = WebSocketConfig {
             max_message_size: Some(MAX_EVENT_BYTES * 2),

@@ -139,8 +139,13 @@ NIP-59 wraps a signed **seal** (kind 13) around an unsigned rumor, which gives d
 authenticate the sender to the recipient, and the client must check that the seal's pubkey equals the rumor's pubkey,
 and equals the pinned maker key. For the reputation evidence below, the taker keeps the decrypted seal.
 
-Verified: `nostr-tools` 2.25.5 opens our wrappers and checks every layer. **Support for kind `21059` across public relays
-is UNVERIFIED.** If relay support is poor, the fallback is the regular gift wrap
+Verified: `nostr-tools` 2.25.5 opens our wrappers and checks every layer. `relay.coinos.pro` accepts and delivers kinds `21059`
+and `38401`, and complete swaps have run through it. Other relays are **UNVERIFIED**.
+
+**The outer timestamp of a kind `21059` wrapper is the real time.** NIP-59's randomized timestamps suit stored messages, but
+`relay.coinos.pro` refuses ephemeral events older than a few seconds (5 passed, 30 was refused), and it sees when they arrive
+anyway. The seal inside keeps a randomized timestamp. So a sender whose clock is off by more than that can't get through, and a
+client should warn when its clock looks wrong. If relay support is poor, the fallback is the regular gift wrap
 (kind `1059`), with an `expiration` tag.
 
 ## 5. Rate limits and reputation

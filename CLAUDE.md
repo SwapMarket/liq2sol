@@ -32,7 +32,7 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 - **Phase 2: started, with approval (2026-11-05).** Build order: contracts with tests, CLI end-to-end, maker, client.
   `contracts/liquid` (HTLC library and tests) and `contracts/liquid-wasm` are done, and proofs F1, F2, F3 and F5 pass. `programs/solana-escrow` has all core and vault instructions with tests. `cli/` ran full swaps and aborts in both
   directions on Liquid testnet and Solana devnet, using stand-in assets. `cli/tests/failures.rs` runs the failure scenarios on regtest plus devnet. `maker/` has the
-  engine, signer process and daemon loop, tested with real processes under crashes, halts and rollbacks, with the maker vault on. `shared/rfq` and `maker/daemon/src/rfq.rs` add quotes over Nostr, tested on a mock relay; no public relay has been used. Next: the static client. E14 still needs a real cluster restart. E16 only runs on a local validator.
+  engine, signer process and daemon loop, tested with real processes under crashes, halts and rollbacks, with the maker vault on. `shared/rfq` and `maker/daemon/src/rfq.rs` add quotes over Nostr, tested on a mock relay and through `relay.coinos.pro`, the user's chosen relay. Next: the static client. E14 still needs a real cluster restart. E16 only runs on a local validator.
 
 ## Design points that are easy to get wrong
 
@@ -52,6 +52,8 @@ Details and sources are in the docs. These are recorded because older assumption
   decision, 2026-11-05). The Reown project ID is shared with `sol2base`, whose `app.js` is the reference code. Sign with
   `solana_signTransaction` and broadcast from the app, so the app controls when the preimage goes out.
 - **Anchor is v1.2.2, repo `otter-sec/anchor`.**
+- **Swaps aren't confidential:** the covenant needs explicit amounts, and the same payment hash links the two chains (`docs/protocol.md` section 7.6).
+- **Kind 21059 wrappers carry the real time.** Relays drop ephemeral events more than a few seconds old.
 - **The second Solana endpoint is Helius, using an optional key the taker provides** (user's decision, 2026-11-05). Never
   ship a key in the static app.
 

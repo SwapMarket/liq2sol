@@ -348,7 +348,7 @@ fn a_wrapped_message_opens_and_authenticates_its_sender() {
     assert_eq!(got.envelope, sample());
     assert_ne!(event.pubkey, alice.public_key(), "the outer key reveals nothing");
     assert_eq!(event.kind, Kind::from(WRAP_KIND));
-    assert!(event.created_at.as_secs() <= NOW, "timestamps never run ahead");
+    assert_eq!(event.created_at.as_secs(), NOW, "relays drop ephemeral events with an old timestamp");
     assert!(!event.content.contains("rfq"), "relays can't read it");
 }
 

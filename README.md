@@ -6,7 +6,7 @@ central operator, and a server-free refund path for every user.
 
 Status: early implementation, for testnet and devnet only. Nothing here is audited or handles real funds. The Liquid
 contract library, the Solana program and a CLI exist. The CLI has completed swaps in both directions on Liquid testnet and Solana
-devnet, using stand-in assets. The maker daemon runs swaps against a simulated taker, including quotes over Nostr on a local test relay. The web client doesn't exist yet.
+devnet, using stand-in assets. The maker daemon runs swaps against a simulated taker, including quotes over Nostr through a public relay. The web client doesn't exist yet.
 
 | Document | Contents |
 |---|---|

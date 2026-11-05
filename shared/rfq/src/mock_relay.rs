@@ -10,6 +10,8 @@ use nostr::prelude::{Event, Kind};
 use serde_json::Value;
 use tungstenite::{accept, Message};
 
+const MAX_EPHEMERAL_AGE_SECS: u64 = 10;
+
 #[derive(Default)]
 struct Shared {
     events: Vec<Event>,
@@ -131,6 +133,13 @@ fn serve(stream: TcpStream, conn: usize, shared: Arc<Mutex<Shared>>, drop_all: A
                 let Ok(event) = Event::from_json(value[1].to_string()) else { continue };
                 let id = event.id.to_hex();
                 let mut g = shared.lock().expect("lock");
+                // Real relays refuse stale ephemeral events: relay.coinos.pro takes 5 seconds, and not 30.
+                let ephemeral = (20_000..30_000).contains(&event.kind.as_u16());
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                if ephemeral && now.saturating_sub(event.created_at.as_secs()) > MAX_EPHEMERAL_AGE_SECS {
+                    g.outbox.push((conn, format!("[\"OK\",\"{id}\",false,\"invalid: ephemeral event expired\"]")));
+                    continue;
+                }
                 g.outbox.push((conn, format!("[\"OK\",\"{id}\",true,\"\"]")));
                 if !drop_all.load(Ordering::SeqCst) {
                     deliver(&mut g, event);

@@ -283,6 +283,22 @@ freezable account and an exception to this; see [contracts.md](contracts.md).
 | Two payments to one HTLC address | Each is a separate coin. The maker acts on one exact coin. The other is refundable at `LOCK_HEIGHT`. |
 | Halt detection (maker) | Stop new locks if the Liquid tip is older than 10 min or Solana's finalized slot stops moving for 60 s. |
 
+## 7.6 Privacy
+
+**Swaps are not confidential, and can't be under this design.** The covenant needs to read the asset and amount, so an HTLC coin
+and the claim's output 0 must be explicit.
+
+| Who can see | What |
+|---|---|
+| Anyone reading Liquid | The HTLC address, asset and amount, the claim's destination script, and the preimage once claimed. The taker's change from a wallet may stay blinded. |
+| Anyone reading Solana | The escrow, both parties' addresses, the amount, the payment hash and the preimage. |
+| Anyone reading both | **That the two legs are one swap**, because the same payment hash appears on both chains. So a Liquid script and a Solana address are publicly linked. |
+| Relays | Who receives a message and when. Not its contents, or who sent it. |
+
+A taker can reduce what follows them by receiving at a fresh address and moving funds on afterwards, on Liquid into a confidential
+output. That breaks no link already on-chain. Hiding the link between the legs would take a different construction, such as adapter
+signatures, which is out of scope here.
+
 ## 8. Free option and griefing
 
 USDt and USDT are the same issuer's token, so the free option in the usual sense is close to worthless unless one side

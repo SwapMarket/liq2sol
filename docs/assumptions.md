@@ -97,3 +97,41 @@ Anything not confirmed from a primary source is marked **UNVERIFIED**.
 | Item | Finding | Source |
 |---|---|---|
 | Boltz suspension | Boltz suspended all Bitcoin, Lightning and Liquid swaps on 2026-08-03, citing months of AI-assisted attacks; no user funds lost (non-custodial). Blockstream launched in-house swaps around 2026-08-11. | [crypto.news](https://crypto.news/boltz-halts-swaps-as-ai-attacks-outpace-its-team/), [TFTC](https://www.tftc.io/boltz-bitcoin-swaps-suspended-ai-attacks), [bitbo](https://bitbo.io/news/blockstream-launches-swaps-boltz/) |
+
+## 10. Phase 1 additions (checked 2026-11-05)
+
+These were checked while writing the design. Several update or close items above.
+
+### Liquid
+
+| Item | Finding | Source |
+|---|---|---|
+| **September 2026 exploit** | A range-proof cache bug in Elements let one transaction create about 4,000 unbacked L-BTC at block 4,050,336 on Sept 6. The fix had been public since Sept 1. USDt and other issued assets were "unaffected", though unavailable during the pause. | [Blockstream assessment](https://blog.blockstream.com/liquid-network-security-incident-assessment/) |
+| **Halt length** | Blocks resumed Sept 9 21:05 UTC. User transactions reappeared Sept 10 12:31 UTC, so about 4 days of unavailability. The assessment doesn't state a total. An earlier halt of about 22 hours is reported by a secondary source, its date inferred as about 2021. | Same; [secondary](https://tradingclubhouse.com/liquid-network-block-production-resumes-following-transaction-processing-issues/) |
+| **Rollback** | The exploit block was replaced ("replacement block 4,050,336") and transactions verified as valid were replayed. So 2-block finality is a working assumption, not an absolute. **UNVERIFIED:** rollback depth and whether all valid transactions were replayed. | Blockstream assessment |
+| Peg status | Blockstream's report (latest update Sept 17) has pegs still suspended. One secondary report says L-BTC is fully backed again by about Nov 4. **UNVERIFIED** from a primary source. | [CryptoTicker](https://cryptoticker.io/en/liquid-network-l-btc-fully-backed-again/) |
+| Non-L-BTC fees | Consensus tracks fees per asset (`fee_map`), but mempool acceptance counts only `policyAsset`: "We only consider policyAsset". A USDt-only fee counts as zero and fails relay. Closes the open point in `CLAUDE.md`. | [validation.cpp](https://github.com/ElementsProject/elements/blob/elements-23.3.4/src/validation.cpp) line 893 |
+| Fee rate | Esplora estimates 0.1 sat/vB at all targets. `DEFAULT_MIN_RELAY_TX_FEE = 100` sat/kvB. | live `/fee-estimates`; [validation.h](https://github.com/ElementsProject/elements/blob/elements-23.3.4/src/validation.h) line 59 |
+| NUMS key | LWK's Simplicity taproot test uses `50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0`. Closes the item in section 2. | [lwk test](https://github.com/Blockstream/lwk/blob/master/lwk_bindings/tests/bindings/simplicity_taproot_builder.py) |
+| `lwk_anyswap` | A thin wrapper over the `anyswap-sdk` crate. Not relevant prior art. Closes the item in section 3. | [lwk_anyswap](https://github.com/Blockstream/lwk/tree/master/lwk_anyswap) |
+| Lock-time semantics | `tx_lock_height` returns zeroes when `tx_is_final`. A refund must set a non-final sequence. `IsFinalTx` also treats a transaction as final if all sequences are maxed. | `src/docs/jet.rs` lines 626–629, [tx_verify.cpp](https://github.com/ElementsProject/elements/blob/elements-23.3.4/src/consensus/tx_verify.cpp) line 18 |
+| **Signblockscript form** | Decoded live block 4,131,983: compact current params entry with a P2WSH signblockscript and elided root, no proposed entry. Witness has 13 items: empty, 11 DER ECDSA signatures with sighash `01`, and a 513-byte script `OP_11 <15 pubkeys> OP_15 OP_CHECKMULTISIG`, whose SHA-256 matches the P2WSH. Closes the form and encoding part of section 5. **UNVERIFIED:** exact signed digest. | Live header from Esplora `/block/:hash/header` |
+| Draft size and cost | 473-byte program, 97-byte claim witness, 65-byte refund witness, cost bound 121,123 milliWU, before pruning. Budget = witness stack size + 50 WU, in weight units. | Local probe with `simplicityhl 0.9.0`, [analysis.rs](https://github.com/BlockstreamResearch/rust-simplicity/blob/master/src/analysis.rs), `interpreter.cpp` line 3360 |
+
+### Solana
+
+| Item | Finding | Source |
+|---|---|---|
+| **Alpenglow is live** | Mainnet consensus switched on 2026-10-21. Reported finality about 150 ms, and confirmed and finalized become equivalent. Secondary sources; the primary page returned HTTP 429 when fetched. **UNVERIFIED** from a primary source. | [solana.com/upgrades/alpenglow](https://solana.com/upgrades/alpenglow), [Crowdfund Insider](https://www.crowdfundinsider.com/2026/10/319911-anza-activates-alpenglow-on-solana-sol-mainnet-slashing-finality-to-150-milliseconds/) |
+| **Slot time** | Measured 208–220 ms, average 213 ms, over 60 one-minute samples. Nominal 200 ms per SIMD-0525 (secondary source). Replaces the 400 ms assumption. | Live `getRecentPerformanceSamples` |
+| **`unix_timestamp` under Alpenglow** | Set by the leader's block footer, bounded to `(parent, parent + 2 × elapsed slot duration]`. No jump after a halt, catches up at up to twice nominal. Replaces the stake-weighted calculation, which is still in the code for pre-Alpenglow banks. | [block_component_processor.rs](https://github.com/anza-xyz/agave/blob/v4.4.0/runtime/src/block_component_processor.rs) line 770, [bank.rs](https://github.com/anza-xyz/agave/blob/v4.4.0/runtime/src/bank.rs) line 3614 |
+| **`LastRestartSlot`** | Sysvar holding the latest hard-fork slot at or below the current slot, with syscall `sol_get_last_restart_slot`. Changes only on hard-fork restarts. **UNVERIFIED:** how a stall without a hard fork behaves under Alpenglow, and the feature's activation on mainnet (the gate is `last_restart_slot_sysvar`). | `bank.rs` line 2678, [syscalls/src/lib.rs](https://github.com/anza-xyz/agave/blob/v4.4.0/syscalls/src/lib.rs) line 453 |
+| Outage history | A secondary report says Solana has passed 1,000 days without an outage. | [coinalertnews](https://coinalertnews.com/news/2026/11/02/solana-1000-days-uptime-milestone) |
+| Devnet RPC | `api.devnet.solana.com` echoes the request origin in CORS, and reports `solana-core 4.4.0-beta.1`. Closes the item in section 7. | Live request |
+| Helius RPC | Mainnet and devnet send `access-control-allow-origin: *` and return HTTP 401 without a valid key. The key is an `api-key` query parameter. Free plan: 1M credits a month, 10 RPC requests/s, 1 `sendTransaction`/s, archival data included. Helius also describes masked, IP-limited "Secure RPC" URLs as safe for frontends. **UNVERIFIED:** a request with a real key, a free key on devnet, and whether the free plan includes Secure RPC URLs. | Live requests, [pricing](https://www.helius.dev/pricing), [endpoints](https://www.helius.dev/docs/api-reference/endpoints) |
+
+### Nostr
+
+| Item | Finding | Source |
+|---|---|---|
+| Ephemeral gift wrap | Kind `21059` is in the NIP kind list under NIP-59. **UNVERIFIED:** relay support. | [NIP list](https://github.com/nostr-protocol/nips/blob/master/README.md) |

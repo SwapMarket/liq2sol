@@ -4,5 +4,16 @@ Trustless atomic swaps between **USDt on Liquid** and **USDT on Solana**: a Simp
 Anchor escrow on Solana, a Rust maker daemon, a static taker web app, and quotes over Nostr. No custodian, no
 central operator, and a server-free refund path for every user.
 
-Status: design phase. See `docs/prompt.md` for the brief and `docs/assumptions.md` for the verified Phase 0 facts.
-Nothing here handles real funds yet.
+Status: design phase, under review. There is no implementation yet, and nothing here handles real funds.
+
+| Document | Contents |
+|---|---|
+| [docs/prompt.md](docs/prompt.md) | Project brief |
+| [docs/assumptions.md](docs/assumptions.md) | Verified facts with sources, and what remains unverified |
+| [docs/protocol.md](docs/protocol.md) | State machines, timeouts, failure behaviour, open decisions |
+| [docs/contracts.md](docs/contracts.md) | Liquid HTLC and Solana escrow specifications |
+| [docs/nostr-rfq.md](docs/nostr-rfq.md) | Quote and negotiation messages |
+| [docs/client.md](docs/client.md) | Static taker app, keys, recovery file, release pipeline |
+| [docs/maker.md](docs/maker.md) | Maker daemon, keys, limits, monitoring |
+| [docs/threat-model.md](docs/threat-model.md) | Attackers, mitigations, residual risks |
+| [docs/test-plan.md](docs/test-plan.md) | Tests, adversarial scenarios, formal verification |

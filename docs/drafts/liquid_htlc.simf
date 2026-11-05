@@ -1,0 +1,67 @@
+simc "0.9.0";
+
+/*
+ * liq2sol Liquid HTLC (DRAFT, Phase 1 design artifact, not audited)
+ *
+ * Claim: sha256 preimage + recipient BIP-340 signature, and a covenant:
+ *   - the coin being spent is explicit Tether USDt of exactly AMOUNT (no fake assets, no blinding),
+ *   - output 0 pays exactly AMOUNT of explicit USDt to the recipient's scriptPubKey.
+ *   L-BTC for the fee comes from other inputs; other outputs are unconstrained.
+ * Refund: sender BIP-340 signature once the transaction's lock height is >= LOCK_HEIGHT.
+ *
+ * Based on examples/htlc.simf from SimplicityHL 0.9.0.
+ */
+fn sha2(preimage: u256) -> u256 {
+    let hasher: Ctx8 = jet::sha_256_ctx_8_init();
+    let hasher: Ctx8 = jet::sha_256_ctx_8_add_32(hasher, preimage);
+    jet::sha_256_ctx_8_finalize(hasher)
+}
+
+fn checksig(pk: Pubkey, sig: Signature) {
+    let msg: u256 = jet::sig_all_hash();
+    jet::bip_0340_verify((pk, msg), sig);
+}
+
+// Assert (asset, amount) is explicit USDt of exactly AMOUNT.
+fn check_explicit_usdt(asset_amount: (Asset1, Amount1)) {
+    let (asset, amount): (Asset1, Amount1) = asset_amount;
+    match asset {
+        Left(blinded: Confidential1) => panic!(),
+        Right(id: ExplicitAsset) => assert!(jet::eq_256(id, param::USDT_ASSET)),
+    };
+    match amount {
+        Left(blinded: Confidential1) => panic!(),
+        Right(value: ExplicitAmount) => assert!(jet::eq_64(value, param::AMOUNT)),
+    };
+}
+
+fn claim(preimage: u256, recipient_sig: Signature) {
+    assert!(jet::eq_256(sha2(preimage), param::PAYMENT_HASH));
+    checksig(param::RECIPIENT_PK, recipient_sig);
+    // The HTLC coin itself must be the real asset and amount.
+    check_explicit_usdt(jet::current_amount());
+    // Output 0 pays it to the recipient's script.
+    match jet::output_amount(0) {
+        Some(out: (Asset1, Amount1)) => check_explicit_usdt(out),
+        None => panic!(),
+    };
+    match jet::output_script_hash(0) {
+        Some(script_hash: u256) => assert!(jet::eq_256(script_hash, param::RECIPIENT_SCRIPT_HASH)),
+        None => panic!(),
+    };
+}
+
+fn refund(sender_sig: Signature) {
+    jet::check_lock_height(param::LOCK_HEIGHT);
+    checksig(param::SENDER_PK, sender_sig);
+}
+
+fn main() {
+    match witness::CLAIM_OR_REFUND {
+        Left(preimage_sig: (u256, Signature)) => {
+            let (preimage, recipient_sig): (u256, Signature) = preimage_sig;
+            claim(preimage, recipient_sig);
+        },
+        Right(sender_sig: Signature) => refund(sender_sig),
+    }
+}

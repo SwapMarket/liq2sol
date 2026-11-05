@@ -8,7 +8,7 @@ Anything not confirmed from a primary source is marked **UNVERIFIED**.
 | Item | Finding | Source |
 |---|---|---|
 | Repo / version | `BlockstreamResearch/SimplicityHL` (formerly Simfony). Latest release **0.9.0** (2026-11-04); 0.8.0 (2026-09-27). Compiler binary `simc` (needs the `serde` feature to read `.args`/`.wit` files). | [releases](https://github.com/BlockstreamResearch/SimplicityHL/releases), [Cargo.toml](https://github.com/BlockstreamResearch/SimplicityHL/blob/simplicityhl-0.9.0/Cargo.toml) |
-| Version directive | Files should start with `simc "0.9.0";` (compiler warns otherwise). | `simc` output when compiling `docs/drafts/liquid_htlc.simf` |
+| Version directive | Files should start with `simc "0.9.0";` (compiler warns otherwise). | `simc` output when compiling `contracts/liquid/src/htlc.simf` |
 | Official HTLC example | `examples/htlc.simf`: `witness::COMPLETE_OR_CANCEL: Either<(u256, Signature), Signature>`; claim = sha256 preimage + BIP-340 sig; cancel = `check_lock_height` + BIP-340 sig. | [htlc.simf](https://github.com/BlockstreamResearch/SimplicityHL/blob/simplicityhl-0.9.0/examples/htlc.simf), [htlc.complete.wit](https://github.com/BlockstreamResearch/SimplicityHL/blob/simplicityhl-0.9.0/examples/htlc.complete.wit) |
 | Parameters | Compile-time parameters are `param::NAME`, supplied in a `.args` JSON file (values as strings, e.g. `"LOCK_HEIGHT": "1000"`). Parameters are baked into the program, so each swap has its own CMR/address. | [p2pk.simf](https://github.com/BlockstreamResearch/SimplicityHL/blob/simplicityhl-0.9.0/examples/p2pk.simf) + `p2pk.args`; verified by compiling the draft |
 | Witness values | `witness::NAME`, supplied in a `.wit` JSON file (`{"NAME": {"value": "...", "type": "..."}}`). | `htlc.complete.wit` |
@@ -18,7 +18,7 @@ Anything not confirmed from a primary source is marked **UNVERIFIED**.
 | Output introspection | `jet::output_asset(u32) -> Option<Asset1>`, `jet::output_amount(u32) -> Option<(Asset1, Amount1)>`, `jet::output_script_hash(u32) -> Option<u256>` (SHA-256 of scriptPubKey), `jet::num_outputs()`, `jet::output_is_fee(u32)`, `jet::total_fee(asset)`. Inputs: `jet::current_index()`, `jet::current_amount() -> (Asset1, Amount1)`, `jet::current_asset()`, `jet::current_script_hash()`. | `src/docs/jet.rs`, [src/jet/elements.rs](https://github.com/BlockstreamResearch/SimplicityHL/blob/simplicityhl-0.9.0/src/jet/elements.rs) lines ~1100–1130 |
 | Confidential vs explicit | `Asset1 = Either<(u1, u256), u256>` (blinded commitment \| explicit asset id); `Amount1 = Either<(u1, u256), u64>` (blinded \| explicit). The covenant must require `Right(...)` for both. | [src/types/aliased.rs](https://github.com/BlockstreamResearch/SimplicityHL/blob/simplicityhl-0.9.0/src/types/aliased.rs) lines ~385–395 |
 | Other jets used | `jet::eq_256`, `jet::eq_64`, `assert!`, `panic!()` | examples, `src/docs/jet.rs` |
-| Draft compiles | `docs/drafts/liquid_htlc.simf` compiles with `simc 0.9.0` using `docs/drafts/liquid_htlc.args`. Not yet executed against a transaction. | local run |
+| Draft compiles | `contracts/liquid/src/htlc.simf` compiles with `simc 0.9.0` using `contracts/liquid/htlc.args`. Not yet executed against a transaction. | local run |
 
 ## 2. Commitment (CMR → Taproot address) and witness
 
@@ -71,7 +71,7 @@ Anything not confirmed from a primary source is marked **UNVERIFIED**.
 | Syscalls | `sol_sha256`, `sol_secp256k1_recover`, `sol_keccak256`, `sol_blake3`, `sol_get_clock_sysvar`, `sol_remaining_compute_units`, … | [syscalls/src/lib.rs](https://github.com/anza-xyz/agave/blob/v4.4.0/syscalls/src/lib.rs) ~line 383 |
 | Compute budget | `MAX_COMPUTE_UNIT_LIMIT = 1_400_000` per tx; `DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT = 200_000`; heap 32 KiB default, `MAX_HEAP_FRAME_BYTES = 256 KiB`. | [program-runtime/src/execution_budget.rs](https://github.com/anza-xyz/agave/blob/v4.4.0/program-runtime/src/execution_budget.rs) |
 | Syscall costs | `sha256_base_cost = 85`, `sha256_byte_cost = 1`, `secp256k1_recover_cost = 25_000`. | same file |
-| Anchor | Now at `solana-foundation/anchor`; latest **v0.32.3** (2026-11-03). | [releases](https://github.com/solana-foundation/anchor/releases) |
+| Anchor | **Corrected in Phase 2:** the repo is now `otter-sec/anchor` (the old `solana-foundation/anchor` name redirects). GitHub's latest is **v1.2.2** (2026-10-28), minimum Rust 1.89. v0.32.3 (2026-11-03) is a patch to the older 0.32 line, published the same day as v0.31.3 and v0.30.4. **UNVERIFIED:** what those backports fix, and whether v1.2.2 already has it. | [releases](https://github.com/otter-sec/anchor/releases), [installation](https://www.anchor-lang.com/docs/installation) |
 | Finalized commitment | **UNVERIFIED** current typical time-to-finalized (historically ~12–13 s). | — |
 | Transaction format | Solana now has a **version 1** transaction format; `@solana/web3.js` 1.95 can't decode it (seen while scanning mainnet). Clients must handle it. | observed via RPC |
 
@@ -129,6 +129,24 @@ These were checked while writing the design. Several update or close items above
 | Outage history | A secondary report says Solana has passed 1,000 days without an outage. | [coinalertnews](https://coinalertnews.com/news/2026/11/02/solana-1000-days-uptime-milestone) |
 | Devnet RPC | `api.devnet.solana.com` echoes the request origin in CORS, and reports `solana-core 4.4.0-beta.1`. Closes the item in section 7. | Live request |
 | Helius RPC | Mainnet and devnet send `access-control-allow-origin: *` and return HTTP 401 without a valid key. The key is an `api-key` query parameter. Free plan: 1M credits a month, 10 RPC requests/s, 1 `sendTransaction`/s, archival data included. Helius also describes masked, IP-limited "Secure RPC" URLs as safe for frontends. **UNVERIFIED:** a request with a real key, a free key on devnet, and whether the free plan includes Secure RPC URLs. | Live requests, [pricing](https://www.helius.dev/pricing), [endpoints](https://www.helius.dev/docs/api-reference/endpoints) |
+
+### Phase 2 proofs
+
+| Item | Finding | Source |
+|---|---|---|
+| **HTLC on a node** | Claim mined and refund mined on Elements 23.3.4 regtest with `-evbparams=simplicity:-1:::`. The node refused a wrong CMR, control block or leaf version, an unpruned program, an early refund, and a refund with final sequences. | `contracts/liquid/tests/regtest.rs` |
+| **Signing in WASM** | Closes the item in section 3. A full claim with a Simplicity input and a taproot key-path fee input, built and signed in WASM under Node, is byte-identical to native. The module is 4.7 MB unoptimized for size. **UNVERIFIED** in a real browser, as opposed to Node. | `scripts/check-wasm-parity.sh` |
+| Asset byte order | The jets compare internal byte order, the reverse of explorer display. | `asset_param_is_the_reverse_of_display_order` test |
+| Claim size | 379 vB with one fee input. | Regtest measurement |
+
+### WalletConnect
+
+| Item | Finding | Source |
+|---|---|---|
+| Solana methods | `solana_getAccounts`, `solana_requestAccounts`, `solana_signMessage`, `solana_signTransaction`, `solana_signAllTransactions`, `solana_signAndSendTransaction`. | [Reown RPC reference](https://docs.reown.com/advanced/multichain/rpc-reference/solana-rpc) |
+| Adapters | `@walletconnect/solana-adapter` 0.0.9 and `@solana/wallet-adapter-walletconnect` 0.1.22 both exist. | [npm](https://www.npmjs.com/package/@walletconnect/solana-adapter), [npm](https://www.npmjs.com/package/@solana/wallet-adapter-walletconnect) |
+| Origins | A project can allowlist origins, and others are denied. Localhost is always allowed, and an empty list allows all. | [Reown relay docs](https://docs.reown.com/cloud/relay) |
+| Relay | Self-hosting isn't available yet. | [Reown FAQ](https://docs.reown.com/advanced/faq) |
 
 ### Nostr
 

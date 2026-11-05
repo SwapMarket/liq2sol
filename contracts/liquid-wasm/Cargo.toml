@@ -1,0 +1,15 @@
+[package]
+name = "liq2sol-htlc-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Browser build of the liq2sol Liquid HTLC, with a parity check against the native build"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+liq2sol-htlc = { path = "../liquid" }
+simplicityhl = "=0.9.0"
+wasm-bindgen = "0.2"

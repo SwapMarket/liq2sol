@@ -9,7 +9,7 @@ Status: Phase 1 design, for review. A fully static web app on GitHub Pages, with
 | UI | Small TypeScript app, minimal dependencies, no runtime framework unless justified |
 | Protocol core | State machines from [protocol.md](protocol.md). Pure functions, driven by chain reads, resumable from storage. |
 | Liquid WASM | Own Rust crate: HTLC instantiation, address derivation, transaction build, signing, witness encoding |
-| Solana | Wallet adapter, plus reused code from `~/src/eth2base` and `~/src/sol2base` |
+| Solana | WalletConnect through a wallet adapter (section 3), plus reused code from `~/src/eth2base` and `~/src/sol2base` |
 | Chain access | Esplora and Solana RPC, user-configurable |
 | Nostr | RFQ messages only ([nostr-rfq.md](nostr-rfq.md)) |
 | Storage | IndexedDB per swap, plus the recovery file |
@@ -74,6 +74,28 @@ free key works on devnet is **UNVERIFIED**.
   user.
 - Show the amount, asset, address and refund time before funding. Also show the build hash, so a user can compare it
   with the release, while being clear that a tampered page could display anything.
+
+### Solana wallet connection
+
+The user chose WalletConnect on 2026-11-05, and chose against a key held by the page. The app holds no Solana key.
+
+| Topic | Design |
+|---|---|
+| Library | A WalletConnect adapter for the Solana wallet adapter library: `@walletconnect/solana-adapter` (Reown) or `@solana/wallet-adapter-walletconnect` (Anza). To be chosen in the client phase. Pinned, and loaded only when the user connects. |
+| Project ID | One Reown project ID per deployment. It is public by nature, because a static page can't hide it, so it isn't treated as a secret. It is pinned in the released code. |
+| Allowed origins | The GitHub Pages origin is on Reown's allowlist. Localhost is always allowed. **IPFS gateways and other mirrors are refused unless listed**, so those users need a listed origin or their own project ID, which the app accepts as a setting. |
+| Signing | Use `solana_signTransaction`, then send from the app, **never `solana_signAndSendTransaction` for a claim**. The app must control when the preimage is broadcast: after the two-endpoint check and simulation, inside the cutoff. |
+| Preimage exposure | A claim passes through the user's wallet for signing, so the wallet sees `p` before broadcast. WalletConnect messages are end-to-end encrypted, and the wallet is already trusted with the user's funds. A malicious wallet colluding with the maker could still steal the swap. |
+| Relay dependency | WalletConnect needs Reown's relay, and self-hosting isn't available. This is the one central service in the taker's Solana path. See below. |
+| Time limits | A phone approval takes time. The client asks for the signature early enough that the claim cutoff still holds, and it rechecks the cutoff before sending. |
+
+**If the relay is down:**
+
+- Before funding: no swap starts, since the client tests the wallet connection before showing the funding address. No funds are at risk.
+- L→S, after funding, before claiming: the taker can't claim, so `p` stays secret. Funds come back through the Liquid refund, which doesn't use WalletConnect.
+- S→L refund: `refund` is permissionless, so anyone can send it. The standalone recovery tools accept any funded fee-payer key, for instance from the Solana CLI.
+
+**UNVERIFIED, to test in the client phase:** the WalletConnect chain IDs for Solana mainnet and devnet, which wallets support the Solana namespace (**including whether Phantom does**, since the brief names it), and whether the adapter handles version 1 transactions.
 
 ## 4. Recovery file
 

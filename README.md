@@ -4,7 +4,8 @@ Trustless atomic swaps between **USDt on Liquid** and **USDT on Solana**: a Simp
 Anchor escrow on Solana, a Rust maker daemon, a static taker web app, and quotes over Nostr. No custodian, no
 central operator, and a server-free refund path for every user.
 
-Status: design phase, under review. There is no implementation yet, and nothing here handles real funds.
+Status: early implementation, for testnet and devnet only. Nothing here is audited or handles real funds. The Liquid
+contract library exists and is tested on a local node; the Solana program, maker daemon and client don't exist yet.
 
 | Document | Contents |
 |---|---|

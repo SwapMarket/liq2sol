@@ -27,9 +27,11 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 - **Phase 0: done.** `docs/assumptions.md` has every finding with links and the UNVERIFIED list. Section 10 holds later
   findings, some of which update earlier sections.
 - **Phase 1: documents written.** `docs/protocol.md`, `contracts.md`, `nostr-rfq.md`, `client.md`, `maker.md`,
-  `threat-model.md`, `test-plan.md`, plus `docs/drafts/liquid_htlc.simf`. The user accepted all decisions D1–D10
-  (`docs/protocol.md` section 9) on 2026-11-05. **Do not write implementation code until the user explicitly approves
-  starting Phase 2.**
+  `threat-model.md`, `test-plan.md`, plus `contracts/liquid/src/htlc.simf`. The user accepted all decisions D1–D10
+  (`docs/protocol.md` section 9) on 2026-11-05. 
+- **Phase 2: started, with approval (2026-11-05).** Build order: contracts with tests, CLI end-to-end, maker, client.
+  `contracts/liquid` (HTLC library and tests) and `contracts/liquid-wasm` are done, and proofs F1, F2, F3 and F5 pass. Next: the
+  Solana program in `programs/solana-escrow/`. The Solana CLI and Anchor aren't installed yet.
 
 ## Design points that are easy to get wrong
 
@@ -45,6 +47,9 @@ Details and sources are in the docs. These are recorded because older assumption
 - **USDt can't pay Liquid fees** in practice: the mempool counts only the policy asset.
 - **Never reveal the preimage before** confirming the counterparty's lock on two independent endpoints and simulating
   the claim. A failed transaction still leaks it.
+- **The taker's Solana wallet connects through WalletConnect, with no page-held key** (user's decision, 2026-11-05). Sign with
+  `solana_signTransaction` and broadcast from the app, so the app controls when the preimage goes out.
+- **Anchor is v1.2.2, repo `otter-sec/anchor`.**
 - **The second Solana endpoint is Helius, using an optional key the taker provides** (user's decision, 2026-11-05). Never
   ship a key in the static app.
 
@@ -52,8 +57,10 @@ Details and sources are in the docs. These are recorded because older assumption
 
 - This shell sets `RUSTFLAGS=-C link-arg=-fuse-ld=lld`, which breaks wasm32 links: build wasm with `RUSTFLAGS=""`.
 - Tools present: Rust 1.97.1 with `wasm32-unknown-unknown`, clang 18 (wasm32 backend), wasm-pack, Node, Foundry.
+- Regtest tests: `ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli cargo test -p liq2sol-htlc --test regtest -- --ignored`.
+  WASM parity: `scripts/check-wasm-parity.sh`.
 - `simc` (SimplicityHL CLI with `.args`/`.wit` support): `cargo install simplicityhl --version 0.9.0 --features serde --locked`.
-  Compile-check the draft: `simc docs/drafts/liquid_htlc.simf --args docs/drafts/liquid_htlc.args`. It has no `--version` flag.
+  Compile-check the draft: `simc contracts/liquid/src/htlc.simf --args contracts/liquid/htlc.args`. It has no `--version` flag.
 - `/tmp` is wiped on reboot. Keep anything worth keeping in the repo.
 - Free Solana RPC (publicnode) blocks `getProgramAccounts`/token-account indexing and old history; plan clients around
   that (remember accounts locally, derive PDAs).

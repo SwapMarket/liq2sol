@@ -4,8 +4,8 @@ Status: Phase 1 design, for review. Decisions `Dn` refer to [protocol.md](protoc
 
 ## 1. Liquid HTLC (SimplicityHL)
 
-The draft is at [drafts/liquid_htlc.simf](drafts/liquid_htlc.simf). It compiles with `simc 0.9.0` but **has not yet been
-executed against a transaction**.
+The contract is at [contracts/liquid/src/htlc.simf](../contracts/liquid/src/htlc.simf), and has been executed on an
+Elements 23.3.4 regtest node (see [test-plan.md](test-plan.md) section 2). It is unaudited.
 
 ### Parameters
 
@@ -17,7 +17,7 @@ Baked into the program at compile time, so each swap has its own CMR and address
 | `RECIPIENT_PK` | Pubkey | x-only key of the claimer |
 | `SENDER_PK` | Pubkey | x-only key of the refunder |
 | `LOCK_HEIGHT` | Height (u32) | Absolute height for the refund |
-| `USDT_ASSET` | u256 | Tether's asset id, or the stand-in on testnet |
+| `USDT_ASSET` | u256 | Tether's asset id, or the stand-in on testnet, in **internal byte order: the reverse of the hex explorers show**. Display-order hex yields a program no real coin can satisfy. Always use `asset_param`. |
 | `AMOUNT` | u64 | Exact locked amount, base units |
 | `RECIPIENT_SCRIPT_HASH` | u256 | SHA-256 of the recipient's scriptPubKey |
 
@@ -46,7 +46,14 @@ current height. See [protocol.md](protocol.md) section 7.1.
 The refund has no covenant, so any coin at the address, of any asset or amount, can be recovered by the sender.
 
 **Refund transactions must set a non-final `nSequence`.** `tx_lock_height` returns 0 when all sequences are final, so
-`check_lock_height` fails on a transaction that sets the lock time but leaves sequences at the maximum.
+`check_lock_height` fails on a transaction that sets the lock time but leaves sequences at the maximum. Confirmed on a
+node ("Assertion failed inside jet").
+
+**Earliest refund.** With lock time `LOCK_HEIGHT`, the node accepts the refund once the tip reaches `LOCK_HEIGHT`, so it
+mines in block `LOCK_HEIGHT + 1`. Confirmed on a node.
+
+**Reading the preimage.** The preimage isn't byte-aligned in the witness, because a 1-bit branch tag comes first.
+`extract_preimage` scans each bit offset and accepts only a value that hashes to `PAYMENT_HASH`.
 
 ### Invariants
 
@@ -70,20 +77,16 @@ The refund has no covenant, so any coin at the address, of any asset or amount, 
 
 ### Size and fees
 
-Measured with `simplicityhl 0.9.0` on the draft, before pruning:
+Measured on pruned programs, as consensus requires (a node refuses the unpruned form: "Program has FAIL node"):
 
-| Item | Value |
-|---|---|
-| Program | 473 bytes |
-| Witness | 97 bytes (claim), 65 bytes (refund) |
-| Cost bound | 121 WU |
-| Budget | Serialized witness stack size + 50 WU, so about 690 WU before pruning |
+| Spend | Program | Witness | Cost | Budget |
+|---|---|---|---|---|
+| Claim | 408 bytes | 97 bytes | 122 WU | 627 WU |
+| Refund | 121 bytes | 65 bytes | 62 WU | 306 WU |
 
-Consensus requires pruned programs, so the on-chain program and budget will be smaller. The margin is large enough that
-annex padding should not be needed, but **the pruned figures are UNVERIFIED** until a transaction is executed.
-
-Estimated claim transaction of about 470 vB (an estimate, not a measurement). At the prevailing 0.1 sat/vB, that is
-about 50 sats. The proposed fee coin is 300 sats and is spent entirely as fee, with no change output.
+Annex padding isn't needed. A claim with one L-BTC fee input measures **379 vB** (1,514 weight), about 38 sats at the
+prevailing 0.1 sat/vB. The fee coin is 300 sats, spent entirely as fee with no change output. That is about 0.8 sat/vB,
+tested and accepted, and it could be lowered.
 
 ### Formal verification plan
 
@@ -91,7 +94,7 @@ See [test-plan.md](test-plan.md) section 6.
 
 ## 2. Solana escrow (Anchor)
 
-Anchor v0.32.3, legacy Token program only. The mint is a compile-time constant selected by a Cargo feature: the real
+Anchor v1.2.2, legacy Token program only. The mint is a compile-time constant selected by a Cargo feature: the real
 USDT mint for a mainnet build, a stand-in for devnet.
 
 ### Accounts

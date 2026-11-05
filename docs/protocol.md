@@ -184,7 +184,7 @@ lost the funds.
 | `LOCK_GATE` | Gate from section 3, exposure limits, halt detection | `LOCKED`, or abandon |
 | `LOCKED` | Watch the HTLC outpoint, mempool included | `CLAIMED_LIQ` on spend, `REFUND_LIQ` at `LOCK_HEIGHT` |
 | `CLAIMED_LIQ` | Extract `p` from the witness, claim on Solana at once | `DONE` |
-| `REFUND_LIQ` | Refund **in the first block that allows it**, racing any late taker claim | `DONE` |
+| `REFUND_LIQ` | Broadcast as soon as the tip reaches `LOCK_HEIGHT`, so it mines in the first block that allows it, racing any late taker claim | `DONE` |
 
 ## 6. Message formats
 

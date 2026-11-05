@@ -17,6 +17,10 @@ practical is UNVERIFIED**. If not, `LastRestartSlot` is set directly in LiteSVM.
 
 ## 2. First feasibility proofs (Phase 2, before anything else)
 
+Status (2026-11-05): F1, F2, F3 and F5 pass, on Elements 23.3.4 regtest. F4 needs real wallets and is still open.
+Run them with `ELEMENTSD=... ELEMENTS_CLI=... cargo test -p liq2sol-htlc --test regtest -- --ignored --nocapture` and
+`scripts/check-wasm-parity.sh`.
+
 | # | Proof | Why |
 |---|---|---|
 | F1 | Execute the draft HTLC claim and refund on regtest, including pruned size and cost against budget | Never yet run |
@@ -52,6 +56,9 @@ Each must pass, or fail with the expected error, on both the unit and the regtes
 | Refund of a wrong-asset or wrong-amount coin | Accepted |
 | Unpruned program, wrong CMR, wrong control block, wrong leaf version | Rejected by consensus |
 | Key-path spend attempt | Impossible (NUMS key) |
+
+**Status:** these run in `contracts/liquid/tests/contract.rs` and `regtest.rs`. Mutation check: removing each of the 11
+checks in the contract, one at a time, made at least one test fail.
 
 ## 4. Solana program tests
 

@@ -9,10 +9,10 @@ skip-lint = false
 members = ["solana-escrow"]
 
 [programs.localnet]
-solana_escrow = "DxVq5iSzKfRMAyis8RyLUeLggidM2Jvk1FZyyEauCRQ1"
+solana_escrow = "EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU"
 
 [programs.devnet]
-solana_escrow = "DxVq5iSzKfRMAyis8RyLUeLggidM2Jvk1FZyyEauCRQ1"
+solana_escrow = "EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU"
 
 [provider]
 cluster = "localnet"

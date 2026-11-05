@@ -41,7 +41,13 @@ fn start() -> Node {
     let child = Command::new(daemon)
         .arg(format!("-datadir={}", dir.display()))
         .args(["-listen=0", "-txindex=1", "-validatepegin=0", "-fallbackfee=0.00001", "-initialfreecoins=2100000000"])
-        .args(["-anyonecanspendaremine=1", "-evbparams=simplicity:-1:::", "-printtoconsole=0"])
+        .args([
+            "-anyonecanspendaremine=1",
+            "-evbparams=simplicity:-1:::",
+            "-printtoconsole=0",
+            "-acceptdiscountct=1",
+            "-creatediscountct=1",
+        ])
         .args(&base)
         .stdout(Stdio::null())
         .spawn()
@@ -116,6 +122,18 @@ fn a_wallet_with_only_blinded_coins_works_on_a_real_node() {
     .unwrap();
     assert_eq!(tx.output.len(), 5, "two payments, two change outputs, and the fee");
     assert!(tx.output.iter().filter(|o| !o.is_fee()).all(hidden), "everything but the fee is hidden");
+    let info: Json =
+        serde_json::from_str(&node.rpc.call(&["decoderawtransaction", &serialize_hex(&tx)]).unwrap()).unwrap();
+    println!(
+        "    pay: {} inputs, {} outputs, vsize {}, discountvsize {}",
+        tx.input.len(),
+        tx.output.len(),
+        info["vsize"],
+        info["discountvsize"]
+    );
+    let paid: u64 = tx.output.iter().filter(|o| o.is_fee()).filter_map(|o| o.value.explicit()).sum();
+    assert!(paid >= info["discountvsize"].as_u64().unwrap() / 10, "at least the relay floor");
+    assert!(paid <= info["discountvsize"].as_u64().unwrap() / 2, "and it isn't paying for the undiscounted size");
     let txid = chain.broadcast(&tx).expect("the node accepts it");
     mine(1);
     println!("    ok: the node accepted {} with 4 blinded outputs", &txid.to_string()[..12]);
@@ -125,7 +143,6 @@ fn a_wallet_with_only_blinded_coins_works_on_a_real_node() {
     let change = chain.secret_coins(&ours.address(), &ours.blinding).unwrap();
     let total = |a| change.iter().filter(|c| c.secrets.asset == a).map(|c| c.secrets.value).sum::<u64>();
     assert_eq!(total(usdt()), 4_000_000, "the right change came back");
-    let paid: u64 = tx.output.iter().filter(|o| o.is_fee()).filter_map(|o| o.value.explicit()).sum();
     assert_eq!(total(lbtc()), 200_000 - FEE - paid, "after the fee coin and the fee");
     println!("    ok: the recipient and the change read the exact amounts");
 
@@ -158,6 +175,9 @@ fn a_wallet_with_only_blinded_coins_works_on_a_real_node() {
     let arg = format!("[\"{}\"]", serialize_hex(&spend));
     let accept: Json = serde_json::from_str(&node.rpc.call(&["testmempoolaccept", &arg]).unwrap()).unwrap();
     assert!(accept[0]["allowed"].as_bool().unwrap(), "{accept}");
+    let info: Json =
+        serde_json::from_str(&node.rpc.call(&["decoderawtransaction", &serialize_hex(&spend)]).unwrap()).unwrap();
+    println!("    swap spend: vsize {}, discountvsize {}", info["vsize"], info["discountvsize"]);
     println!("    ok: a spend of a blinded coin and a blinded fee coin is accepted at {} vB", accept[0]["vsize"]);
     assert!(is_key_path_spend(&spend, &coin.coin.outpoint).unwrap());
     assert!(published_signature(&spend, &coin.coin.outpoint).is_some());

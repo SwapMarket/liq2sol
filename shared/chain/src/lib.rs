@@ -4,3 +4,4 @@
 
 pub mod liquid;
 pub mod sol;
+pub mod swap;

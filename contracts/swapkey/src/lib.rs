@@ -379,3 +379,35 @@ pub fn point_of(secret: &[u8; 32]) -> Result<[u8; 33], Error> {
     let t = Scalar::from_slice(secret).map_err(|e| Error::Keys(e.to_string()))?;
     Ok(t.base_point_mul().serialize())
 }
+
+// ---- Wire forms ----
+
+pub use musig2::{AdaptorSignature as Adaptor, AggNonce as AggregateNonce, PartialSignature as Share, PubNonce as Nonce};
+
+pub fn nonce_bytes(nonce: &PubNonce) -> Vec<u8> {
+    nonce.serialize().to_vec()
+}
+
+pub fn nonce_from(bytes: &[u8]) -> Result<PubNonce, Error> {
+    PubNonce::from_bytes(bytes).map_err(|e| Error::Signing(e.to_string()))
+}
+
+pub fn share_bytes(share: &PartialSignature) -> [u8; 32] {
+    share.serialize()
+}
+
+/// A zero share would be accepted by nothing, so it is refused here as malformed.
+pub fn share_from(bytes: &[u8]) -> Result<PartialSignature, Error> {
+    match MaybeScalar::from_slice(bytes) {
+        Ok(MaybeScalar::Valid(s)) => Ok(MaybeScalar::Valid(s)),
+        _ => Err(Error::BadPartialSignature),
+    }
+}
+
+pub fn adaptor_bytes(sig: &AdaptorSignature) -> Vec<u8> {
+    sig.serialize().to_vec()
+}
+
+pub fn adaptor_from(bytes: &[u8]) -> Result<AdaptorSignature, Error> {
+    AdaptorSignature::from_bytes(bytes).map_err(|e| Error::Signing(e.to_string()))
+}

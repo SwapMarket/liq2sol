@@ -9,7 +9,7 @@ use solana_sysvar::last_restart_slot::LastRestartSlot;
 pub mod state;
 use state::*;
 
-declare_id!("DxVq5iSzKfRMAyis8RyLUeLggidM2Jvk1FZyyEauCRQ1");
+declare_id!("EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU");
 
 /// USDT on Solana mainnet: legacy Token program, 6 decimals.
 #[cfg(feature = "mainnet")]

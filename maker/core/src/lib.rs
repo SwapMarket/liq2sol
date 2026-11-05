@@ -17,6 +17,9 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LockPoint(pub [u8; 33]);
 
+/// A compressed public key. The same 33 bytes and the same encoding as a lock point.
+pub type CompressedKey = LockPoint;
+
 impl LockPoint {
     /// The swap's id: the point's x coordinate. A used secret is public, so the id is never accepted twice.
     pub fn id(&self) -> [u8; 32] {

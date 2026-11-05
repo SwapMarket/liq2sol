@@ -86,8 +86,29 @@ Refund: the taker after `lock_height`, the maker after `deadline_slot`, as today
 If a funding transaction spends explicit coins, anyone can read the input value and bound the blinded output, so **the signer's wallet
 holds only blinded coins, and all its change is blinded.** The L-BTC fee output is the one explicit output, because Elements requires it.
 
-Each maker claim uses its own fee coin, made just before signing, because the adapter signature commits to it. A fee coin costs one
-extra transaction per swap.
+Each maker claim uses its own fee coin, because the adapter signature commits to it. The signer keeps a pool of small blinded
+L-BTC coins, tops it up with one payment to itself, and reserves a confirmed coin for a swap durably before signing anything.
+Coins of a fee coin's value never fund ordinary payments, so a payment can't kill a signature.
+
+A coin reserved for a swap that never locks stays reserved, at a cost of one fee coin. Taking one requires a confirmed swap coin
+of the right amount, so it can't be done for free.
+
+### Fees and the discount
+
+Liquid and its testnet charge confidential transactions on *discount vsize*, which leaves out most of the proofs' weight. Elements
+turns this on with `-acceptdiscountct`, which defaults to on for `liquidv1` and `liquidtestnet` and off for everything else. **So
+regtest nodes must be started with `-acceptdiscountct=1` to behave like the real networks.** Measured on Elements 23.3.4:
+
+| Transaction | vsize | discount vsize | At the 0.1 sat/vB floor |
+|---|---|---|---|
+| A swap spend: 2 inputs, 1 blinded output, fee | 1,376 | 251 | 26 sats |
+| A payment: 2 inputs, 4 blinded outputs, fee | 4,986 | 487 | 49 sats |
+
+Ordinary payments pay about twice the floor, computed from their shape. A swap claim's fee can't be raised, because the signature
+commits to the whole transaction, so a fee coin holds 300 sats, about 12 times the floor. The claim's blinded output can still be
+spent by a child transaction if that is ever not enough. Whether 300 is the right margin is open; it is the `FEE` constant.
+
+**UNVERIFIED:** relay of these discounted transactions through the public Liquid testnet Esplora. Only a local node has been measured.
 
 ## Stage 1: proving it
 

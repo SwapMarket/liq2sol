@@ -559,10 +559,11 @@ pub struct Payment {
     pub address: Address,
 }
 
-/// A fee covering 0.1 sat/vB with margin, in sats. Blinded outputs measured about 1,150 vB each on a real node, because
-/// of their range and surjection proofs, so a flat fee won't do here.
+/// A fee of 0.2 sat per discount vbyte, twice the relay floor. Liquid and its testnet charge confidential transactions on
+/// discount vsize, which leaves out most of the proofs' weight (`-acceptdiscountct`, on by default on those networks and off
+/// on regtest). Measured on a node: 2 inputs and 4 blinded outputs are 487 dvB against 4,986 vB.
 fn pay_fee(inputs: usize, blinded_outputs: usize) -> u64 {
-    100 + 30 * inputs as u64 + 150 * blinded_outputs as u64
+    (60 + 60 * inputs as u64 + 80 * blinded_outputs as u64) / 5
 }
 
 /// A signed payment from a confidential wallet. Every output but the L-BTC fee is blinded.
@@ -572,8 +573,18 @@ pub fn build_confidential_pay(
     payments: Vec<Payment>,
     genesis: BlockHash,
 ) -> Res<Transaction> {
+    let coins = esplora.secret_coins(&wallet.address(), &wallet.blinding)?;
+    pay_from_coins(&coins, wallet, payments, genesis)
+}
+
+/// The same, from a list the caller chose, such as a wallet's coins without those promised to a swap.
+pub fn pay_from_coins(
+    coins: &[SecretCoin],
+    wallet: &Wallet,
+    payments: Vec<Payment>,
+    genesis: BlockHash,
+) -> Res<Transaction> {
     let address = wallet.address();
-    let coins = esplora.secret_coins(&address, &wallet.blinding)?;
     let mut needed: Vec<(AssetId, u64)> = vec![(lbtc(), 0)];
     for p in &payments {
         match needed.iter_mut().find(|(a, _)| *a == p.asset) {

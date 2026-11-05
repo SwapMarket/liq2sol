@@ -55,6 +55,8 @@ pub enum Request {
         swap_id: [u8; 32],
         lock_height: u32,
         liquid_tip: u32,
+        /// The taker's escrow is still there to collect. Once it's refunded, a claim here would be theft.
+        taker_escrow_open: bool,
     },
     /// The claim pays our own wallet, because the signer builds it that way.
     ClaimLiquid {
@@ -259,7 +261,7 @@ pub fn check(limits: &Limits, ledger: &dyn Ledger, now_secs: u64, request: &Requ
             }
             record.adaptor_held = true;
         }
-        GiveShare { lock_height, liquid_tip, .. } => {
+        GiveShare { lock_height, liquid_tip, taker_escrow_open, .. } => {
             if record.direction != Some(Direction::S2L) {
                 return Err(Refusal::UnknownSwap);
             }
@@ -268,6 +270,9 @@ pub fn check(limits: &Limits, ledger: &dyn Ledger, now_secs: u64, request: &Requ
             }
             if record.liquid_refunded || liquid_tip >= lock_height {
                 return Err(Refusal::BadTimeout("past the lock height".into()));
+            }
+            if !taker_escrow_open {
+                return Err(Refusal::NoTakerEscrow);
             }
             record.adaptor_held = true;
         }

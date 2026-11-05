@@ -99,12 +99,14 @@ are frozen and restarts are set directly in LiteSVM, so neither a real freeze au
 (`abort l2s`, `abort s2l`), including a refused early refund. Funds were conserved. These runs use the faucet's `TEST` asset and a stand-in mint, one
 process plays both roles, and RFQ is not involved. The L→S reveal used the single-endpoint override.
 
-E4, E5, E9, E11, E12, E13 and E15 run in `cli/tests/failures.rs`, on an Elements regtest node and real devnet: not mining is a halt, and `invalidateblock` with
+E4, E5, E9, E11, E12, E13, E15 and E16 run in `cli/tests/failures.rs`, on an Elements regtest node and a Solana chain. All passed on a local validator, and all but E16 on devnet: not mining is a halt, and `invalidateblock` with
 an emptied mempool is a rollback. E12 and E15 pass only if the predicted loss actually happens. They exercise the chains, not the daemon, so the daemon's
 reactions (calling `extend`, refusing to refund) are still to be tested. A real federation rollback may also differ, since it replays transactions.
 
-Still open: E14 (needs a cluster restart), E16 (needs a mint with a real freeze authority; the devnet stand-in has none), blinded coins in E9 (Bit Machine only), E6–E8 and E10 (need RFQ and client
-logic), E17 onward (need the daemon and client). Also open: `solana-test-validator` from source still dies on this CPU, because `reed-solomon-erasure` runs AVX2 code unchecked.
+E16 needs a mint with a real freeze authority, which the devnet stand-in lacks, so it only runs on a local validator. Skip it on devnet by setting `SCENARIO` to another scenario's name.
+
+Still open: E14 (needs a cluster restart), blinded coins in E9 (Bit Machine only), E6–E8 and E10 (need RFQ and client
+logic), E17 onward (need the daemon and client). `solana-test-validator` dies on the VirtualBox VM, prebuilt or from source, because `reed-solomon-erasure` runs AVX2 code unchecked. It runs under WSL, and the VM reaches it through a Windows port proxy. It runs with Alpenglow switched off, so it doesn't match mainnet consensus.
 
 Each runs both directions where applicable, first locally and then on testnet and devnet.
 

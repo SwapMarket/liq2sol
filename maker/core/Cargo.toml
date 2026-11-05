@@ -1,0 +1,16 @@
+[package]
+name = "liq2sol-maker-core"
+version = "0.1.0"
+edition = "2021"
+description = "liq2sol maker: pure swap state machine, signer policy and crash-safe store"
+license = "MIT"
+publish = false
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[dev-dependencies]
+proptest = "1"

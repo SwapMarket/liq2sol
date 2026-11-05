@@ -48,8 +48,9 @@ All of these must pass, or the maker abandons the swap. The taker can then refun
 **L→S:**
 
 1. `H` has never been seen.
-2. Exactly one confirmed output at the derived non-confidential address, explicit asset and amount, with the
-   confirmations D7 requires.
+2. At least one confirmed output at the derived non-confidential address with the exact explicit asset and amount, with
+   the confirmations D7 requires. The maker acts on one such coin and ignores everything else there, so a stray coin can't
+   block a swap. The sender can refund the others.
 3. Both `elementsd` and Esplora agree on that output.
 4. `LOCK_HEIGHT − tip ≥ 210`.
 5. Solana and Liquid both healthy, per protocol section 7.5.

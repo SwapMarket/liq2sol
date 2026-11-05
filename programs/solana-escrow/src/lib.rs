@@ -3,7 +3,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::get_associated_token_address;
 use anchor_spl::token::{self, CloseAccount, Mint, Token, TokenAccount, Transfer};
-use solana_sha256_hasher::hash;
+use solana_secp256k1_recover::secp256k1_recover;
 use solana_sysvar::last_restart_slot::LastRestartSlot;
 
 pub mod state;
@@ -31,8 +31,8 @@ pub enum EscrowError {
     DeadlinePassed,
     #[msg("Recipient must differ from initiator")]
     SelfSwap,
-    #[msg("Preimage does not match the payment hash")]
-    WrongPreimage,
+    #[msg("The revealed value does not match the lock point")]
+    WrongSecret,
     #[msg("The claim window is closed")]
     ClaimClosed,
     #[msg("The refund is not open yet")]
@@ -51,6 +51,24 @@ pub enum EscrowError {
     ZeroWindow,
     #[msg("This lock is over the vault's window cap")]
     OverWindowCap,
+}
+
+/// The x coordinate of the secp256k1 generator, as `r` in the recovery below.
+const GX: [u8; 32] = [
+    0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce, 0x87, 0x0b, 0x07,
+    0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59, 0xf2, 0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98,
+];
+
+/// Whether `s` reveals the secret behind this point, meaning `s = t * Gx` where `t * G = point`.
+///
+/// Recovery computes `r^-1 * (s * R - z * G)`. With `r = Gx`, recovery id 0 (so `R = G`, whose y is even) and `z = 0`, that
+/// is `(s / Gx) * G = t * G`. So the syscall checks the secret for us, with no big-number arithmetic here. Anyone can then
+/// compute `t = s / Gx mod n` off-chain. A zero `s`, or one out of range, fails to recover.
+fn reveals_point(s: &[u8; 32], point: &[u8; 64]) -> bool {
+    let mut signature = [0u8; 64];
+    signature[..32].copy_from_slice(&GX);
+    signature[32..].copy_from_slice(s);
+    matches!(secp256k1_recover(&[0u8; 32], 0, &signature), Ok(key) if key.to_bytes() == *point)
 }
 
 fn last_restart_slot(escrow: &Escrow) -> Result<u64> {
@@ -72,8 +90,8 @@ fn settle<'info>(
     state: EscrowState,
     slot: u64,
 ) -> Result<()> {
-    let (initiator, hash_seed, bump) = (escrow.initiator, escrow.payment_hash, escrow.bump);
-    let seeds: &[&[u8]] = &[ESCROW_SEED, initiator.as_ref(), hash_seed.as_ref(), &[bump]];
+    let (initiator, lock_point, bump) = (escrow.initiator, escrow.lock_point, escrow.bump);
+    let seeds: &[&[u8]] = &[ESCROW_SEED, initiator.as_ref(), &lock_point[..32], &[bump]];
     let signer: &[&[&[u8]]] = &[seeds];
     token::transfer(
         CpiContext::new_with_signer(
@@ -107,7 +125,7 @@ fn init_escrow(
     initiator: Pubkey,
     refund_token: Pubkey,
     rent_payer: Pubkey,
-    payment_hash: [u8; 32],
+    lock_point: [u8; 64],
     recipient: Pubkey,
     amount: u64,
     deadline_slot: u64,
@@ -124,13 +142,13 @@ fn init_escrow(
         refund_token,
         rent_payer,
         amount,
-        payment_hash,
+        lock_point,
         created_slot: slot,
         deadline_slot,
         close_on_restart,
         extended: false,
         state: EscrowState::Open,
-        preimage: [0; 32],
+        revealed: [0; 32],
         settled_slot: 0,
         bump,
     };
@@ -144,7 +162,7 @@ pub mod solana_escrow {
     /// Lock funds from a wallet.
     pub fn lock(
         ctx: Context<Lock>,
-        payment_hash: [u8; 32],
+        lock_point: [u8; 64],
         recipient: Pubkey,
         amount: u64,
         deadline_slot: u64,
@@ -156,7 +174,7 @@ pub mod solana_escrow {
             initiator,
             get_associated_token_address(&initiator, &USDT_MINT),
             initiator,
-            payment_hash,
+            lock_point,
             recipient,
             amount,
             deadline_slot,
@@ -177,8 +195,8 @@ pub mod solana_escrow {
         )
     }
 
-    /// Pay the recipient. Anyone holding the preimage may call this.
-    pub fn claim(ctx: Context<Claim>, preimage: [u8; 32]) -> Result<()> {
+    /// Pay the recipient. Anyone holding `s = t * Gx mod n` for this escrow's point may call this.
+    pub fn claim(ctx: Context<Claim>, revealed: [u8; 32]) -> Result<()> {
         let slot = Clock::get()?.slot;
         let escrow = &mut ctx.accounts.escrow;
         require!(escrow.state == EscrowState::Open, EscrowError::NotOpen);
@@ -187,10 +205,10 @@ pub mod solana_escrow {
             EscrowError::ClaimClosed
         );
         require!(
-            hash(&preimage).to_bytes() == escrow.payment_hash,
-            EscrowError::WrongPreimage
+            reveals_point(&revealed, &escrow.lock_point),
+            EscrowError::WrongSecret
         );
-        escrow.preimage = preimage;
+        escrow.revealed = revealed;
         settle(
             escrow,
             &ctx.accounts.vault,
@@ -340,7 +358,7 @@ pub mod solana_escrow {
     /// Lock vault funds, within the cap. The escrow's initiator is the vault, so refunds return to it.
     pub fn lock_from_vault(
         ctx: Context<LockFromVault>,
-        payment_hash: [u8; 32],
+        lock_point: [u8; 64],
         recipient: Pubkey,
         amount: u64,
         deadline_slot: u64,
@@ -360,7 +378,7 @@ pub mod solana_escrow {
             vault_key,
             ctx.accounts.vault_token.key(),
             ctx.accounts.operator.key(),
-            payment_hash,
+            lock_point,
             recipient,
             amount,
             deadline_slot,
@@ -390,7 +408,7 @@ pub mod solana_escrow {
 }
 
 #[derive(Accounts)]
-#[instruction(payment_hash: [u8; 32])]
+#[instruction(lock_point: [u8; 64])]
 pub struct Lock<'info> {
     #[account(mut)]
     pub initiator: Signer<'info>,
@@ -398,7 +416,7 @@ pub struct Lock<'info> {
         init,
         payer = initiator,
         space = 8 + Escrow::INIT_SPACE,
-        seeds = [ESCROW_SEED, initiator.key().as_ref(), payment_hash.as_ref()],
+        seeds = [ESCROW_SEED, initiator.key().as_ref(), &lock_point[..32]],
         bump
     )]
     pub escrow: Account<'info, Escrow>,
@@ -549,7 +567,7 @@ pub struct VaultSetOperator<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(payment_hash: [u8; 32])]
+#[instruction(lock_point: [u8; 64])]
 pub struct LockFromVault<'info> {
     #[account(mut)]
     pub operator: Signer<'info>,
@@ -566,7 +584,7 @@ pub struct LockFromVault<'info> {
         init,
         payer = operator,
         space = 8 + Escrow::INIT_SPACE,
-        seeds = [ESCROW_SEED, maker_vault.key().as_ref(), payment_hash.as_ref()],
+        seeds = [ESCROW_SEED, maker_vault.key().as_ref(), &lock_point[..32]],
         bump
     )]
     pub escrow: Account<'info, Escrow>,

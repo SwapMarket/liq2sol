@@ -4,7 +4,7 @@ use anchor_lang::prelude::*;
 
 /// Largest single `extend`: about 7 days at 213 ms per slot.
 pub const MAX_EXTENSION_SLOTS: u64 = 3_000_000;
-/// After settlement plus this, anyone may close an escrow. Until then the preimage stays readable.
+/// After settlement plus this, anyone may close an escrow. Until then the revealed value stays readable.
 pub const RETENTION_SLOTS: u64 = 3_000_000;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
@@ -27,7 +27,8 @@ pub struct Escrow {
     /// Receives the rent when accounts close, and may close early.
     pub rent_payer: Pubkey,
     pub amount: u64,
-    pub payment_hash: [u8; 32],
+    /// The point `T` this escrow locks to, as x then y. The first half also seeds the PDA.
+    pub lock_point: [u8; 64],
     pub created_slot: u64,
     /// Claim closes and refund opens at this slot.
     pub deadline_slot: u64,
@@ -35,8 +36,9 @@ pub struct Escrow {
     pub close_on_restart: bool,
     pub extended: bool,
     pub state: EscrowState,
-    /// Set on claim, so a counterparty can read it from the account rather than from transaction history.
-    pub preimage: [u8; 32],
+    /// `s = t * Gx mod n`, set on claim. A counterparty reads it from the account, not from transaction history, and
+    /// computes `t` from it.
+    pub revealed: [u8; 32],
     pub settled_slot: u64,
     pub bump: u8,
 }
@@ -112,13 +114,13 @@ mod tests {
             refund_token: Pubkey::default(),
             rent_payer: Pubkey::default(),
             amount: 1,
-            payment_hash: [0; 32],
+            lock_point: [0; 64],
             created_slot: 100,
             deadline_slot: 200,
             close_on_restart,
             extended: false,
             state,
-            preimage: [0; 32],
+            revealed: [0; 32],
             settled_slot: 150,
             bump: 0,
         }

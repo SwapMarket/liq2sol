@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["contracts/liquid", "contracts/liquid-wasm"]
+members = ["contracts/liquid", "contracts/liquid-wasm", "contracts/swapkey", "contracts/swapkey-wasm"]

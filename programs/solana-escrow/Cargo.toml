@@ -25,7 +25,7 @@ custom-panic = []
 [dependencies]
 anchor-lang = "=1.2.2"
 anchor-spl = "=1.2.2"
-solana-sha256-hasher = { version = "3.1", features = ["sha2"] }
+solana-secp256k1-recover = "3"
 solana-sysvar = "3.1"
 
 [dev-dependencies]

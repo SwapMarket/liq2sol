@@ -1,0 +1,18 @@
+[package]
+name = "liq2sol-swapkey-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Browser build of the confidential Liquid leg, with a stage 1 proof"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+liq2sol-swapkey = { path = "../swapkey" }
+simplicityhl = "=0.9.0"
+wasm-bindgen = "0.2"
+rand = "0.8"
+# Browsers get randomness from crypto.getRandomValues, through this feature.
+getrandom = { version = "0.2", features = ["js"] }

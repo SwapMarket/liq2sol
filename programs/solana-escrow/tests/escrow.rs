@@ -23,12 +23,45 @@ const AMOUNT: u64 = 100_000_000;
 const START_BALANCE: u64 = 1_000_000_000;
 const START_SLOT: u64 = 1_000;
 const DEADLINE: u64 = 2_000;
-/// The shared vector from docs/contracts.md section 3.
-const PREIMAGE: [u8; 32] = [0; 32];
-const HASH: [u8; 32] = [
-    0x66, 0x68, 0x7a, 0xad, 0xf8, 0x62, 0xbd, 0x77, 0x6c, 0x8f, 0xc1, 0x8b, 0x8e, 0x9f, 0x8e, 0x20,
-    0x08, 0x97, 0x14, 0x85, 0x6e, 0xe2, 0x33, 0xb3, 0x90, 0x2a, 0x59, 0x1d, 0x0d, 0x5f, 0x29, 0x25,
-];
+const fn nibble(c: u8) -> u8 {
+    if c >= b'a' {
+        c - b'a' + 10
+    } else {
+        c - b'0'
+    }
+}
+
+const fn hex64(s: &str) -> [u8; 64] {
+    let b = s.as_bytes();
+    let mut out = [0u8; 64];
+    let mut i = 0;
+    while i < 64 {
+        out[i] = nibble(b[i * 2]) * 16 + nibble(b[i * 2 + 1]);
+        i += 1;
+    }
+    out
+}
+
+const fn hex32(s: &str) -> [u8; 32] {
+    let b = s.as_bytes();
+    let mut out = [0u8; 32];
+    let mut i = 0;
+    while i < 32 {
+        out[i] = nibble(b[i * 2]) * 16 + nibble(b[i * 2 + 1]);
+        i += 1;
+    }
+    out
+}
+
+// Test vectors computed independently of the program, by a small script using only the curve's definition.
+// t = 0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20
+const POINT_A: [u8; 64] = hex64("84bf7562262bbd6940085748f3be6afa52ae317155181ece31b66351ccffa4b08cc43d63b2859d469fee15f31c9edb5324266e6fd0407e87382d60fc4511acd8");
+const S_A: [u8; 32] = hex32("4ce28f147e857ec4476456049bb053c134968e79e649f3a90e935310a8533273");
+// t = fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+const POINT_B: [u8; 64] = hex64("88e2ddeb04657dbd0edadf9c1f98da3b3895faa1f00527934dd35d17542ffe9b1e7640d7737e24e36d208effb77e86affe670a9a497aa7fb52bf4e687a17fff4");
+const S_B: [u8; 32] = hex32("4c0b29f33d12e45ab6a60bf684540b7647c891483c9464672a83684d8fa02caf");
+const PREIMAGE: [u8; 32] = S_A;
+const HASH: [u8; 64] = POINT_A;
 
 const TOKEN_FROZEN: u32 = 17;
 const ANCHOR_HAS_ONE: u32 = 2001;
@@ -176,7 +209,7 @@ impl Fx {
     /// A short-leg style lock by the default initiator.
     fn lock_with(
         &mut self,
-        hash: [u8; 32],
+        hash: [u8; 64],
         recipient: Pubkey,
         amount: u64,
         deadline: u64,
@@ -272,9 +305,9 @@ fn ata(owner: &Pubkey) -> Pubkey {
     get_associated_token_address(owner, &USDT_MINT)
 }
 
-fn escrow_pda(initiator: &Pubkey, hash: &[u8; 32]) -> Pubkey {
+fn escrow_pda(initiator: &Pubkey, hash: &[u8; 64]) -> Pubkey {
     Pubkey::find_program_address(
-        &[ESCROW_SEED, initiator.as_ref(), hash.as_ref()],
+        &[ESCROW_SEED, initiator.as_ref(), &hash[..32]],
         &solana_escrow::id(),
     )
     .0
@@ -286,7 +319,7 @@ fn vault_pda(escrow: &Pubkey) -> Pubkey {
 
 fn lock_ix(
     initiator: &Keypair,
-    payment_hash: [u8; 32],
+    payment_hash: [u8; 64],
     recipient: Pubkey,
     amount: u64,
     deadline_slot: u64,
@@ -304,7 +337,7 @@ fn lock_ix(
     }
     .to_account_metas(None);
     let data = solana_escrow::instruction::Lock {
-        payment_hash,
+        lock_point: payment_hash,
         recipient,
         amount,
         deadline_slot,
@@ -328,7 +361,7 @@ fn claim_ix(
         token_program: anchor_spl::token::ID,
     }
     .to_account_metas(None);
-    let data = solana_escrow::instruction::Claim { preimage }.data();
+    let data = solana_escrow::instruction::Claim { revealed: preimage }.data();
     Instruction::new_with_bytes(solana_escrow::id(), &data, accounts)
 }
 
@@ -462,7 +495,7 @@ fn third_party_claim_pays_the_recipient_and_keeps_the_preimage_readable() {
     assert!(!fx.exists(vault_pda(&escrow)), "vault closed");
     let e = fx.escrow(escrow);
     assert_eq!(e.state, EscrowState::Claimed);
-    assert_eq!(e.preimage, PREIMAGE);
+    assert_eq!(e.revealed, PREIMAGE);
     assert_eq!(e.settled_slot, START_SLOT);
     assert!(
         fx.svm.get_account(&fx.initiator.pubkey()).unwrap().lamports > initiator_lamports,
@@ -477,7 +510,7 @@ fn wrong_preimage_is_rejected() {
     let payer = fx.other.insecure_clone();
     assert_fails(
         fx.claim_as(&payer, escrow, [1; 32]),
-        code(EscrowError::WrongPreimage),
+        code(EscrowError::WrongSecret),
     );
 }
 
@@ -497,7 +530,7 @@ fn short_preimage_is_rejected_and_trailing_bytes_cannot_change_what_is_stored() 
     let mut long = base;
     long.data.push(0xff);
     fx.send(long, &[&payer]).unwrap();
-    assert_eq!(fx.escrow(escrow).preimage, PREIMAGE);
+    assert_eq!(fx.escrow(escrow).revealed, PREIMAGE);
 }
 
 #[test]
@@ -609,7 +642,7 @@ fn refund_boundary_at_the_deadline_and_anyone_can_send_it() {
     assert_eq!(fx.balance(ata(&fx.initiator.pubkey())), START_BALANCE);
     let e = fx.escrow(escrow);
     assert_eq!(e.state, EscrowState::Refunded);
-    assert_eq!(e.preimage, [0; 32]);
+    assert_eq!(e.revealed, [0; 32]);
     assert_eq!(e.settled_slot, DEADLINE);
 }
 
@@ -672,7 +705,7 @@ fn frozen_accounts_fail_cleanly_and_work_after_a_thaw() {
     assert_fails(fx.claim(escrow), TOKEN_FROZEN);
     assert_eq!(fx.escrow(escrow).state, EscrowState::Open);
     assert_eq!(
-        fx.escrow(escrow).preimage,
+        fx.escrow(escrow).revealed,
         [0; 32],
         "a failed claim leaves no state"
     );
@@ -789,7 +822,7 @@ fn close_rules() {
         code(EscrowError::CloseNotAllowed),
     );
     assert_eq!(
-        fx.escrow(escrow).preimage,
+        fx.escrow(escrow).revealed,
         PREIMAGE,
         "still readable during retention"
     );
@@ -882,7 +915,7 @@ fn vault_fx() -> VaultFx {
 }
 
 impl VaultFx {
-    fn lock(&mut self, signer: &Keypair, hash: [u8; 32], amount: u64) -> (Pubkey, TxResult) {
+    fn lock(&mut self, signer: &Keypair, hash: [u8; 64], amount: u64) -> (Pubkey, TxResult) {
         let escrow = escrow_pda(&self.maker_vault, &hash);
         let accounts = solana_escrow::accounts::LockFromVault {
             operator: signer.pubkey(),
@@ -896,7 +929,7 @@ impl VaultFx {
         }
         .to_account_metas(None);
         let data = solana_escrow::instruction::LockFromVault {
-            payment_hash: hash,
+            lock_point: hash,
             recipient: self.fx.recipient.pubkey(),
             amount,
             deadline_slot: DEADLINE,
@@ -974,10 +1007,10 @@ fn vault_lock_claim_and_refund_flow() {
 fn window_cap_limits_a_stolen_hot_key() {
     let mut v = vault_fx();
     let operator = v.operator.insecure_clone();
-    v.lock(&operator, [1; 32], AMOUNT).1.unwrap();
-    v.lock(&operator, [2; 32], AMOUNT).1.unwrap();
+    v.lock(&operator, [1; 64], AMOUNT).1.unwrap();
+    v.lock(&operator, [2; 64], AMOUNT).1.unwrap();
     assert_fails(
-        v.lock(&operator, [3; 32], 1).1,
+        v.lock(&operator, [3; 64], 1).1,
         code(EscrowError::OverWindowCap),
     );
     assert_eq!(v.fx.balance(v.vault_token), START_BALANCE - CAP);
@@ -985,9 +1018,9 @@ fn window_cap_limits_a_stolen_hot_key() {
     assert_eq!(used.window_used, CAP);
 
     v.fx.warp(START_SLOT + WINDOW);
-    v.lock(&operator, [3; 32], AMOUNT).1.unwrap();
+    v.lock(&operator, [3; 64], AMOUNT).1.unwrap();
     assert_fails(
-        v.lock(&operator, [4; 32], AMOUNT + 1).1,
+        v.lock(&operator, [4; 64], AMOUNT + 1).1,
         code(EscrowError::OverWindowCap),
     );
 }
@@ -1006,15 +1039,15 @@ fn hot_key_cannot_withdraw_or_rotate_and_old_key_stops_working() {
     // The vault's address derives from the owner, so a wrong signer fails on the seeds.
     assert_fails(v.withdraw(&operator, thief_token, 1), ANCHOR_SEEDS);
     assert_fails(v.set_operator(&operator, operator.pubkey()), ANCHOR_SEEDS);
-    assert_fails(v.lock(&stranger, [1; 32], 1).1, ANCHOR_HAS_ONE);
+    assert_fails(v.lock(&stranger, [1; 64], 1).1, ANCHOR_HAS_ONE);
 
     let new_operator = Keypair::new();
     v.fx.svm
         .airdrop(&new_operator.pubkey(), 10_000_000_000)
         .unwrap();
     v.set_operator(&owner, new_operator.pubkey()).unwrap();
-    assert_fails(v.lock(&operator, [1; 32], 1).1, ANCHOR_HAS_ONE);
-    v.lock(&new_operator, [1; 32], 1).1.unwrap();
+    assert_fails(v.lock(&operator, [1; 64], 1).1, ANCHOR_HAS_ONE);
+    v.lock(&new_operator, [1; 64], 1).1.unwrap();
 
     let owner_token = ata(&owner.pubkey());
     v.fx.set_token(owner_token, owner.pubkey(), 0, false);
@@ -1127,7 +1160,7 @@ fn invariants_hold_under_random_operations() {
                 EscrowState::Open => assert_eq!(vault_balance, AMOUNT, "S1, seed {seed}"),
                 EscrowState::Claimed => {
                     assert_eq!(fx.balance(r), AMOUNT, "seed {seed}");
-                    assert_eq!(after.preimage, PREIMAGE, "S6, seed {seed}");
+                    assert_eq!(after.revealed, PREIMAGE, "S6, seed {seed}");
                     assert!(!fx.exists(vault));
                 }
                 EscrowState::Refunded => {
@@ -1203,26 +1236,108 @@ fn wallet_refund_only_goes_to_the_canonical_account() {
     fx.refund(escrow).unwrap();
 }
 
-/// The maker reads this field to claim on Liquid. The shared vector is all zeros, the same as an empty field, so this
-/// needs a preimage that can't be mistaken for one.
+/// The counterparty computes the secret from this field, so it must be stored exactly. Both vectors are checked, with values
+/// that aren't all zeros, so a missing write can't pass.
 #[test]
-fn claim_stores_the_exact_preimage() {
-    let mut fx = Fx::new();
-    let mut preimage = [0u8; 32];
-    for (i, b) in preimage.iter_mut().enumerate() {
-        *b = i as u8 + 1;
+fn claim_stores_the_exact_revealed_value() {
+    for (point, s) in [(POINT_A, S_A), (POINT_B, S_B)] {
+        let mut fx = Fx::new();
+        let recipient = fx.recipient.pubkey();
+        fx.lock_with(point, recipient, AMOUNT, DEADLINE, true)
+            .unwrap();
+        let escrow = escrow_pda(&fx.initiator.pubkey(), &point);
+        assert_eq!(
+            fx.escrow(escrow).revealed,
+            [0; 32],
+            "nothing to read before the claim"
+        );
+        let payer = fx.other.insecure_clone();
+        fx.claim_as(&payer, escrow, s).unwrap();
+        assert_eq!(fx.escrow(escrow).revealed, s);
+        assert_eq!(fx.balance(ata(&recipient)), AMOUNT);
     }
-    let hash = solana_sha256_hasher::hash(&preimage).to_bytes();
-    let recipient = fx.recipient.pubkey();
-    fx.lock_with(hash, recipient, AMOUNT, DEADLINE, true)
-        .unwrap();
-    let escrow = escrow_pda(&fx.initiator.pubkey(), &hash);
-    assert_eq!(
-        fx.escrow(escrow).preimage,
-        [0; 32],
-        "nothing to read before the claim"
-    );
+}
+
+/// `n - a`, big-endian: how a scalar or a y coordinate is negated.
+fn negate(modulus: &[u8; 32], a: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let mut borrow = 0i16;
+    for i in (0..32).rev() {
+        let d = i16::from(modulus[i]) - i16::from(a[i]) - borrow;
+        borrow = i16::from(d < 0);
+        out[i] = d.rem_euclid(256) as u8;
+    }
+    out
+}
+
+const N: [u8; 32] = hex32("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+const P: [u8; 32] = hex32("fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
+
+/// The point check itself, through the real syscall.
+#[test]
+fn only_the_right_value_opens_the_point() {
+    const N_MINUS_1: [u8; 32] =
+        hex32("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140");
+    let wrong: [([u8; 32], &str); 5] = [
+        ([0; 32], "zero"),
+        (N, "the group order, out of range"),
+        ([0xff; 32], "above the group order"),
+        (S_B, "another point's value"),
+        (N_MINUS_1, "a valid scalar for another point"),
+    ];
+    for (s, what) in wrong {
+        let mut fx = Fx::new();
+        let escrow = fx.lock(true);
+        let payer = fx.other.insecure_clone();
+        assert_fails(
+            fx.claim_as(&payer, escrow, s),
+            code(EscrowError::WrongSecret),
+        );
+        assert_eq!(fx.escrow(escrow).state, EscrowState::Open, "{what}");
+    }
+}
+
+/// `-s` opens `-T` and not `T`. It also covers a high `s`, because one of `s` and `-s` is always high.
+#[test]
+fn the_sign_of_the_secret_matters() {
+    let negative_s = negate(&N, &S_A);
+    let mut negative_point = POINT_A;
+    negative_point[32..].copy_from_slice(&negate(&P, &POINT_A[32..]));
+
+    let mut fx = Fx::new();
+    let escrow = fx.lock(true);
     let payer = fx.other.insecure_clone();
-    fx.claim_as(&payer, escrow, preimage).unwrap();
-    assert_eq!(fx.escrow(escrow).preimage, preimage);
+    assert_fails(
+        fx.claim_as(&payer, escrow, negative_s),
+        code(EscrowError::WrongSecret),
+    );
+
+    for (point, s) in [(POINT_A, S_A), (negative_point, negative_s)] {
+        let mut fx = Fx::new();
+        let recipient = fx.recipient.pubkey();
+        fx.lock_with(point, recipient, AMOUNT, DEADLINE, true)
+            .unwrap();
+        let escrow = escrow_pda(&fx.initiator.pubkey(), &point);
+        let payer = fx.other.insecure_clone();
+        fx.claim_as(&payer, escrow, s).unwrap();
+    }
+}
+
+/// An escrow locked to something that isn't a point can never be claimed, and still refunds.
+#[test]
+fn a_garbage_point_can_only_refund() {
+    let mut fx = Fx::new();
+    let recipient = fx.recipient.pubkey();
+    let garbage = [7u8; 64];
+    fx.lock_with(garbage, recipient, AMOUNT, DEADLINE, false)
+        .unwrap();
+    let escrow = escrow_pda(&fx.initiator.pubkey(), &garbage);
+    let payer = fx.other.insecure_clone();
+    assert_fails(
+        fx.claim_as(&payer, escrow, S_A),
+        code(EscrowError::WrongSecret),
+    );
+    fx.warp(DEADLINE);
+    fx.refund(escrow).unwrap();
+    assert_eq!(fx.balance(ata(&fx.initiator.pubkey())), START_BALANCE);
 }

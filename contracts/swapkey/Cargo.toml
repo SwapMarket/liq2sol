@@ -1,0 +1,14 @@
+[package]
+name = "liq2sol-swapkey"
+version = "0.1.0"
+edition = "2021"
+description = "liq2sol confidential Liquid leg: a 2-of-2 taproot output claimed by adapter signature, refunded by a timelocked Simplicity leaf"
+license = "MIT"
+publish = false
+
+[dependencies]
+simplicityhl = "=0.9.0"
+serde_json = "1"
+# Pure Rust, so it builds for the browser without a C toolchain. Its adaptor code has no audit we could find.
+musig2 = { version = "=0.4.1", default-features = false, features = ["k256", "rand"] }
+rand = "0.8"

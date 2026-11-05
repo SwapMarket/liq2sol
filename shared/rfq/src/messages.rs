@@ -1,0 +1,163 @@
+//! The wire format. Unknown fields are refused, so a message means exactly what both sides think it means.
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+pub const VERSION: u32 = 1;
+pub const OFFER_KIND: u16 = 38401;
+pub const RUMOR_KIND: u16 = 28401;
+pub const WRAP_KIND: u16 = 21059;
+pub const SEAL_KIND: u16 = 13;
+pub const TOPIC: &str = "liq2sol";
+/// The largest wrapped event either side accepts. Real messages are far smaller.
+pub const MAX_EVENT_BYTES: usize = 32 * 1024;
+
+/// A base-unit amount, as a decimal string so it survives JSON parsers that lose precision on large numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Units(pub u64);
+
+impl Serialize for Units {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Units {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        // Digits only: no sign, no spaces, no exponent, and no leading zeros to smuggle in a second spelling.
+        let canonical =
+            !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) && (text == "0" || !text.starts_with('0'));
+        if !canonical {
+            return Err(serde::de::Error::custom("amounts are plain decimal strings"));
+        }
+        text.parse().map(Units).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Direction {
+    L2S,
+    S2L,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmountSide {
+    Send,
+    Receive,
+}
+
+/// The public offer, in a kind 38401 event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Offer {
+    pub v: u32,
+    pub network: String,
+    pub program_id: String,
+    pub template_version: u32,
+    pub directions: Vec<Direction>,
+    pub min_sol_units: Units,
+    pub max_sol_units: Units,
+    pub l2s_bps: u32,
+    pub s2l_bps: u32,
+    pub fee_coin_sats: u64,
+    pub confirmations: u32,
+    pub relays: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Request {
+    pub direction: Direction,
+    pub amount_side: AmountSide,
+    pub amount: Units,
+}
+
+/// `send` and `receive` are in SOL-USDT base units. Liquid-side amounts are those times 100, exactly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Quote {
+    pub send: Units,
+    pub receive: Units,
+    pub quote_expiry: u64,
+    pub taker_lock_window: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Accept {
+    /// The rumor id of the quote being accepted.
+    pub quote_event: String,
+    pub payment_hash: String,
+    pub taker_liquid_pk: String,
+    pub taker_solana: String,
+    /// S→L: where the HTLC pays the taker.
+    pub taker_liquid_script: Option<String>,
+    /// S→L: where the maker sends the L-BTC fee coin.
+    pub taker_fee_script: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MakerTerms {
+    /// The rumor id of the accept this answers.
+    pub accept_event: String,
+    pub h_accept: u32,
+    pub lock_height: u32,
+    pub maker_liquid_pk: String,
+    /// L→S: where the HTLC pays the maker.
+    pub maker_liquid_script: Option<String>,
+    pub maker_solana: String,
+    /// L→S: the seed of the maker's escrow, which is its vault or its own key.
+    pub maker_initiator: Option<String>,
+    pub usdt_asset: String,
+    pub program_id: String,
+    pub template_version: u32,
+    pub liquid_amount: Units,
+    pub solana_amount: Units,
+    pub min_deadline_slots: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reject {
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "body", rename_all = "kebab-case")]
+pub enum Body {
+    RfqRequest(Request),
+    RfqQuote(Quote),
+    RfqAccept(Accept),
+    RfqTerms(MakerTerms),
+    RfqReject(Reject),
+}
+
+/// Every private message. `id` is 32 random bytes in hex, set by the taker and repeated throughout a negotiation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Envelope {
+    pub v: u32,
+    pub id: String,
+    pub network: String,
+    pub sent_at: u64,
+    #[serde(flatten)]
+    pub body: Body,
+}
+
+/// Decode lowercase hex of an exact length. Other spellings are refused, so one value has one form.
+pub fn hex32(s: &str) -> Option<[u8; 32]> {
+    let bytes = hex_any(s)?;
+    bytes.try_into().ok()
+}
+
+pub fn hex_any(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return None;
+    }
+    (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()).collect()
+}
+
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}

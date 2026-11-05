@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod rfq;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -43,6 +45,8 @@ pub struct Config {
     /// Don't repeat the same action for one swap sooner than this.
     pub retry_secs: u64,
     pub regtest_assets: Option<(String, String)>,
+    /// Quotes over Nostr. Without this, swaps only enter through `accept`.
+    pub rfq: Option<rfq::RfqConfig>,
 }
 
 /// The full terms of one swap.
@@ -492,6 +496,10 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             }
         }
     };
+    if let Some(rfq_cfg) = cfg.rfq.clone() {
+        let pubkey = rfq::start(rfq_cfg, &cfg)?;
+        println!("maker answering quotes as {}", pubkey.to_hex());
+    }
     println!("maker running");
     loop {
         if let Err(e) = maker.tick() {

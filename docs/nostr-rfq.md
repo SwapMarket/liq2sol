@@ -89,7 +89,8 @@ exact.
   "payment_hash": "<hex32>",
   "taker_liquid_pk": "<hex32, x-only, ephemeral>",
   "taker_solana": "<base58>",
-  "taker_liquid_script": "<hex, S2L only: scriptPubKey to receive>"
+  "taker_liquid_script": "<hex, S2L only: scriptPubKey to receive>",
+  "taker_fee_script": "<hex, S2L only: scriptPubKey for the maker's L-BTC fee coin>"
 }
 ```
 
@@ -138,8 +139,8 @@ NIP-59 wraps a signed **seal** (kind 13) around an unsigned rumor, which gives d
 authenticate the sender to the recipient, and the client must check that the seal's pubkey equals the rumor's pubkey,
 and equals the pinned maker key. For the reputation evidence below, the taker keeps the decrypted seal.
 
-The exact verification order and wrap rules must be tested against a NIP-59 library before implementation. **Support
-for kind `21059` across public relays is UNVERIFIED.** If relay support is poor, the fallback is the regular gift wrap
+Verified: `nostr-tools` 2.25.5 opens our wrappers and checks every layer. **Support for kind `21059` across public relays
+is UNVERIFIED.** If relay support is poor, the fallback is the regular gift wrap
 (kind `1059`), with an `expiration` tag.
 
 ## 5. Rate limits and reputation

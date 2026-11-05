@@ -10,7 +10,9 @@ publish = false
 liq2sol-chain = { path = "../../shared/chain" }
 liq2sol-htlc = { path = "../../contracts/liquid" }
 liq2sol-maker-core = { path = "../core" }
+liq2sol-rfq = { path = "../../shared/rfq" }
 liq2sol-signer = { path = "../signer" }
+nostr = { version = "=0.45.7", features = ["std", "os-rng", "nip44"] }
 solana-escrow = { path = "../../programs/solana-escrow", features = ["no-entrypoint"] }
 simplicityhl = "=0.9.0"
 anchor-lang = "=1.2.2"
@@ -18,3 +20,6 @@ solana-sdk = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
+
+[dev-dependencies]
+serde_json = "1"

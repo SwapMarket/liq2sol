@@ -4,7 +4,8 @@
 //!   ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli SOLANA_RPC=https://api.devnet.solana.com \
 //!     cargo test -p liq2sol-maker --test e2e -- --ignored --nocapture
 //!
-//! Needs `cli/.keys` from `liq2sol-cli setup`, holding SOL and stand-in tokens. `SCENARIO` runs a subset.
+//! Run `cargo build` first, because this starts the signer binary from the same workspace. Needs `cli/.keys` from
+//! `liq2sol-cli setup`, holding SOL and stand-in tokens. `SCENARIO` runs a subset.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -21,14 +22,22 @@ use liq2sol_chain::liquid::{
 };
 use liq2sol_chain::sol::{self, ata, escrow_pda, Sol, MAINNET_GENESIS};
 use liq2sol_htlc::{Htlc, HtlcParams};
+use liq2sol_maker::rfq::{load_keys, RfqConfig};
 use liq2sol_maker::{accept, Config, Details};
 use liq2sol_maker_core::engine::{Action, Config as EngineConfig, Direction, Outcome, State, Terms};
 use liq2sol_maker_core::hash_preimage;
 use liq2sol_maker_core::policy::Limits;
 use liq2sol_maker_core::store::Store;
+use liq2sol_rfq::messages::{self as msg, Accept, AmountSide, Body, Envelope, MakerTerms, Request, Units};
+use liq2sol_rfq::mock_relay::MockRelay;
+use liq2sol_rfq::relay::{Relay, RelayEvent};
+use liq2sol_rfq::rules::TakerRules;
+use liq2sol_rfq::taker::{find_offers, negotiate, Negotiated, TakerSide};
+use liq2sol_rfq::wrap;
 use liq2sol_signer::{
     l2s_params, s2l_params, Call, Client, Config as SignerConfig, L2sTerms, LiquidSource, Reply, S2lTerms,
 };
+use nostr::prelude::{Keys, Kind};
 use simplicityhl::elements::secp256k1_zkp::Keypair as LiquidKey;
 use simplicityhl::elements::{AddressParams, AssetId, BlockHash, Script, Transaction as LiquidTx};
 use solana_escrow::state::EscrowState;
@@ -37,6 +46,12 @@ use solana_sdk::signer::Signer as _;
 
 const SOL_AMOUNT: u64 = 10;
 const LIQ_AMOUNT: u64 = SOL_AMOUNT * 100;
+const NETWORK: &str = "regtest";
+const QUOTE_SECS: u64 = 4;
+const FLOOD_LIMIT: usize = 12;
+/// What the RFQ taker asks to send, at the 1% spread above.
+const RFQ_SEND: u64 = 100;
+const RFQ_RECEIVE: u64 = 99;
 type Res<T> = Result<T, String>;
 
 fn check(condition: bool, what: &str) -> Res<()> {
@@ -215,6 +230,8 @@ struct World {
     pages: PathBuf,
     _signer: Proc,
     fake_asset: AssetId,
+    relay: MockRelay,
+    maker_nostr: nostr::prelude::PublicKey,
 }
 
 impl World {
@@ -684,7 +701,7 @@ fn build_world(root: &Path) -> World {
     let operator = read_keypair_file(keys.join("solana.json")).unwrap();
     let vault_owner = Keypair::new();
     let mut transfer = vec![2, 0, 0, 0];
-    transfer.extend_from_slice(&50_000_000u64.to_le_bytes());
+    transfer.extend_from_slice(&20_000_000u64.to_le_bytes());
     let fund = solana_sdk::instruction::Instruction {
         program_id: anchor_lang::system_program::ID,
         accounts: vec![
@@ -700,7 +717,8 @@ fn build_world(root: &Path) -> World {
     let vault_token = sol::maker_vault_token_pda(&vault);
     let deposit = sol::vault_deposit_ix(&operator.pubkey(), &vault_owner.pubkey(), 20 * SOL_AMOUNT);
     sol.send(&[deposit], &operator, &[]).unwrap();
-    let private = root.join("private");
+    // Short and outside the build directory: a Unix socket path is limited to about 100 bytes.
+    let private = std::env::temp_dir().join(format!("l2s-{}", std::process::id()));
     std::fs::create_dir_all(&private).unwrap();
     std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
     let socket = private.join("signer.sock");
@@ -745,6 +763,7 @@ fn build_world(root: &Path) -> World {
 
     let pages = root.join("pages.log");
     let db = root.join("maker.db");
+    let relay = MockRelay::start();
     let cfg = Config {
         db: db.clone(),
         signer_socket: socket,
@@ -756,7 +775,27 @@ fn build_world(root: &Path) -> World {
         tick_millis: 1_000,
         retry_secs: 8,
         regtest_assets: assets,
+        rfq: Some(RfqConfig {
+            nostr_key: root.join("nostr.key"),
+            relays: vec![relay.url()],
+            network: NETWORK.into(),
+            min_sol_units: 1,
+            max_sol_units: 1_000,
+            l2s_bps: 100,
+            s2l_bps: 100,
+            quote_secs: QUOTE_SECS,
+            l2s_lock_blocks: 300,
+            s2l_lock_blocks: 80,
+            min_deadline_slots: 5_000,
+            offer_every_secs: 2,
+            offer_ttl_secs: 60,
+            max_requests_per_sender: FLOOD_LIMIT,
+            max_requests_per_window: 10_000,
+            window_secs: 300,
+            max_negotiations: 1_000,
+        }),
     };
+    let maker_nostr = load_keys(&root.join("nostr.key")).unwrap().public_key();
     let daemon_config = root.join("maker.json");
     std::fs::write(&daemon_config, serde_json::to_string(&cfg).unwrap()).unwrap();
 
@@ -792,10 +831,371 @@ fn build_world(root: &Path) -> World {
         pages,
         _signer: signer,
         fake_asset: AssetId::from_str(&fake).unwrap(),
+        relay,
+        maker_nostr,
     };
     world.start_daemon();
     let _ = lbtc();
     world
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+}
+
+fn taker_rules() -> TakerRules {
+    TakerRules {
+        network: NETWORK.into(),
+        program_id: solana_escrow::id().to_string(),
+        usdt_asset: usdt().to_string(),
+        template_version: 1,
+        l2s_min_blocks: 240,
+        l2s_max_blocks: 360,
+        s2l_min_blocks: 50,
+        s2l_max_blocks: 150,
+        max_spread_bps: 100,
+        max_deadline_slots: 20_000,
+    }
+}
+
+fn rfq_request(direction: msg::Direction) -> Request {
+    Request { direction, amount_side: AmountSide::Send, amount: Units(RFQ_SEND) }
+}
+
+fn pk(key: &LiquidKey) -> [u8; 32] {
+    key.x_only_public_key().0.serialize()
+}
+
+/// E1 over Nostr: L→S, where the taker derives the HTLC itself from the agreed terms, and only then pays it.
+fn rfq_l2s_swap(w: &mut World) -> Res<()> {
+    let me = Keys::generate();
+    let mut relay = Relay::connect(&w.relay.url(), Duration::from_millis(200))?;
+    let offers = find_offers(&mut relay, NETWORK, Duration::from_secs(5))?;
+    check(offers.iter().any(|(k, _)| *k == w.maker_nostr), "the taker found the maker's offer")?;
+
+    let preimage = random32()?;
+    let hash = hash_preimage(&preimage);
+    let refund_key = keypair_from(&random32()?)?;
+    let side = TakerSide {
+        payment_hash: hash,
+        taker_liquid_pk: pk(&refund_key),
+        taker_solana: w.taker_sol.pubkey().to_string(),
+        taker_liquid_script: None,
+        taker_fee_script: None,
+    };
+    let chain = w.chain.clone();
+    let tip = move || chain.tip();
+    let maker = w.maker_nostr;
+    let Negotiated { quote, terms } = negotiate(
+        &mut relay,
+        &me,
+        &maker,
+        &taker_rules(),
+        rfq_request(msg::Direction::L2S),
+        side,
+        tip,
+        Duration::from_secs(15),
+    )?;
+    check(quote.send.0 == RFQ_SEND && quote.receive.0 == RFQ_RECEIVE, "the quote carries the agreed spread")?;
+    check(matches!(w.state(&hash)?, State::WatchLock | State::LockedSolana { .. }), "the maker registered the swap")?;
+
+    let script =
+        Script::from(msg::hex_any(terms.maker_liquid_script.as_deref().ok_or("no script")?).ok_or("bad script")?);
+    let params = HtlcParams {
+        payment_hash: hash,
+        recipient_pk: msg::hex32(&terms.maker_liquid_pk).ok_or("bad key")?,
+        sender_pk: pk(&refund_key),
+        lock_height: terms.lock_height,
+        usdt_asset: liq2sol_htlc::asset_param(&usdt()),
+        amount: terms.liquid_amount.0,
+        recipient_script_hash: liq2sol_htlc::script_hash(&script),
+    };
+    check(terms.liquid_amount.0 == RFQ_SEND * 100, "the taker pays exactly what was quoted")?;
+    pay(
+        &w.chain,
+        &w.taker_wallet,
+        vec![txout(usdt(), terms.liquid_amount.0, htlc_address(&params).script_pubkey())],
+        w.genesis,
+    )?;
+    let initiator =
+        Pubkey::from_str(terms.maker_initiator.as_deref().ok_or("no initiator")?).map_err(|e| e.to_string())?;
+    let escrow_addr = escrow_pda(&initiator, &hash);
+    let e = w.wait_for("the maker to lock on Solana", 120, || w.sol.escrow(&escrow_addr))?;
+    check(
+        e.amount == RFQ_RECEIVE && e.recipient == w.taker_sol.pubkey(),
+        "the escrow pays the taker the quoted amount",
+    )?;
+    let before = w.tokens(&w.taker_sol.pubkey())?;
+    w.sol.claim(&w.taker_sol, &escrow_addr, &e, preimage)?;
+    check(w.tokens(&w.taker_sol.pubkey())? == before + RFQ_RECEIVE, "the taker was paid")?;
+    w.wait_state(&hash, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    Ok(())
+}
+
+/// E1 over Nostr: S→L.
+fn rfq_s2l_swap(w: &mut World) -> Res<()> {
+    let me = Keys::generate();
+    let mut relay = Relay::connect(&w.relay.url(), Duration::from_millis(200))?;
+    let preimage = random32()?;
+    let hash = hash_preimage(&preimage);
+    let (claim_key, fee_key) = (keypair_from(&random32()?)?, keypair_from(&random32()?)?);
+    let to = address_of(&w.taker_wallet).script_pubkey();
+    let side = TakerSide {
+        payment_hash: hash,
+        taker_liquid_pk: pk(&claim_key),
+        taker_solana: w.taker_sol.pubkey().to_string(),
+        taker_liquid_script: Some(to.to_bytes()),
+        taker_fee_script: Some(address_of(&fee_key).script_pubkey().to_bytes()),
+    };
+    let chain = w.chain.clone();
+    let maker = w.maker_nostr;
+    let Negotiated { terms, .. } = negotiate(
+        &mut relay,
+        &me,
+        &maker,
+        &taker_rules(),
+        rfq_request(msg::Direction::S2L),
+        side,
+        move || chain.tip(),
+        Duration::from_secs(15),
+    )?;
+    check(
+        terms.liquid_amount.0 == RFQ_RECEIVE * 100 && terms.solana_amount.0 == RFQ_SEND,
+        "the amounts match the quote",
+    )?;
+    let recipient = Pubkey::from_str(&terms.maker_solana).map_err(|e| e.to_string())?;
+    let deadline = w.sol.slot()? + terms.min_deadline_slots;
+    w.sol.lock(&w.taker_sol, hash, recipient, RFQ_SEND, deadline, false)?;
+
+    let params = HtlcParams {
+        payment_hash: hash,
+        recipient_pk: pk(&claim_key),
+        sender_pk: msg::hex32(&terms.maker_liquid_pk).ok_or("bad key")?,
+        lock_height: terms.lock_height,
+        usdt_asset: liq2sol_htlc::asset_param(&usdt()),
+        amount: terms.liquid_amount.0,
+        recipient_script_hash: liq2sol_htlc::script_hash(&to),
+    };
+    let amount = terms.liquid_amount.0;
+    let coin = w.wait_for("the maker to lock on Liquid", 120, || {
+        Ok(exact_coin(&w.chain.coins(&htlc_address(&params))?, usdt(), amount, w.chain.tip()?, 2))
+    })?;
+    let fee = w.chain.coins(&address_of(&fee_key))?.into_iter().next().ok_or("no fee coin")?;
+    let how = HtlcSpend::Claim { preimage, recipient: claim_key, to };
+    spend_htlc(&w.chain, &params, &coin, &fee, &fee_key, how, w.genesis)?;
+    w.wait_state(&hash, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    Ok(())
+}
+
+/// A taker speaking the wire protocol by hand, so it can break the rules.
+struct RawTaker {
+    keys: Keys,
+    relay: Relay,
+    maker: nostr::prelude::PublicKey,
+    id: String,
+}
+
+impl RawTaker {
+    fn new(w: &World) -> Res<Self> {
+        let keys = Keys::generate();
+        let mut relay = Relay::connect(&w.relay.url(), Duration::from_millis(200))?;
+        relay.subscribe("raw", &[Kind::from(msg::WRAP_KIND)], Some(&keys.public_key()), now_secs() - 2 * 86_400)?;
+        Ok(Self { keys, relay, maker: w.maker_nostr, id: msg::hex(&random32()?) })
+    }
+
+    fn send_at(&mut self, id: &str, network: &str, sent_at: u64, body: Body) -> Res<String> {
+        let envelope = Envelope { v: msg::VERSION, id: id.to_string(), network: network.into(), sent_at, body };
+        let (event, rumor_id) =
+            wrap::wrap(&self.keys, &self.maker, &envelope, now_secs()).map_err(|e| format!("{e:?}"))?;
+        self.relay.publish(&event)?;
+        Ok(rumor_id)
+    }
+
+    fn send(&mut self, body: Body) -> Res<String> {
+        let id = self.id.clone();
+        self.send_at(&id, NETWORK, now_secs(), body)
+    }
+
+    fn answer(&mut self, wait: Duration) -> Res<Option<wrap::Received>> {
+        let start = Instant::now();
+        while start.elapsed() < wait {
+            if let Some(RelayEvent::Event(e)) = self.relay.next_event()? {
+                if let Ok(got) = wrap::unwrap(&self.keys, &e) {
+                    return Ok(Some(got));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn quote(&mut self, wait: Duration) -> Res<(msg::Quote, String)> {
+        let got = self.answer(wait)?.ok_or("no quote")?;
+        match got.envelope.body {
+            Body::RfqQuote(q) => Ok((q, got.rumor_id)),
+            other => Err(format!("expected a quote, got {other:?}")),
+        }
+    }
+}
+
+fn accept_body(w: &World, quote_event: String, hash: [u8; 32]) -> Res<Body> {
+    Ok(Body::RfqAccept(Accept {
+        quote_event,
+        payment_hash: msg::hex(&hash),
+        taker_liquid_pk: msg::hex(&pk(&keypair_from(&random32()?)?)),
+        taker_solana: w.taker_sol.pubkey().to_string(),
+        taker_liquid_script: None,
+        taker_fee_script: None,
+    }))
+}
+
+const QUIET: Duration = Duration::from_secs(3);
+
+/// E6 and E7 against the real daemon: each of these is a message the maker must not act on.
+fn rfq_attacks(w: &mut World) -> Res<()> {
+    let request = || Body::RfqRequest(rfq_request(msg::Direction::L2S));
+    let known = |w: &World, hash: &[u8; 32]| w.store.state(hash).map(|s| s.is_some()).map_err(|e| e.to_string());
+
+    // Stale and wrong-network messages get no answer at all.
+    let mut t = RawTaker::new(w)?;
+    let id = t.id.clone();
+    t.send_at(&id, NETWORK, now_secs() - 600, request())?;
+    check(t.answer(QUIET)?.is_none(), "a stale request gets no answer")?;
+    t.send_at(&id, "testnet", now_secs(), request())?;
+    check(t.answer(QUIET)?.is_none(), "a request for another network gets no answer")?;
+
+    // A stranger can't accept someone else's quote.
+    let mut victim = RawTaker::new(w)?;
+    victim.send(request())?;
+    let (_, quote_id) = victim.quote(Duration::from_secs(10))?;
+    let mut mallory = RawTaker::new(w)?;
+    let hash = hash_preimage(&random32()?);
+    let stolen = accept_body(w, quote_id.clone(), hash)?;
+    let vid = victim.id.clone();
+    mallory.send_at(&vid, NETWORK, now_secs(), stolen)?;
+    check(mallory.answer(QUIET)?.is_none(), "a stranger accepting someone's quote gets no answer")?;
+    check(!known(w, &hash)?, "and no swap was registered")?;
+
+    // An accept naming the wrong quote is refused.
+    let hash = hash_preimage(&random32()?);
+    victim.send(accept_body(w, "not-the-quote".into(), hash)?)?;
+    check(victim.answer(QUIET)?.is_none(), "an accept naming the wrong quote gets no answer")?;
+    check(!known(w, &hash)?, "and no swap was registered")?;
+
+    // A quote can't be accepted after it expires.
+    let mut slow = RawTaker::new(w)?;
+    slow.send(request())?;
+    let (_, quote_id) = slow.quote(Duration::from_secs(10))?;
+    std::thread::sleep(Duration::from_secs(QUOTE_SECS + 2));
+    let hash = hash_preimage(&random32()?);
+    slow.send(accept_body(w, quote_id, hash)?)?;
+    check(slow.answer(QUIET)?.is_none(), "an expired quote can't be accepted")?;
+    check(!known(w, &hash)?, "and no swap was registered")?;
+
+    // The same accept delivered twice gets the same answer, and only one swap.
+    let mut twice = RawTaker::new(w)?;
+    twice.send(request())?;
+    let (_, quote_id) = twice.quote(Duration::from_secs(10))?;
+    let hash = hash_preimage(&random32()?);
+    let body = accept_body(w, quote_id, hash)?;
+    let rumor = twice.send(body)?;
+    let first = twice.answer(Duration::from_secs(10))?.ok_or("no terms")?;
+    let Body::RfqTerms(MakerTerms { accept_event, .. }) = &first.envelope.body else {
+        return Err("expected terms".into());
+    };
+    check(*accept_event == rumor, "the terms name this accept")?;
+    w.relay.replay_everything();
+    std::thread::sleep(QUIET);
+    let swaps = w.store.open_swaps().map_err(|e| e.to_string())?.iter().filter(|(t, _)| t.payment_hash == hash).count();
+    check(swaps == 1, "a relay replaying everything creates no second swap")?;
+
+    // A payment hash can never be reused: a new negotiation offering the same hash is declined.
+    let mut again = RawTaker::new(w)?;
+    again.send(request())?;
+    let (_, quote_id) = again.quote(Duration::from_secs(10))?;
+    again.send(accept_body(w, quote_id, hash)?)?;
+    let answer = again.answer(Duration::from_secs(10))?.ok_or("no answer")?;
+    check(matches!(answer.envelope.body, Body::RfqReject(_)), "a reused payment hash is declined")?;
+
+    // A taker's message types from a taker are ignored.
+    let mut odd = RawTaker::new(w)?;
+    odd.send(Body::RfqQuote(msg::Quote { send: Units(1), receive: Units(1), quote_expiry: 0, taker_lock_window: 0 }))?;
+    check(odd.answer(QUIET)?.is_none(), "a quote sent to the maker gets no answer")?;
+
+    // A flood from one key is cut off, and others are still served.
+    let mut flood = RawTaker::new(w)?;
+    let mut answered = 0;
+    for _ in 0..FLOOD_LIMIT + 10 {
+        flood.id = msg::hex(&random32()?);
+        flood.send(request())?;
+    }
+    while flood.answer(Duration::from_secs(2))?.is_some() {
+        answered += 1;
+    }
+    check(answered <= FLOOD_LIMIT, "a flood from one key is rate limited")?;
+    let mut other = RawTaker::new(w)?;
+    other.send(request())?;
+    check(other.quote(Duration::from_secs(10)).is_ok(), "and other takers are still served")?;
+
+    // A relay dropping everything costs time, and moves no funds.
+    w.relay.drop_all(true);
+    let me = Keys::generate();
+    let mut relay = Relay::connect(&w.relay.url(), Duration::from_millis(200))?;
+    let hash = hash_preimage(&random32()?);
+    let side = TakerSide {
+        payment_hash: hash,
+        taker_liquid_pk: pk(&keypair_from(&random32()?)?),
+        taker_solana: w.taker_sol.pubkey().to_string(),
+        taker_liquid_script: None,
+        taker_fee_script: None,
+    };
+    let chain = w.chain.clone();
+    let maker = w.maker_nostr;
+    let dropped = negotiate(
+        &mut relay,
+        &me,
+        &maker,
+        &taker_rules(),
+        rfq_request(msg::Direction::L2S),
+        side,
+        move || chain.tip(),
+        QUIET,
+    );
+    w.relay.drop_all(false);
+    check(dropped.is_err(), "the taker gives up cleanly when a relay drops everything")?;
+    check(!known(w, &hash)?, "and no swap exists")?;
+
+    // Forgery of the maker: a taker ignores answers from anyone but the maker it chose.
+    let me = Keys::generate();
+    let mut relay = Relay::connect(&w.relay.url(), Duration::from_millis(200))?;
+    relay.subscribe("forge", &[Kind::from(msg::WRAP_KIND)], Some(&me.public_key()), now_secs() - 2 * 86_400)?;
+    let forger = Keys::generate();
+    let fake = Envelope {
+        v: msg::VERSION,
+        id: msg::hex(&[1; 32]),
+        network: NETWORK.into(),
+        sent_at: now_secs(),
+        body: Body::RfqQuote(msg::Quote {
+            send: Units(RFQ_SEND),
+            receive: Units(RFQ_SEND),
+            quote_expiry: now_secs() + 60,
+            taker_lock_window: 30,
+        }),
+    };
+    let (event, _) = wrap::wrap(&forger, &me.public_key(), &fake, now_secs()).map_err(|e| format!("{e:?}"))?;
+    w.relay.inject(event);
+    let start = Instant::now();
+    let mut seen = None;
+    while start.elapsed() < QUIET && seen.is_none() {
+        if let Some(RelayEvent::Event(e)) = relay.next_event()? {
+            seen = wrap::unwrap(&me, &e).ok();
+        }
+    }
+    let got = seen.ok_or("the forged message never arrived")?;
+    check(
+        got.sender == forger.public_key() && got.sender != w.maker_nostr,
+        "a forged quote is attributed to its real author, so a taker can't mistake it",
+    )?;
+    Ok(())
 }
 
 #[test]
@@ -815,6 +1215,9 @@ fn the_daemon_runs_real_swaps() {
         ("bad locks (E9)", bad_locks),
         ("Liquid halt extends (E11)", liquid_halt_extends),
         ("rollback (E15)", rollback_stops_everything),
+        ("RFQ L2S swap (E1)", rfq_l2s_swap),
+        ("RFQ S2L swap (E1)", rfq_s2l_swap),
+        ("RFQ attacks (E6, E7)", rfq_attacks),
     ];
     let filter = std::env::var("SCENARIO").unwrap_or_default();
     let mut failures = vec![];
@@ -856,6 +1259,22 @@ fn the_daemon_runs_real_swaps() {
             Ok(_) => println!("\nreturned {left} units from the vault"),
             Err(e) => println!("\ncould not empty the vault: {}", e.chars().take(120).collect::<String>()),
         }
+    }
+    // And the owner's SOL, because this throwaway key is gone after the run.
+    let owner = world.vault_owner.pubkey();
+    if let Ok(balance) = world.sol.lamports(&owner) {
+        let mut transfer = vec![2, 0, 0, 0];
+        transfer.extend_from_slice(&balance.to_le_bytes());
+        let ix = solana_sdk::instruction::Instruction {
+            program_id: anchor_lang::system_program::ID,
+            accounts: vec![
+                solana_sdk::instruction::AccountMeta::new(owner, true),
+                solana_sdk::instruction::AccountMeta::new(world.maker_solana, true),
+            ],
+            data: transfer,
+        };
+        let payer = read_keypair_file(root.join("keys/solana.json")).unwrap();
+        let _ = world.sol.send(&[ix], &payer, &[&world.vault_owner]);
     }
     drop(world);
     let _ = std::fs::remove_dir_all(&root);

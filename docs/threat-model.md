@@ -18,7 +18,7 @@ Status: Phase 1 design, for review. "Protocol" below refers to [protocol.md](pro
 | Taker reuses a hash from an earlier swap | Maker rejects seen hashes forever | None |
 | Taker claims right at the deadline | Maker's 3 h margin, and the preimage stays in the account | Maker must be online inside it |
 | Taker hides the preimage in a CPI with noisy logs | The preimage is stored in the escrow account, not read from logs | None |
-| Taker griefs: locks, then never claims | Rate limits, spread, caps, optional bond (D2) | Capital time |
+| Taker griefs: locks, then never claims | Rate limits, spread, caps (D2) | Capital time |
 | Taker exploits a Liquid halt (S→L) | `extend` (D1) | Halts over about 7 days, bounded by caps |
 | Taker exploits a Solana restart (L→S) | `close_on_restart` | Stalls with no hard fork, bounded by caps |
 | Maker never locks | Taker refunds | About 5–6 h of the taker's time, plus any `extend`. Reputation only. |

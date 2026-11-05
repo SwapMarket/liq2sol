@@ -78,7 +78,7 @@ Each must pass, or fail with the expected error, on both the unit and the regtes
 | Preimage readable after claim | Yes, until close |
 | CPI claim from a wrapper program with heavy logging | Works, and the stored preimage is still correct |
 | Vault: withdrawal by operator; over window cap; cap resets; refund returns to vault; rotation | Per contracts.md |
-| Bond module, if adopted | Claim returns it. Refund forfeits it. Restart returns it. Unbound reclaim. |
+| Bond module, only if later adopted (not in v1, D2) | Claim returns it. Refund forfeits it. Restart returns it. Unbound reclaim. |
 
 **Property tests** (random sequences of instructions, slots and restarts): invariants S1–S9 hold after each step.
 

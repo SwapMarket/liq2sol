@@ -111,8 +111,8 @@ is safely kept, so the UI says so plainly.
 
 - `secret` holds what can spend funds: anyone with the file can refund (to any address) or complete the swap. The UI says
   this file is equivalent to money. Optional passphrase encryption: **scrypt + AES-256-GCM**, with the plaintext form
-  above. The default is a decision for review. Encryption protects a leaked file, but a forgotten passphrase loses
-  funds in a lost-browser case. The recommendation is to offer it, default off.
+  above. It is off by default (D10). Encryption protects a leaked file, but a forgotten passphrase loses funds in a
+  lost-browser case.
 - The template source and version are enough to rebuild the program, because the compiled program for a version is
   deterministic. `cmr` and `address` are checked against the rebuild, and a mismatch is an error.
 - S→L needs no Solana key in the file, since refund is permissionless and pays the initiator.

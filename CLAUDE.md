@@ -26,10 +26,10 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 
 - **Phase 0: done.** `docs/assumptions.md` has every finding with links and the UNVERIFIED list. Section 10 holds later
   findings, some of which update earlier sections.
-- **Phase 1: drafted, waiting for the user's review.** `docs/protocol.md`, `contracts.md`, `nostr-rfq.md`, `client.md`,
-  `maker.md`, `threat-model.md`, `test-plan.md`, plus `docs/drafts/liquid_htlc.simf`. **Do not write implementation code
-  until the user approves.** Open decisions D1–D10 are in `docs/protocol.md` section 9; the docs assume the recommended
-  options.
+- **Phase 1: documents written.** `docs/protocol.md`, `contracts.md`, `nostr-rfq.md`, `client.md`, `maker.md`,
+  `threat-model.md`, `test-plan.md`, plus `docs/drafts/liquid_htlc.simf`. The user accepted all decisions D1–D10
+  (`docs/protocol.md` section 9) on 2026-11-05. **Do not write implementation code until the user explicitly approves
+  starting Phase 2.**
 
 ## Design points that are easy to get wrong
 

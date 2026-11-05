@@ -1,7 +1,7 @@
 # Protocol
 
-Status: Phase 1 design, for review. Facts cited here are sourced in [assumptions.md](assumptions.md). Section 9 lists
-the decisions that are the user's to make. Numbers that depend on an open decision use the recommended option.
+Status: Phase 1 design. Facts cited here are sourced in [assumptions.md](assumptions.md). Section 9 records the
+decisions the user made.
 
 ## 1. Trust model
 
@@ -293,15 +293,15 @@ depegs. The real costs are:
 
 See D2 for the options.
 
-## 9. Decisions for the user
+## 9. Decisions
 
-Each lists options and a recommendation. The rest of the Phase 1 documents assume the recommended option.
+The user accepted all ten recommended options on 2026-11-05. The alternatives stay listed as a record of the trade-offs.
 
 ### D1. Liquid halt during S→L
 
 | Option | Trade-off |
 |---|---|
-| **`extend` instruction (recommended)** | Closes the theft for halts up to 7 days. About 15 lines of program code. A malicious maker can delay a taker's refund by up to 7 days, though not steal it. |
+| **`extend` instruction (accepted)** | Closes the theft for halts up to 7 days. About 15 lines of program code. A malicious maker can delay a taker's refund by up to 7 days, though not steal it. |
 | Longer margin only | No new instruction. Covering a 4-day halt means 4-day refunds in every no-show. |
 | Accept the risk with exposure caps | Simplest. A maker can lose its open S→L exposure in a long halt. |
 
@@ -309,7 +309,7 @@ Each lists options and a recommendation. The rest of the Phase 1 documents assum
 
 | Option | Trade-off |
 |---|---|
-| **No bond in v1: spread, short timeouts, per-key rate limits, reputation (recommended)** | Simplest and best UX. Griefers lose capital time only. |
+| **No bond in v1: spread, short timeouts, per-key rate limits, reputation (accepted)** | Simplest and best UX. Griefers lose capital time only. |
 | Add the L→S bond (lamports, forfeited if the taker doesn't claim) | Enforceable on-chain. Adds three instructions and a pre-funding step, and penalizes takers who merely went offline. Specified in [contracts.md](contracts.md) as an optional module. |
 | S→L bond | Not trustlessly enforceable: Solana can't see whether the maker locked on Liquid. Either the maker can take it unfairly or it can never be enforced. Only sensible after Phase 2. |
 
@@ -320,7 +320,7 @@ USDt-only fee counts as zero and fails relay. So the covenant can't take the fee
 
 | Option | Trade-off |
 |---|---|
-| **Maker adds an L-BTC "fee coin" to the taker's key in S→L; taker funds its own for L→S refunds, only if a refund is needed (recommended)** | No contract change. Costs the maker a few hundred sats per swap, priced in. A taker with no L-BTC needs to acquire a small amount in order to refund L→S. |
+| **Maker adds an L-BTC "fee coin" to the taker's key in S→L; taker funds its own for L→S refunds, only if a refund is needed (accepted)** | No contract change. Costs the maker a few hundred sats per swap, priced in. A taker with no L-BTC needs to acquire a small amount in order to refund L→S. |
 | Taker must always hold L-BTC | Simplest, but many USDt-only wallet users have none, so S→L fails for them. |
 | Covenant allows `output 0 ≥ AMOUNT − SPONSOR_CAP`, so a third party can add L-BTC and be paid in USDt | Solves the no-L-BTC case fully, with a slightly larger covenant and an inexact amount. Needs a sponsor to exist, which reintroduces infrastructure. |
 
@@ -328,7 +328,7 @@ USDt-only fee counts as zero and fails relay. So the covenant can't take the fee
 
 | Option | Trade-off |
 |---|---|
-| **Keep the signature and the covenant (recommended, matches the brief)** | Defense in depth. A watchtower needs a pre-signed claim, and pre-signing needs the fee input known in advance. |
+| **Keep the signature and the covenant (accepted, matches the brief)** | Defense in depth. A watchtower needs a pre-signed claim, and pre-signing needs the fee input known in advance. |
 | Covenant only, no signature | Anyone with `p` can claim to the fixed script, which makes watchtowers trivial and the contract smaller. Needs an extra rule so that two coins at one address can't be merged into one output, and mempool watchers can front-run the fee input. |
 
 ### D5. Taker has no SOL (L→S)
@@ -337,7 +337,7 @@ The claim needs a transaction fee, and the token account needs rent if it doesn'
 
 | Option | Trade-off |
 |---|---|
-| **Require a small SOL balance, checked before funding (recommended)** | Simple and trustless. Excludes wallets with no SOL. |
+| **Require a small SOL balance, checked before funding (accepted)** | Simple and trustless. Excludes wallets with no SOL. |
 | Relayer-paid claim, with a tip from the amount | Better UX. The program gets a tip parameter and someone must run relayers, though no trust is needed since claim is permissionless. |
 | Handing the preimage to the maker to claim for the taker | **Rejected: unsafe.** The maker could claim on Liquid and let the escrow expire. |
 
@@ -347,7 +347,7 @@ The brief lists both. A reservation can't be enforced in Phase 1, because Solana
 
 | Option | Trade-off |
 |---|---|
-| **Vault with hot-key rate cap now, reservations in Phase 2 (recommended)** | Caps what a stolen hot key can drain per window, and shows liquidity publicly. Adds about five instructions. Departs from the brief on reservations, since the signed `terms` message is only an off-chain reservation. |
+| **Vault with hot-key rate cap now, reservations in Phase 2 (accepted)** | Caps what a stolen hot key can drain per window, and shows liquidity publicly. Adds about five instructions. Departs from the brief on reservations, since the signed `terms` message is only an off-chain reservation. |
 | Neither in v1 | Smallest program. The maker's hot key holds everything it can spend. |
 | Both now | Reservations would rest on a taker bond, with the same limits as D2. |
 
@@ -355,14 +355,14 @@ The brief lists both. A reservation can't be enforced in Phase 1, because Solana
 
 | Option | Trade-off |
 |---|---|
-| **2 blocks up to a per-swap limit, 10 blocks above it, plus a total exposure cap (recommended)** | Reduces rollback exposure for larger swaps at a small cost in speed. The September rollback shows depth doesn't remove the risk, so the cap carries the weight. |
+| **2 blocks up to a per-swap limit, 10 blocks above it, plus a total exposure cap (accepted)** | Reduces rollback exposure for larger swaps at a small cost in speed. The September rollback shows depth doesn't remove the risk, so the cap carries the weight. |
 | 2 blocks always | The brief's value. Fastest. |
 
 ### D8. Program upgradeability
 
 | Option | Trade-off |
 |---|---|
-| **Devnet upgradeable, mainnet immutable (recommended)** | Users needn't trust an upgrade key. A bug means deploying a new program and migrating. |
+| **Devnet upgradeable, mainnet immutable (accepted)** | Users needn't trust an upgrade key. A bug means deploying a new program and migrating. |
 | Upgradeable under a timelock or multisig | Bugs can be patched, but an upgrade authority is a trusted party, which the brief is trying to avoid. |
 
 ### D9. Rebalancing
@@ -371,7 +371,7 @@ The brief asks the daemon to rebalance. Every venue adds trust and puts a key on
 
 | Option | Trade-off |
 |---|---|
-| **v1 adjusts spreads, stops quoting and alerts; moving funds stays manual (recommended)** | No new secrets on the hot host. Departs from the brief, and needs more operator attention. |
+| **v1 adjusts spreads, stops quoting and alerts; moving funds stays manual (accepted)** | No new secrets on the hot host. Departs from the brief, and needs more operator attention. |
 | Automate through other liq2sol makers | No new secrets, but needs a working maker market first. Possible later. |
 | Automate through an exchange API | Most hands-off. Adds an exchange key and an exchange account's custody risk, which is the attack surface this project is trying to reduce. |
 
@@ -379,7 +379,7 @@ The brief asks the daemon to rebalance. Every venue adds trust and puts a key on
 
 | Option | Trade-off |
 |---|---|
-| **Optional passphrase, off by default (recommended)** | Fewer funds lost to forgotten passphrases. A leaked unencrypted file can spend open swaps. |
+| **Optional passphrase, off by default (accepted)** | Fewer funds lost to forgotten passphrases. A leaked unencrypted file can spend open swaps. |
 | Required passphrase | A leaked file is safe. A forgotten passphrase loses funds if browser state is also gone. |
 
 ## 10. Watchtowers (optional)

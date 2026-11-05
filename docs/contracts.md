@@ -162,11 +162,12 @@ frozen makes the refund fail with no state change, so it can be retried. It neve
 Claim is one SHA-256 (under 200 CU in syscalls) plus a token transfer CPI and a close. It should comfortably fit the
 default limit, **to be measured in Phase 2**. Rent for the escrow and vault is returned at settlement or `close`.
 
-### Optional modules
+### Modules beyond the core
 
-Both are off by default in the core design. They live behind separate instructions so the core stays auditable.
+These live behind separate instructions so the core stays auditable. A maker can lock directly with `lock` and never use
+the vault.
 
-**Maker vault (D6, recommended).** PDA `["maker_vault", owner]`, with a token account.
+**Maker vault (D6, accepted: in scope).** PDA `["maker_vault", owner]`, with a token account.
 
 | Instruction | Signer | Effect |
 |---|---|---|
@@ -180,7 +181,7 @@ The operator can't withdraw, but it can lock vault funds to a recipient it contr
 the key separation, limits a stolen hot key.** A vault is one freezable token account, unlike per-swap vaults, so the
 maker should keep its balance near operating needs.
 
-**L→S taker bond (D2, not recommended for v1).** Lamports in PDA `["bond", taker, hash]`.
+**L→S taker bond (D2: not in v1, kept here as a design for later).** Lamports in PDA `["bond", taker, hash]`.
 
 | Instruction | Signer | Effect |
 |---|---|---|

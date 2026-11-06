@@ -121,7 +121,7 @@ const browser = await chromium.launch({ executablePath: executable, args: ['--no
 const shots = mkdtempSync(path.join(env.SHOTS_DIR ?? tmpdir(), 'client-'));
 console.log(`    screenshots in ${shots}`);
 
-async function newPage(viewport = { width: 1200, height: 1000 }) {
+async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = null) {
   const context = await browser.newContext({ acceptDownloads: true, viewport });
   const page = await context.newPage();
   const errors = [];
@@ -153,7 +153,8 @@ async function newPage(viewport = { width: 1200, height: 1000 }) {
     window.addEventListener('wallet-standard:app-ready', ({ detail }) => register(detail));
     window.dispatchEvent(new CustomEvent('wallet-standard:register-wallet', { detail: register }));
   }, ownerAddress);
-  await page.goto(`http://127.0.0.1:${site.port}/`);
+  if (beforeLoad) await beforeLoad(page);
+  await page.goto(`http://127.0.0.1:${site.port}/`, { waitUntil: 'commit' });
   return page;
 }
 
@@ -478,7 +479,31 @@ async function liveBook() {
   step('the book updates in place, and shows an order\'s own price and size under "your fill"');
 }
 
+// The WebAssembly is the slow part of loading, so it is held back here.
+async function pageLoading() {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const page = await newPage(undefined, (p) => p.route('**/*.wasm', async (route) => { await held; await route.fallback(); }));
+  await page.locator('.page-loading .spinner').waitFor({ timeout: 5000 });
+  if ((await page.locator('.page-loading .spinner').evaluate((e) => getComputedStyle(e).animationName)) !== 'spin') throw new Error('the spinner isn\'t animated');
+  if (await page.locator('#amount').count()) throw new Error('the form appeared before it could work');
+  const link = page.locator('footer a').first();
+  if ((await link.getAttribute('target')) !== '_blank') throw new Error('the build link stays in this tab');
+  if (!(await link.getAttribute('href')).includes('/commit/')) throw new Error('the build link isn\'t to a commit');
+  release();
+  await page.locator('#amount').waitFor({ timeout: 15000 });
+  if (await page.locator('.page-loading').count()) throw new Error('the placeholder stayed');
+  await page.context().close();
+
+  const broken = await newPage(undefined, (p) => p.route('**/*.wasm', (route) => route.abort()));
+  await broken.locator('#banner').waitFor({ timeout: 15000 });
+  await broken.locator('.page-loading').waitFor({ state: 'detached', timeout: 5000 });
+  await broken.context().close();
+  step('a spinner shows while the page loads, and goes away if loading fails');
+}
+
 async function look() {
+  await pageLoading();
   await walletConnectWait();
   await liveBook();
   const phone = await newPage({ width: 400, height: 800 });

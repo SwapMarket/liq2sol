@@ -262,6 +262,9 @@ function newBookRow(maker) {
   return row;
 }
 
+const pageStarted = Date.now();
+const LOOK_FOR_OFFERS_MS = 15000;
+
 function updateBook(send) {
   const direction = ui.direction;
   const [from, to] = names[direction];
@@ -309,9 +312,12 @@ function updateBook(send) {
   book.empty.hidden = !!list.length;
   if (!list.length) {
     const hidden = liveOffers(direction).length;
+    // Offers take a moment to arrive, so don't say there are none until they have had time to.
+    const looking = !hidden && (!relays?.connected() || Date.now() - pageStarted < LOOK_FOR_OFFERS_MS);
+    book.empty.classList.toggle('spin', looking);
     setText(book.empty, hidden
       ? `No maker you chose to see is offering this direction right now. ${hidden} hidden by the switches below.`
-      : relays?.connected() ? 'No maker is offering this direction right now.' : 'Connecting to Nostr relays…');
+      : looking ? (relays?.connected() ? 'Looking for makers…' : 'Connecting to Nostr relays…') : 'No maker is offering this direction right now.');
   }
   book.onlyVetted.checked = onlyVetted();
   book.onlyFavorites.checked = !!settings.onlyFavorites;
@@ -918,4 +924,8 @@ async function main() {
   }, 5000);
 }
 
-main().catch(fail);
+main().catch((e) => {
+  // Don't leave it spinning as if it were still loading.
+  document.querySelector('.page-loading')?.remove();
+  fail(e);
+});

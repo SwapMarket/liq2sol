@@ -20,7 +20,8 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  # A new push makes any deploy still running pointless.
+  cancel-in-progress: true
 
 env:
   RUST_VERSION: 1.99.1
@@ -51,7 +52,7 @@ jobs:
       - name: Build the WebAssembly
         run: client/build.sh
       - name: Stamp the build
-        run: sed -i "s/__BUILD__/${GITHUB_SHA::12}/" client/site/index.html
+        run: sed -i "s/__BUILD__/${GITHUB_SHA::12}/g" client/site/index.html
       - name: Record what is being published
         working-directory: client/site
         run: |

@@ -22,12 +22,21 @@
 </nav>
 <main>
   <div id="banner" class="banner" hidden></div>
-  <section id="view"></section>
+  <section id="view">
+    <div class="card page-loading" role="status" aria-label="Loading">
+      <div class="skeleton short"></div>
+      <div class="skeleton"></div>
+      <div class="skeleton"></div>
+      <div class="spinner"></div>
+      <p class="sub">Loading…</p>
+      <noscript><p class="warn">This page needs JavaScript.</p></noscript>
+    </div>
+  </section>
   <section id="below"></section>
 </main>
 <footer>
   <p>No server and no custodian: your funds stay under keys only you and the chains control. This build is for test networks.</p>
-  <p>Build <a href="https://github.com/SwapMarket/liq2sol">__BUILD__</a>. A tampered page could show anything here, so compare it with the release if it matters to you.</p>
+  <p>Build <a href="https://github.com/SwapMarket/liq2sol/commit/__BUILD__" target="_blank" rel="noopener noreferrer">__BUILD__</a>. A tampered page could show anything here, so compare it with the release if it matters to you.</p>
 </footer>
 </body>
 </html>

@@ -8,34 +8,33 @@ Status: Phase 1 design, for review. A fully static web app on GitHub Pages, with
 |---|---|
 | UI | Small TypeScript app, minimal dependencies, no runtime framework unless justified |
 | Protocol core | State machines from [protocol.md](protocol.md). Pure functions, driven by chain reads, resumable from storage. |
-| Liquid WASM | Own Rust crate: HTLC instantiation, address derivation, transaction build, signing, witness encoding |
+| Liquid WASM | Own Rust crate, `contracts/swapkey-wasm`: address derivation, unblinding, transaction build, adapter signing |
 | Solana | WalletConnect and extension wallets (section 3), plus reused code from `~/src/eth2base` and `~/src/sol2base` |
 | Chain access | Esplora and Solana RPC, user-configurable |
 | Nostr | RFQ messages only ([nostr-rfq.md](nostr-rfq.md)) |
 | Storage | IndexedDB per swap, plus the recovery file |
 
-**WASM crate.** The published `lwk_wasm` lacks Simplicity. LWK's `lwk_simplicity` also pins `simplicityhl` 0.8.0. The
-recommendation is a small crate on `simplicityhl 0.9.0` and `elements`, exporting about six functions. Compiling in WASM
-is verified (2.5 MB, CMR identical to native). **Signing a full spend in WASM is UNVERIFIED**, and it is the first thing
-to prove in Phase 2.
+**WASM crate.** The published `lwk_wasm` lacks Simplicity. LWK's `lwk_simplicity` also pins `simplicityhl` 0.8.0. So this is a small crate on
+`simplicityhl 0.9.0` and `elements`. A whole confidential claim builds and signs in a browser in 414 ms, with a 4.9 MB module (headless Chromium
+145, `scripts/check-browser-claim.py`). Firefox and Safari are **UNVERIFIED**.
 
 **Solana transaction format.** The chain now has version 1 transactions, which `@solana/web3.js` 1.95 can't decode. The
 client must use a library that can, or decode the few fields it needs from account state rather than transactions,
-which the escrow's stored preimage already favors.
+which the escrow's stored value already favors.
 
 ## 2. Chain access
 
 | Need | Method |
 |---|---|
-| Find an HTLC coin | Esplora `/scripthash/:hash/utxo` (or `/txs`) |
-| Read a preimage | Esplora spend lookup on the outpoint, then the witness (only relevant for makers and auditors) |
+| Find the swap's coin | Esplora `/scripthash/:hash/utxo` (or `/txs`), then unblind each output with the swap's blinding key. Check the asset and amount here: nothing on-chain does. |
+| See a spend | Esplora spend lookup on the outpoint. One witness item is a claim, and four is a refund. |
 | Read escrow state | `getAccountInfo` on the derived PDA |
 | Tip and slot | Esplora `/blocks/tip/height`, `getSlot` with `finalized` |
 
 Free RPCs block `getProgramAccounts` and old history, so the client never scans. It derives every address from data it
 has.
 
-**Before revealing a preimage, the counterparty's lock must be confirmed on two independent endpoints** (protocol
+**Before revealing the secret, the counterparty's lock must be confirmed on two independent endpoints** (protocol
 section 4). If the second endpoint isn't available, the client requires the explicit override and warning.
 
 Rate limits on public Esplora are **UNVERIFIED**, so poll no faster than every 15 seconds.
@@ -57,7 +56,7 @@ be drained by anyone.
 - The key is stored only in this browser's storage and sent only to Helius.
 - The key sits in the URL's query string, so the app never logs or displays full endpoint URLs. It never goes in the
   recovery file, a Nostr message or an error report.
-- The standalone recovery tools (section 4) don't need it. A refund needs no preimage reveal, so no second endpoint is
+- The standalone recovery tools (section 4) don't need it. A refund reveals no secret, so no second endpoint is
   required.
 
 The free plan's limits (10 requests/s, 1 `sendTransaction`/s, 1M credits a month) comfortably cover one taker. Whether a
@@ -65,11 +64,14 @@ free key works on devnet is **UNVERIFIED**.
 
 ## 3. Key handling
 
-- Ephemeral Liquid key and preimage are generated with `crypto.getRandomValues`, one set per swap. They are never reused
+- The per-swap Liquid key, the secret `t` and the blinding key are generated with `crypto.getRandomValues`, one set per swap. They are never reused
   and are never derived from the user's wallet.
 - **The Solana wallet is never given a Liquid key, and the app never sees the wallet's key.**
-- The Liquid wallet (Aqua, Green and so on) is external. The user pays the address, and the app never touches that
-  wallet's keys.
+- The Liquid wallet (Aqua, Green and so on) is external. The user pays the confidential address, and the app never touches that
+  wallet's keys. Whether real wallets pay this address form is **UNVERIFIED**. Paying from an explicit coin leaks a bound on the amount, and the app
+  should say so.
+- **Nonces are generated fresh for each session, held in memory, used once and never stored.** Signing two messages with one nonce reveals the
+  key. A reload abandons the session, and a new one starts with new randomness.
 - Secrets stay in browser storage only until the swap is settled, then are deleted. The recovery file may be kept by the
   user.
 - Show the amount, asset, address and refund time before funding. Also show the build hash, so a user can compare it
@@ -92,7 +94,7 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 | Project ID | `c001d9e3d0c6308a5ce7e5932d40064a`, the Reown project shared with `sol2base` and `eth2base` (user's decision). It is public by nature, because a static page can't hide it. Reown advises one ID per project, and sharing means sharing quota and allowlist. |
 | Allowed origins | **`swapmarket.github.io` must be on the project's allowlist.** It serves `sol2base`, and the allowlist can't be checked from here. Localhost is always allowed. IPFS gateways and other mirrors are refused unless listed, so those users need extension wallets, a listed origin, or their own project ID, which the app accepts as a setting. |
 | Chain ids | CAIP-2: mainnet `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`, devnet `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`. |
-| Signing | Use `solana_signTransaction` or the Wallet Standard's `solana:signTransaction`, then send from the app. **Never let the wallet broadcast a claim**, including `solana_signAndSendTransaction`. The app must control when the preimage is broadcast: after the two-endpoint check and simulation, inside the cutoff. |
+| Signing | Use `solana_signTransaction` or the Wallet Standard's `solana:signTransaction`, then send from the app. **Never let the wallet broadcast a claim**, including `solana_signAndSendTransaction`. The app must control when the secret is broadcast: after the two-endpoint check and simulation, inside the cutoff. |
 | Preimage exposure | A claim passes through the user's wallet for signing, so the wallet sees `p` before broadcast. WalletConnect messages are end-to-end encrypted, and the wallet is already trusted with the user's funds. A malicious wallet colluding with the maker could still steal the swap. |
 | Relay dependency | WalletConnect needs Reown's relay, and self-hosting isn't available. Extension wallets avoid it. |
 | Time limits | A phone approval takes time. The client asks for the signature early enough that the claim cutoff still holds, and it rechecks the cutoff before sending. |
@@ -116,21 +118,20 @@ is safely kept, so the UI says so plainly.
 ```json
 {
   "format": "liq2sol-recovery",
-  "version": 1,
+  "version": 2,
   "network": "testnet",
   "created_at": 1793888350,
   "swap_id": "<hex32>",
   "direction": "L2S",
-  "secret": { "preimage": "<hex32>", "liquid_sk": "<hex32>" },
+  "secret": { "lock_secret": "<hex32>", "liquid_sk": "<hex32>", "blinding_key": "<hex32>" },
   "liquid": {
-    "template_version": 1,
+    "template_version": 2,
     "params": {
-      "PAYMENT_HASH": "<hex32>", "RECIPIENT_PK": "<hex32>", "SENDER_PK": "<hex32>",
-      "LOCK_HEIGHT": 2692446, "USDT_ASSET": "<hex32>", "AMOUNT": "10000000000",
-      "RECIPIENT_SCRIPT_HASH": "<hex32>"
+      "MAKER_KEY": "<hex33>", "TAKER_KEY": "<hex33>", "SENDER_PK": "<hex32>",
+      "LOCK_HEIGHT": 2692446, "AMOUNT": "10000000000"
     },
     "cmr": "<hex32>",
-    "address": "<non-confidential address>"
+    "address": "<confidential address>"
   },
   "solana": {
     "program_id": "<base58>", "initiator": "<base58>", "recipient": "<base58>",

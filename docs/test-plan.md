@@ -15,59 +15,47 @@ Local integration is what makes timeouts testable, since regtest can mine blocks
 slots. Restart behaviour needs a `solana-test-validator` or local cluster run with a hard fork, **whether this is
 practical is UNVERIFIED**. If not, `LastRestartSlot` is set directly in LiteSVM.
 
-## 2. First feasibility proofs (Phase 2, before anything else)
+## 2. First feasibility proofs
 
-Status (2026-11-05): F1, F2, F3 and F5 pass, on Elements 23.3.4 regtest, and a claim and a refund also ran on live Liquid testnet. F4 needs real wallets and is still open.
-Run them with `ELEMENTSD=... ELEMENTS_CLI=... cargo test -p liq2sol-htlc --test regtest -- --ignored --nocapture` and
-`scripts/check-wasm-parity.sh`.
+Results for the confidential design are in [confidential.md](confidential.md).
 
-| # | Proof | Why |
+| # | Proof | Result |
 |---|---|---|
-| F1 | Execute the draft HTLC claim and refund on regtest, including pruned size and cost against budget | Never yet run |
-| F2 | Same transaction built and signed in WASM, byte-identical to native | Unverified, and the client depends on it |
-| F3 | Compare `nSequence` and `tx_lock_height` behaviour in a refund | Common pitfall |
-| F4 | A real Aqua and Green payment to a non-confidential Simplicity address on testnet, if those wallets support testnet | Unverified, and the client depends on it |
-| F5 | Fee-coin spend: explicit L-BTC, whole coin to fee | Confirms the D3 design |
+| F1 | A claim and a refund of a blinded coin on regtest and live testnet | See confidential.md |
+| F2 | The same claim built and signed in WASM, in a real browser | Pass in Chromium. Firefox and Safari not run. |
+| F3 | `nSequence` and `tx_lock_height` behaviour in a refund | Pass |
+| F4 | A real Aqua and Green payment to a confidential address of this form | **Open:** needs real wallets |
+| F5 | Fee-coin spend: blinded L-BTC, whole coin to fee | Pass |
 
 ## 3. Liquid contract tests
 
-Each must pass, or fail with the expected error, on both the unit and the regtest levels.
+In `contracts/swapkey/tests/regtest.rs`, `contracts/swapkey/tests/values.rs` and `shared/chain/tests/`, on a real node unless noted.
 
 | Case | Expected |
 |---|---|
-| Valid claim | Accepted |
-| Shared preimage vector (see contracts.md section 3) | Accepted |
-| Wrong preimage | Rejected |
-| Wrong recipient signature; sender's key signs | Rejected |
-| Signature over a different transaction | Rejected |
-| Spent coin: wrong asset, with correct amount | Rejected |
-| Spent coin: correct asset, wrong amount (over and under) | Rejected |
-| Spent coin: blinded asset, or blinded amount | Rejected |
-| Fake asset with the same name and ticker | Rejected |
-| Output 0 missing | Rejected |
-| Output 0: wrong script, wrong asset, wrong amount, blinded asset or amount | Rejected, one test per case |
-| Correct payment at output 1, something else at output 0 | Rejected |
-| Claim after `LOCK_HEIGHT`, still unspent | Accepted (documented behaviour) |
-| Two HTLC coins, one output | Second input's check still sees only output 0; document what happens, since only the recipient can sign it |
-| Refund before `LOCK_HEIGHT`, one block before, at it | Rejected, rejected, accepted |
-| Refund with final sequences | Rejected |
-| Refund with lock time as a timestamp value | Rejected |
-| Refund: wrong key, recipient's key | Rejected |
-| Refund of a wrong-asset or wrong-amount coin | Accepted |
-| Unpruned program, wrong CMR, wrong control block, wrong leaf version | Rejected by consensus |
-| Key-path spend attempt | Impossible (NUMS key) |
-
-**Status:** these run in `contracts/liquid/tests/contract.rs` and `regtest.rs`. Mutation check: removing each of the 11
-checks in the contract, one at a time, made at least one test fail.
+| Key-path spend with the true secret | Accepted, one 65-byte witness item, output hidden |
+| Finished with a wrong secret | Refused by the node |
+| A share for another point, or from another key | Refused off-chain |
+| Secret read from a published signature, with the adapter signature | Correct |
+| Secret read with any other adapter signature | Nothing |
+| Neither `t` nor `T` anywhere in the transaction | Confirmed |
+| Refund before `LOCK_HEIGHT`, at it | Refused, accepted |
+| Refund with final sequences | Refused |
+| Refund signed by the other party | Refused |
+| Refund of a coin of another asset | Accepted |
+| A forged range proof labelling another asset as USDt | Not read as USDt (no node needed) |
+| Half-blinded outputs | Not read |
+| Wrong amount, wrong asset, too few confirmations | `exact_secret_coin` finds nothing |
+| Each lock height gets its own address | Confirmed |
 
 ## 4. Solana program tests
 
 | Case | Expected |
 |---|---|
 | Lock: valid; zero amount; past deadline; initiator == recipient; wrong mint; Token-2022 mint | Accepted, then rejected in each other case |
-| Lock twice with same initiator and hash | Second rejected |
-| Same hash, different initiator | Accepted, as they are separate escrows |
-| Claim: correct preimage; wrong preimage; wrong length | Accepted, rejected, rejected |
+| Lock twice with same initiator and point | Second rejected |
+| Same point, different initiator | Accepted, as they are separate escrows |
+| Claim: right value; wrong value; negated value; out of range | Accepted, rejected, rejected, rejected |
 | Claim by third party | Accepted, funds still go to recipient |
 | Claim at `deadline_slot − 1`, and at `deadline_slot` | Accepted, rejected |
 | Claim to a non-canonical ATA; ATA of another owner; ATA with reassigned owner | Rejected |
@@ -83,7 +71,7 @@ checks in the contract, one at a time, made at least one test fail.
 | `release`: recipient; other signers; after settlement | Accepted, rejected, rejected |
 | `close`: while open; by initiator; by others before and after retention | Rejected, accepted, rejected, accepted |
 | Preimage readable after claim | Yes, until close |
-| CPI claim from a wrapper program with heavy logging | Works, and the stored preimage is still correct |
+| CPI claim from a wrapper program with heavy logging | Works, and the stored value is still correct |
 | Vault: withdrawal by operator; over window cap; cap resets; refund returns to vault; rotation | Per contracts.md |
 | Bond module, only if later adopted (not in v1, D2) | Claim returns it. Refund forfeits it. Restart returns it. Unbound reclaim. |
 
@@ -148,7 +136,7 @@ Each runs both directions where applicable, first locally and then on testnet an
 |---|---|---|
 | Solana state machine | Kani or a Rust model checker on the pure `can_claim` / `can_refund` logic: S4, S5, S7 | Feasible. Keep that logic in pure functions to allow it. |
 | Solana whole program | Property tests plus audit. Full verification of token CPI is out of scope. | Planned |
-| Liquid HTLC | Prove L1–L7 over the compiled Simplicity program in Rocq, using Simplicity's formal semantics | **UNVERIFIED:** how much is tooled for Elements jets today. Requires investigation with Blockstream's Simplicity repo and likely a specialist. |
+| Liquid refund leaf | Prove L4 over the compiled Simplicity program in Rocq, using Simplicity's formal semantics. **This covers much less than the old HTLC did:** a claim is now off-chain checks plus a signature. | **UNVERIFIED:** how much is tooled for Elements jets today. Requires investigation with Blockstream's Simplicity repo and likely a specialist. |
 | Liquid fallback | Exhaustive path tests over the small witness space, plus a CMR pinned to the audited source | Minimum bar, whatever else is done |
 | Cross-chain timing | TLA+ model of both state machines, with halts, restarts and rollbacks as environment actions. Check: no honest party loses funds under the documented assumptions, and each assumption's removal yields the documented counterexample. | Recommended. It is the most likely way to find a mistake in this design, and this review already found two by hand. |
 

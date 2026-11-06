@@ -28,8 +28,8 @@ needed.
 | Key | Use | Where |
 |---|---|---|
 | Nostr key | Signs offers and terms. Identity and reputation. | Hot. Can be rotated at the cost of reputation. |
-| Liquid per-swap keys | HTLC claim and refund | Derived from a hot seed and the payment hash |
-| Liquid wallet key | Funds locks, pays fees | Hot, balance limited |
+| Liquid per-swap keys | Half of the claim's aggregate key, and the refund | Derived from a hot seed and the swap id |
+| Liquid wallet and blinding keys | Fund locks, pay fees. Every coin is blinded, and explicit coins are ignored. | Hot, balance limited |
 | Solana operator key | Calls `lock_from_vault`, `extend`, pays fees | Hot, rate-capped by the vault (D6) |
 | Solana vault owner | Withdraws, changes operator | **Cold.** Never on the daemon's host. |
 | Liquid treasury | Refills the hot wallet | **Cold.** Never on the daemon's host. |
@@ -39,19 +39,22 @@ needed.
   - **It builds every transaction itself.** Our claims and refunds pay our own wallet, because nothing else can be asked for.
     It signs and returns transactions, and it never broadcasts.
   - **It reads heights, slots, coins and escrows through its own chain connections.** It signs a Solana lock only after seeing
-    the taker's exact coin confirmed at the HTLC, and a Liquid lock only after seeing a matching escrow. Otherwise a
+    the taker's exact coin confirmed and read with the swap's blinding key, and with an adapter signature stored, and a Liquid lock only after seeing a matching escrow. Otherwise a
     compromised engine could lock our funds to a colluding taker who never paid.
   - **It runs its own policy and ledger**, and commits before releasing a signature: per-swap and per-window caps, no payout
     above what is received, its own check of the timeouts, and no refund after collecting or release after locking.
-  - **A Liquid lock is signed once.** A retry returns the identical stored bytes, so the HTLC can't be paid twice.
+  - **A Liquid lock is signed once.** A retry returns the identical stored bytes, so the address can't be paid twice.
+  - **It keeps the signing sessions.** Nonces live in memory only, are used once, and a crash abandons the session. An adapter signature is fsynced before
+    anything relies on it: before a Solana lock, or before our share is released. One session per swap. Our share is refused once the taker's escrow is gone.
+  - **It keeps a pool of blinded fee coins**, reserves one for a swap durably before signing, and never spends coins of that value on anything else.
   - Requests are handled one at a time so policy checks can't race, and read outside that lock so a stalled client blocks nobody.
-- Per-swap Liquid keys are derived as SHA-256 of a domain tag, a seed and the payment hash, rather than BIP-32. A restored seed
+- Per-swap Liquid keys are derived as SHA-256 of a domain tag, a seed and the swap id, rather than BIP-32. A restored seed
   can still spend every open swap.
 - **Limits of this separation.** It needs a separate OS user to mean much, because the same user can read the key files. Root on
   the host defeats it. The signer also trusts its own chain source, so a lying node or RPC could feed it false evidence, which is
   why a maker should run its own node.
 - An optional remote signer or HSM can replace it later.
-- Keys are never logged. The swap log contains preimages only after they are public.
+- Keys and nonces are never logged. The swap log contains secrets only after they are public.
 - **Testnet and devnet only at this stage.** Mainnet key ceremony is out of scope until after audit.
 
 ## 3. Pre-lock checks
@@ -60,20 +63,21 @@ All of these must pass, or the maker abandons the swap. The taker can then refun
 
 **L→S:**
 
-1. `H` has never been seen.
-2. At least one confirmed output at the derived non-confidential address with the exact explicit asset and amount, with
+1. `T.x` has never been seen.
+2. At least one confirmed output at the derived address that unblinds to the exact asset and amount, with
    the confirmations D7 requires. The maker acts on one such coin and ignores everything else there, so a stray coin can't
    block a swap. The sender can refund the others.
 3. Both `elementsd` and Esplora agree on that output.
 4. `LOCK_HEIGHT − tip ≥ 210`.
 5. Solana and Liquid both healthy, per protocol section 7.5.
 6. Under the exposure caps.
-7. The escrow will be created with `close_on_restart = true` and the correct `deadline_slot`.
+7. A checked adapter signature for the claim is stored. Without one the maker never locks, so a taker who won't sign costs it nothing.
+8. The escrow will be created with `close_on_restart = true` and the correct `deadline_slot`.
 
 **S→L:**
 
-1. `H` has never been seen.
-2. Escrow at `finalized`: recipient, mint, amount, hash and `close_on_restart = false`.
+1. `T.x` has never been seen.
+2. Escrow at `finalized`: recipient, mint, amount, the full point and `close_on_restart = false`.
 3. At least 84,500 slots remain, and `tip ≤ h_accept + 30`.
 4. The maker's Solana token account exists and isn't frozen.
 5. Both chains healthy, and under the caps.
@@ -104,7 +108,7 @@ to lose in a single incident.
 - **Solana stalled, or `LastRestartSlot` changed:** stop new locks, refund any eligible escrows after restart.
 - **Liquid tip height decreased, or a confirmed tx disappears:** stop everything and page the operator. Don't try to
   automate recovery from a rollback.
-- **Never refund an HTLC whose Solana escrow this maker has already claimed.** After a rollback, that coin belongs to a
+- **Never refund a coin whose Solana escrow this maker has already claimed.** After a rollback, that coin belongs to a
   taker who hasn't rebroadcast yet (protocol section 7.3). The signer's policy enforces this as well as the engine.
 
 ## 5. Rebalancing

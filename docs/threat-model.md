@@ -4,20 +4,27 @@ Status: Phase 1 design, for review. "Protocol" below refers to [protocol.md](pro
 
 ## 1. Assets
 
-- User funds in the Liquid HTLC and the Solana escrow.
+- User funds in the Liquid swap output and the Solana escrow.
 - Maker inventory and hot keys.
-- Taker ephemeral keys, preimages and recovery files.
+- Taker per-swap keys, secrets, blinding keys and recovery files.
 - Availability: the ability to swap, and above all the ability to refund.
 
 ## 2. Malicious counterparty
 
 | Attack | Mitigation | Residual |
 |---|---|---|
-| Taker funds with a fake asset or blinded coin | Covenant rejects it (L3), and the maker checks explicit asset and amount before locking | None |
+| Taker funds with a fake asset | **No on-chain check any more.** The maker unblinds the coin and acts only on the exact asset and amount (L5). A forged range proof label doesn't open the asset commitment (L6). | A bug in this check loses the swap, so the signer checks it as well as the engine |
 | Taker underpays or overpays | Same. The coin is only refundable. | None |
-| Taker reuses a hash from an earlier swap | Maker rejects seen hashes forever | None |
-| Taker claims right at the deadline | Maker's 3 h margin, and the preimage stays in the account | Maker must be online inside it |
-| Taker hides the preimage in a CPI with noisy logs | The preimage is stored in the escrow account, not read from logs | None |
+| Taker pays and never signs | Maker doesn't lock without a stored adapter signature | One reserved fee coin |
+| Taker sends a bad share | Verified against the point and the taker's key, and the combination against the output key, before storing | None |
+| Maker reuses a nonce | Nonces are random, in memory only, consumed by the type system, and never stored. A crash abandons the session. | **A reuse would reveal the per-swap key.** Limited to one swap. |
+| Adapter signature lost after acting on it | Fsynced before the lock or the share | Disk failure can lose one swap, so back up the ledger |
+| Fee coin spent elsewhere | Reserved durably, and coins of that value aren't used for payments | A Liquid rollback dropping a fee coin's parent could kill a signature |
+| Claim stuck at a fixed fee | Fee coins pay far above the floor, and a child can bump | Sustained fee spikes |
+| No relay during a swap | The session can't run, so the swap ends in refunds | Failed swap, no loss |
+| Taker reuses a point from an earlier swap | Maker rejects seen points forever | None |
+| Taker claims right at the deadline | Maker's 3 h margin, and the revealed value stays in the account | Maker must be online inside it |
+| Taker hides the value in a CPI with noisy logs | The value is stored in the escrow account, not read from logs | None |
 | Taker griefs: locks, then never claims | Rate limits, spread, caps (D2) | Capital time |
 | Taker exploits a Liquid halt (S→L) | `extend` (D1) | Halts over about 7 days, bounded by caps |
 | Taker exploits a Solana restart (L→S) | `close_on_restart` | Stalls with no hard fork, bounded by caps |
@@ -72,7 +79,7 @@ them. Liquid's September 2026 exploit followed a fix that was public for 5 days.
 | Contracts | Small enough to verify. Formal plan. Immutable on mainnet. | **A deployed bug can't be patched,** only abandoned |
 
 A compromised maker can only lose its own funds. Takers are still protected by the contracts, because the maker never
-holds a key that can spend taker funds without the preimage.
+holds a key that can spend taker funds without the secret.
 
 ## 6. Consensus and issuer
 
@@ -80,11 +87,12 @@ holds a key that can spend taker funds without the preimage.
 |---|---|---|
 | Liquid halt | Protocol section 7.1 | `extend`, caps, stop-new-locks |
 | Liquid rollback | Protocol section 7.3. **Can cause loss to either party.** | Confirmation depth, caps. Accepted federation trust. |
-| Elements consensus bug | Sept 2026 precedent. L-BTC inflation. USDt was unaffected, but halted. Claims and refunds need L-BTC fees, so a broken L-BTC peg could affect fee availability. | Explicit outputs only, so no range-proof logic in our path. Keep nodes patched. |
+| Elements consensus bug | Sept 2026 precedent. L-BTC inflation. USDt was unaffected, but halted. Claims and refunds need L-BTC fees, so a broken L-BTC peg could affect fee availability. | **Now in our path:** blinding, range proofs and surjection proofs, through `secp256k1-zkp`. Keep nodes patched. |
 | Solana halt or restart | Protocol section 7.2 | `close_on_restart`, slots |
 | Tether freeze | Protocol section 7.4 | Preflight, per-swap vaults, accepted trust |
 | Tether changes token (migration, Token-2022) | A compiled mint constant no longer applies | New program deploy |
-| Simplicity consensus bug or jet change | HTLC may misbehave | Keep amounts capped early. Rely on Blockstream's Simplicity verification work. |
+| Simplicity consensus bug or jet change | The refund leaf may misbehave. Claims don't use Simplicity. | Keep amounts capped early. Rely on Blockstream's Simplicity verification work. |
+| `musig2` crate bug | Its adaptor code is unaudited, version 0.4.1, and claims rest on it. | Audit before mainnet. Every signature is checked against the output key before it is relied on. |
 | Slot time change | SIMD-0525 halved the slot time this year. Deadlines measured in slots shorten in real time. | Deadlines are computed at lock time from live data. Swaps are short. A halving during a swap still leaves the ordering intact. |
 
 ## 7. Residual risks to state to users

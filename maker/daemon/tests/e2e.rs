@@ -571,6 +571,37 @@ fn session_claim(
     signed.finish(key, &output, &maker_key.0, maker_share, &point.0, secret, w.genesis)
 }
 
+/// A genuine request to open a session on a coin that really is locked, so the maker would answer it if the sender and swap
+/// were accepted. Returns whether a nonce came back, on this key and this negotiation id.
+#[allow(clippy::too_many_arguments)]
+fn session_answered(
+    w: &World,
+    me: &Keys,
+    id: &str,
+    terms: &SwapTerms,
+    key: &LiquidKey,
+    maker_key: &LockPoint,
+    fee: &SecretCoin,
+    coin: &SecretCoin,
+    wait: Duration,
+) -> Res<bool> {
+    let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
+    relay.subscribe("probe", &[Kind::from(msg::WRAP_KIND)], Some(&me.public_key()), now_secs() - 60)?;
+    let (tx, _) = build_swap_spend(coin, fee, &w.taker_wallet.address(), 0, Sequence::MAX)?;
+    let claim = TakerClaim::start(&w.chain, key, &terms.output(maker_key)?, tx, w.genesis)?;
+    let open = Body::SessionOpen(msg::SessionOpen {
+        lock_point: terms.lock_point.to_hex(),
+        tx: serialize_hex(&claim.tx),
+        nonce: msg::hex(&nonce_bytes(&claim.nonce())),
+    });
+    send_body(&mut relay, me, &w.maker_nostr, id, NETWORK, open)?;
+    match wait_from(&mut relay, me, &w.maker_nostr, id, NETWORK, wait) {
+        Ok(got) => Ok(matches!(got.envelope.body, Body::SessionNonce(_))),
+        Err(e) if e.contains("in time") => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// The taker's S→L claim, with the swap's own taker key. Publishing it is what reveals the secret to the maker.
 fn taker_claims(w: &World, s: &Swap, coin: &SecretCoin) -> Res<LiquidTx> {
     let fee = fee_coin(w, s)?;
@@ -821,6 +852,14 @@ fn liquid_halt_extends(w: &mut World) -> Res<()> {
 
 /// E15: a rollback past the taker's claim. The daemon stops and pages, and doesn't take the coin back.
 fn rollback_stops_everything(w: &mut World) -> Res<()> {
+    // A second swap, locked first so it survives the rollback, on which a signing session would otherwise go ahead.
+    let open = new_s2l(w, 80)?;
+    let far_deadline = w.sol.slot()? + 5_000;
+    w.sol.lock(&w.taker_sol, point_64(&open.point), w.maker_solana, SOL_AMOUNT, far_deadline, false)?;
+    w.wait_state(&open.id, "the second swap's Liquid lock", 60, locked)?;
+    let open_coin = w.wait_for("the second lock to confirm", 90, || swap_coin(w, &open, 2))?;
+    let open_fee = fee_coin(w, &open)?;
+
     let s = new_s2l(w, 45)?;
     let deadline = w.sol.slot()? + 5_000;
     w.sol.lock(&w.taker_sol, point_64(&s.point), w.maker_solana, SOL_AMOUNT, deadline, false)?;
@@ -852,6 +891,21 @@ fn rollback_stops_everything(w: &mut World) -> Res<()> {
     })?;
     check(w.store.rollback().map_err(|e| e.to_string())?, "the alarm is latched")?;
     check(w.chain.spender(&coin.coin.outpoint)?.is_none(), "the claim is gone, so the coin looks unspent")?;
+    let bot = w.bot.keys.clone();
+    let ask = |w: &World, wait| {
+        session_answered(
+            w,
+            &bot,
+            &open.negotiation,
+            &open.terms,
+            &open.key,
+            &open.maker_key,
+            &open_fee,
+            &open_coin,
+            wait,
+        )
+    };
+    check(!ask(w, SESSION_WAIT)?, "no signing session runs while the alarm is on")?;
 
     // A coin that really is there, confirmed after the rollback: everything but the alarm says to lock.
     let waiting = new_l2s(w, 300)?;
@@ -872,6 +926,7 @@ fn rollback_stops_everything(w: &mut World) -> Res<()> {
     check(status.success(), "the operator cleared the alarm")?;
     w.wait_state(&waiting.id, "the waiting swap going ahead once the alarm is cleared", 120, locked)?;
     check(!w.store.rollback().map_err(|e| e.to_string())?, "the alarm stayed clear")?;
+    check(ask(w, Duration::from_secs(20))?, "and the same request is answered once it is cleared")?;
     w.wait_for("its lock to land on Solana", 60, || w.sol.escrow(&waiting.escrow))?;
 
     // Past the lock height, with the coin unspent and no alarm, an honest maker still leaves it alone.
@@ -1210,6 +1265,19 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     let fee = w.chain.secret_coins(&fee_address, &blinding)?.into_iter().next().ok_or("no fee coin")?;
     check(fee.secrets.value == FEE && fee.secrets.asset == lbtc(), "the fee coin is what was promised")?;
     let to = w.taker_wallet.address();
+
+    // Real requests on a real coin, so only the sender and id checks can refuse them. The real session below is the control.
+    let stranger = Keys::generate();
+    check(
+        !session_answered(w, &stranger, &negotiation, &agreed, &key, &maker_key, &fee, &coin, SESSION_WAIT)?,
+        "a stranger gets nothing from a swap's signing session, even with the right id",
+    )?;
+    let other_id = msg::hex(&random32()?);
+    check(
+        !session_answered(w, &me, &other_id, &agreed, &key, &maker_key, &fee, &coin, SESSION_WAIT)?,
+        "the swap's own taker gets nothing under another negotiation id",
+    )?;
+
     let claim = session_claim(w, &mut relay, &me, &negotiation, &agreed, &key, &maker_key, &secret, &fee, &coin, &to)?;
     println!("    the claim went through the relay in pieces, and is {} bytes", serialize_hex(&claim).len() / 2);
     w.chain.broadcast(&claim)?;
@@ -1228,7 +1296,7 @@ struct RawTaker {
 impl RawTaker {
     fn new(w: &World) -> Res<Self> {
         let keys = Keys::generate();
-        let mut relay = Relay::connect(&w.relay.url(), Duration::from_millis(200))?;
+        let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
         relay.subscribe("raw", &[Kind::from(msg::WRAP_KIND)], Some(&keys.public_key()), now_secs() - 2 * 86_400)?;
         Ok(Self { keys, relay, maker: w.maker_nostr, id: msg::hex(&random32()?) })
     }
@@ -1284,6 +1352,8 @@ fn accept_body(w: &World, quote_event: String, point: LockPoint) -> Res<Body> {
 }
 
 const QUIET: Duration = Duration::from_secs(3);
+/// Longer than a session request takes when it is answered, so silence means refused and not slow.
+const SESSION_WAIT: Duration = Duration::from_secs(10);
 
 /// E6 and E7 against the real daemon: each of these is a message the maker must not act on.
 fn rfq_attacks(w: &mut World) -> Res<()> {
@@ -1342,18 +1412,6 @@ fn rfq_attacks(w: &mut World) -> Res<()> {
     std::thread::sleep(QUIET);
     let swaps = w.store.open_swaps().map_err(|e| e.to_string())?.iter().filter(|(t, _)| t.swap_id() == hash).count();
     check(swaps == 1, "a relay replaying everything creates no second swap")?;
-
-    // A stranger can't join that swap's signing session, by its id or any other.
-    let mut stranger = RawTaker::new(w)?;
-    let open = Body::SessionOpen(msg::SessionOpen { lock_point: point.to_hex(), tx: "00".into(), nonce: "00".into() });
-    let twice_id = twice.id.clone();
-    stranger.send_at(&twice_id, NETWORK, now_secs(), open.clone())?;
-    check(stranger.answer(QUIET)?.is_none(), "a stranger gets no answer from a swap's signing session")?;
-    twice.send_at(&msg::hex(&random32()?), NETWORK, now_secs(), open)?;
-    check(twice.answer(QUIET)?.is_none(), "nor does the right taker under a different negotiation id")?;
-    let taker_share = Body::TakerShare(msg::SessionShare { lock_point: point.to_hex(), share: "ff".repeat(32) });
-    twice.send(taker_share)?;
-    check(twice.answer(QUIET)?.is_none(), "a share with no session behind it gets nothing")?;
 
     // A point that isn't on the curve can't be locked to or claimed, so no swap is made of it.
     let mut off_curve = RawTaker::new(w)?;

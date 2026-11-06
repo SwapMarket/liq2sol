@@ -239,6 +239,7 @@ fn the_signer_process_resists_a_compromised_engine() {
         taker_sol: read_keypair_file(keys_src.join("taker-solana.json")).unwrap(),
         maker_pubkey: solana.clone(),
         maker_script: Address::from_str(&liquid_address).unwrap().script_pubkey(),
+        maker_address: liquid_address.clone(),
         taker,
         node,
     };
@@ -309,6 +310,7 @@ struct World {
     taker_sol: Keypair,
     maker_pubkey: String,
     maker_script: Script,
+    maker_address: String,
     taker: Wallet,
 }
 
@@ -455,6 +457,12 @@ fn l2s_attacks(world: &World, client: &mut Client) -> OutPoint {
     let unreadable = SwapTerms { blinding_key: random32().unwrap(), ..terms.clone() };
     assert_refused(prepare(client, &unreadable), Refusal::NoTakerCoin);
     println!("    ok: a coin that can't be read counts as no coin");
+
+    // Anyone can send the wallet an explicit coin of a fee coin's value. It must not be taken for one: spending it would show
+    // an input's value, and bound the blinded output.
+    let plain = Address::from_str(&world.maker_address).unwrap().to_unconfidential();
+    world.node.fund(&plain.to_string(), FEE, "bitcoin");
+    world.node.mine(1);
 
     // No fee coin confirmed yet, so no session: a claim needs one reserved first.
     assert!(matches!(prepare(client, &terms), Reply::Failed(e) if e.contains("fee coin")));

@@ -293,10 +293,10 @@ freezable account and an exception to this; see [contracts.md](contracts.md).
 | Maker offline after the taker's reveal | Maker's own risk. Its margin is the 3 h or 4 h above. Watchtowers can call the permissionless Solana claim. |
 | Taker offline after locking | No loss. The taker refunds whenever it returns, or a watchtower does. |
 | Taker loses browser state | The recovery file alone is enough to refund or finish the swap. |
-| Relay failure | Quotes and new swaps stop. Open swaps aren't affected. |
+| Relay failure | Quotes and new swaps stop. An open swap that hasn't finished its signing session can't complete, and ends in refunds with nothing lost. Once the session is over, relays no longer matter. |
 | Explorer or RPC failure | Endpoints are user-configurable. Delay only, as long as it is shorter than the margin. |
-| Wrong amount or asset sent | The covenant rejects a claim, so only the refund path works. The sender recovers it at `LOCK_HEIGHT`. |
-| Two payments to one HTLC address | Each is a separate coin. The maker acts on one exact coin. The other is refundable at `LOCK_HEIGHT`. |
+| Wrong amount or asset sent | **Nothing on-chain refuses it.** Neither party signs a claim of a coin that isn't exact, so only the refund path is used, and the sender recovers it at `LOCK_HEIGHT`. |
+| Two payments to one swap address | Each is a separate coin. The maker acts on one exact coin. The other is refundable at `LOCK_HEIGHT`. |
 | Halt detection (maker) | Stop new locks if the Liquid tip is older than 10 min or Solana's finalized slot stops moving for 60 s. |
 
 ## 7.6 Privacy
@@ -377,7 +377,7 @@ The claim needs a transaction fee, and the token account needs rent if it doesn'
 |---|---|
 | **Require a small SOL balance, checked before funding (accepted)** | Simple and trustless. Excludes wallets with no SOL. |
 | Relayer-paid claim, with a tip from the amount | Better UX. The program gets a tip parameter and someone must run relayers, though no trust is needed since claim is permissionless. |
-| Handing the preimage to the maker to claim for the taker | **Rejected: unsafe.** The maker could claim on Liquid and let the escrow expire. |
+| Handing the secret to the maker to claim for the taker | **Rejected: unsafe.** The maker could claim on Liquid and let the escrow expire. |
 
 ### D6. Maker deposits and taker reservations
 
@@ -434,7 +434,7 @@ The brief asks the daemon to rebalance. Every venue adds trust and puts a key on
 ## 11. Phase 2 extension: Liquid light client (design only)
 
 Goal: a Solana program that verifies a Liquid transaction, so a maker can reserve liquidity against a taker who pays the
-maker's registered Liquid address directly, with no HTLC lock on Liquid and no taker secret.
+maker's registered Liquid address directly, with no swap lock on Liquid and no taker secret.
 
 - **Header format** (checked by decoding live mainnet block 4,131,983): dynafed version bit, a compact current params
   entry holding the P2WSH signblockscript and an elided root, and a witness stack of 13 items: empty dummy, 11 DER ECDSA

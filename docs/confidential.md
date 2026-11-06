@@ -103,12 +103,13 @@ regtest nodes must be started with `-acceptdiscountct=1` to behave like the real
 |---|---|---|---|
 | A swap spend: 2 inputs, 1 blinded output, fee | 1,376 | 251 | 26 sats |
 | A payment: 2 inputs, 4 blinded outputs, fee | 4,986 | 487 | 49 sats |
+| A refund: 2 inputs, 1 blinded output, fee, the Simplicity leaf | 1,409 | 285 | 29 sats |
 
 Ordinary payments pay about twice the floor, computed from their shape. A swap claim's fee can't be raised, because the signature
 commits to the whole transaction, so a fee coin holds 300 sats, about 12 times the floor. The claim's blinded output can still be
 spent by a child transaction if that is ever not enough. Whether 300 is the right margin is open; it is the `FEE` constant.
 
-**UNVERIFIED:** relay of these discounted transactions through the public Liquid testnet Esplora. Only a local node has been measured.
+Discounted transactions relay through the public Liquid testnet Esplora: every run below went through it at these fees.
 
 ## Stage 1: proving it
 

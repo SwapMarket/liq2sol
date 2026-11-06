@@ -34,6 +34,8 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
   directions on Liquid testnet and Solana devnet, using stand-in assets. `cli/tests/failures.rs` runs the failure scenarios on regtest plus devnet. `maker/` has the
   engine, signer process and daemon loop, tested with real processes under crashes, halts and rollbacks, with the maker vault on. `shared/rfq` and `maker/daemon/src/rfq.rs` add quotes over Nostr, tested on a mock relay and through `relay.coinos.pro`, the user's chosen relay. Next: the static client. E14 still needs a real cluster restart. E16 only runs on a local validator.
 
+**Branch `confidential` (not merged, as of 2026-11-06):** the redesign in `docs/confidential.md` replaces the Simplicity HTLC with a MuSig2 taproot output, adapter-signed claims and blinded coins. Contracts, signer, daemon, RFQ and CLI are all moved over and tested. The docs on this branch describe that design. Next: the static client, which still has to be built on `contracts/swapkey-wasm`.
+
 ## Design points that are easy to get wrong
 
 Details and sources are in the docs. These are recorded because older assumptions were wrong.
@@ -52,7 +54,11 @@ Details and sources are in the docs. These are recorded because older assumption
   decision, 2026-11-05). The Reown project ID is shared with `sol2base`, whose `app.js` is the reference code. Sign with
   `solana_signTransaction` and broadcast from the app, so the app controls when the preimage goes out.
 - **Anchor is v1.2.2, repo `otter-sec/anchor`.**
-- **Swaps aren't confidential:** the covenant needs explicit amounts, and the same payment hash links the two chains (`docs/protocol.md` section 7.6).
+- **Nothing on-chain checks a swap coin's asset or amount.** Each party unblinds it and checks. That check is the whole defence (`exact_secret_coin`).
+- **An adapter signature must be durable before anything relies on it:** before a Solana lock (L→S), or before the maker's share goes out (S→L). One session per swap.
+- **A nonce signs once and is never stored.** A crash abandons the session.
+- **Liquid charges confidential transactions on discount vsize,** about a tenth of vsize. `-acceptdiscountct` is on by default on `liquidv1` and `liquidtestnet`, and off on regtest, so regtest nodes must set it.
+- **Wallets must hold only blinded coins:** an explicit input bounds the blinded outputs.
 - **Kind 21059 wrappers carry the real time.** Relays drop ephemeral events more than a few seconds old.
 - **The second Solana endpoint is Helius, using an optional key the taker provides** (user's decision, 2026-11-05). Never
   ship a key in the static app.
@@ -78,5 +84,7 @@ Details and sources are in the docs. These are recorded because older assumption
 - Failure scenarios, from `cli/`: `ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli SOLANA_RPC=https://api.devnet.solana.com cargo test --test failures -- --ignored --nocapture`.
 - `solana-test-validator` aborts here without AVX, prebuilt or built from source (`reed-solomon-erasure` runs AVX2 code unchecked). It runs under WSL on the Windows host, with `--bind-address <WSL IP>` (not `0.0.0.0`, which panics) and a Windows `netsh` port proxy; use `SOLANA_RPC=http://<Windows LAN IP>:8899`.
 - `/tmp` is wiped on reboot. Keep anything worth keeping in the repo.
+- `solana-test-validator` has SIMD-0500 active, which refuses to deploy SBPF v0: build with `cargo build-sbf --arch v3`, and deploy with `--use-rpc` through the port proxy. A restarted validator is a new chain, so redeploy and rerun `liq2sol-cli setup`, after the airdrops finalize.
+- Mutation checks for this design: `RUSTFLAGS="" python3 -I -u scripts/mutate-confidential.py`, on a clean tree, with the same environment as the suites.
 - Free Solana RPC (publicnode) blocks `getProgramAccounts`/token-account indexing and old history; plan clients around
   that (remember accounts locally, derive PDAs).

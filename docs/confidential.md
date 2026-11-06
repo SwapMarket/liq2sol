@@ -1,7 +1,7 @@
 # Confidential swaps
 
-Status: redesign in progress on the `confidential` branch. This changes parts of [protocol.md](protocol.md) and
-[contracts.md](contracts.md), and replaces the Simplicity HTLC. Those documents still describe `main` until this lands.
+Status: built on the `confidential` branch, through the maker and the CLI. This is the reasoning and the evidence; [protocol.md](protocol.md) and
+[contracts.md](contracts.md) describe the result. The static client is not built yet.
 
 Goal: **an outside observer can't link the two legs of a swap, and can't see the Liquid amount or asset.**
 
@@ -123,4 +123,30 @@ All done, on real systems:
 | The same values, computed separately from the curve's definition | Match the Rust code and the program | `contracts/swapkey/tests/values.rs` |
 | Blinding, proofs and adapter signing in a browser | Headless Chromium 145 built and signed a whole claim in 414 ms, with a 4.9 MB module. The node accepted it at a 300-sat fee. | `scripts/check-browser-claim.py` |
 
-Not yet covered: the program on a public cluster with this change, Firefox and Safari, and a real wallet paying a confidential address of this form.
+## Stage 2: the whole system
+
+Every run below used real processes and a real node. Solana was a local validator, not a public cluster.
+
+| Check | Result | Where |
+|---|---|---|
+| Both swap directions and both aborts on **public Liquid testnet** | Passed, with the discounted fees relayed by the public Esplora. A claim has one witness item and hidden outputs, at 4,690 bytes. A refund has four, at 4,823 bytes. An early refund was refused as `non-final`. | `cli/src/main.rs`. S→L claim `d03c4a86…`, L→S claim `89516d90…`, refund `2d254d6e…` |
+| Maker daemon under crashes, vanishing takers, bad coins, a Liquid halt and a rollback | Passed, with the maker vault on. A taker who pays and never signs costs the maker nothing. | `maker/daemon/tests/e2e.rs` |
+| Failure scenarios E4, E5, E9, E11, E12, E13, E15a, E15b, E16 | Passed. E9 now rests on off-chain checks, and E5, E12, E15a, E15b and E16 still show the losses they are meant to. | `cli/tests/failures.rs` |
+| A compromised engine on the signer's socket | All refused: wrong asset, amount or blinding key, bad shares, repeat sessions, a flipped-parity point, a reserved fee coin, an explicit coin | `maker/signer/tests/process.rs` |
+| Sessions from a stranger, under another id, or during a rollback alarm | Refused, using real requests on real coins, with the honest session as the control | `maker/daemon/tests/e2e.rs` |
+
+Measured on the local validator: a program built for SBPF v3, because that cluster refuses to deploy v0 (SIMD-0500).
+
+## Not yet covered
+
+- The program on a public cluster. The branch has its own program id, and deploying it on devnet needs about 2.3 SOL.
+- Firefox and Safari, and a real wallet paying a confidential address of this form.
+- A real restart for E14, as on `main`.
+- An audit of `musig2` 0.4.1's adaptor code.
+- A taker's own refund from a daemon-run swap. The refund leaf is proven on testnet through the CLI.
+
+## Open choices
+
+- **Fee coin size.** 300 sats is about 12 times the floor for a claim whose fee can't be raised. It is the `FEE` constant.
+- **Reserved coins of abandoned swaps** stay reserved. It is at most one fee coin per swap that paid a real coin, so this was left simple.
+

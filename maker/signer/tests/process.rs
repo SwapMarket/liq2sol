@@ -733,6 +733,17 @@ fn s2l_attacks(world: &World, client: &mut Client, reserved: OutPoint) {
         "and that session is gone"
     );
 
+    // Other terms for the same swap id would mean signing with this nonce under another key context.
+    let claim = start();
+    let maker_nonce = got_nonce(open(client, &claim.tx.clone(), &claim.nonce()));
+    let (share, _) = claim.sign(&world.taker.key, &output, &point.0, &maker_nonce).unwrap();
+    let moved = SwapTerms { lock_height: terms.lock_height + 1, ..terms.clone() };
+    assert!(
+        matches!(finish(client, &moved, &hex_of(&share_bytes(&share))), Reply::Failed(e) if e.contains("differ")),
+        "a session finishes under the terms it was opened with, or not at all"
+    );
+    println!("    ok: a session can't be finished under different terms");
+
     // The same x with the other y: same id, but it isn't the escrow's point.
     let claim = start();
     let maker_nonce = got_nonce(open(client, &claim.tx.clone(), &claim.nonce()));

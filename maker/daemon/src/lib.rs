@@ -530,9 +530,23 @@ impl Maker {
 }
 
 /// For an operator who has checked the chain. New locks and all other actions resume on the next tick.
+/// Paths in a config are relative to the config file, so a maker's folder can be copied without pointing at the original.
+fn load_config(path: &Path) -> Result<Config, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut cfg: Config = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let base = path.parent().unwrap_or(Path::new("."));
+    // An absolute path is kept as it is, because joining onto one replaces what came before.
+    cfg.db = base.join(&cfg.db);
+    cfg.signer_socket = base.join(&cfg.signer_socket);
+    cfg.pages = base.join(&cfg.pages);
+    if let Some(rfq) = cfg.rfq.as_mut() {
+        rfq.nostr_key = base.join(&rfq.nostr_key);
+    }
+    Ok(cfg)
+}
+
 pub fn clear_rollback(config_path: &Path) -> Result<(), String> {
-    let text = std::fs::read_to_string(config_path).map_err(|e| e.to_string())?;
-    let cfg: Config = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let cfg = load_config(config_path)?;
     let store = Store::open(&cfg.db).map_err(|e| e.to_string())?;
     let was_set = store.rollback().map_err(|e| e.to_string())?;
     store.set_rollback(false).map_err(|e| e.to_string())?;
@@ -542,8 +556,7 @@ pub fn clear_rollback(config_path: &Path) -> Result<(), String> {
 
 /// Run until stopped. A chain or signer outage just means trying again.
 pub fn run(config_path: &Path) -> Result<(), String> {
-    let text = std::fs::read_to_string(config_path).map_err(|e| e.to_string())?;
-    let cfg: Config = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let cfg = load_config(config_path)?;
     let tick = Duration::from_millis(cfg.tick_millis);
     let mut maker = loop {
         match Maker::new(cfg.clone()) {
@@ -572,5 +585,36 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             }
         }
         std::thread::sleep(tick);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loaded(folder: &str, edit: impl Fn(&str) -> String) -> Config {
+        let dir = std::env::temp_dir().join(format!("liq2sol-config-{}-{folder}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("maker.json");
+        std::fs::write(&path, edit(include_str!("../../../deploy/maker.example.json"))).unwrap();
+        load_config(&path).unwrap()
+    }
+
+    #[test]
+    fn the_example_stays_inside_the_folder_it_is_copied_to() {
+        for folder in ["first", "second"] {
+            let cfg = loaded(folder, str::to_string);
+            let root = std::env::temp_dir().join(format!("liq2sol-config-{}-{folder}", std::process::id()));
+            assert_eq!(cfg.db, root.join("maker.db"));
+            assert_eq!(cfg.signer_socket, root.join("run/signer.sock"));
+            assert_eq!(cfg.pages, root.join("pages.log"));
+            assert_eq!(cfg.rfq.unwrap().nostr_key, root.join("keys/nostr.key"));
+        }
+    }
+
+    #[test]
+    fn an_absolute_path_is_kept() {
+        let cfg = loaded("absolute", |s| s.replace("\"maker.db\"", "\"/elsewhere/maker.db\""));
+        assert_eq!(cfg.db, Path::new("/elsewhere/maker.db"));
     }
 }

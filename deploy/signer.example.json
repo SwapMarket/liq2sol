@@ -1,7 +1,7 @@
 {
- "socket": "/var/lib/liq2sol/first/run/signer.sock",
- "ledger": "/var/lib/liq2sol/first/signer.db",
- "keys_dir": "/var/lib/liq2sol/first/keys",
+ "socket": "run/signer.sock",
+ "ledger": "signer.db",
+ "keys_dir": "keys",
  "liquid": {
   "Esplora": "https://liquid.network/liquidtestnet/api"
  },

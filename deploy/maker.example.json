@@ -1,7 +1,7 @@
 {
- "db": "/var/lib/liq2sol/first/maker.db",
- "signer_socket": "/var/lib/liq2sol/first/run/signer.sock",
- "pages": "/var/lib/liq2sol/first/pages.log",
+ "db": "maker.db",
+ "signer_socket": "run/signer.sock",
+ "pages": "pages.log",
  "engine": {
   "confirmations": 2,
   "large_above": 1000000000,
@@ -32,7 +32,7 @@
  "retry_secs": 60,
  "regtest_assets": null,
  "rfq": {
-  "nostr_key": "/var/lib/liq2sol/first/keys/nostr.key",
+  "nostr_key": "keys/nostr.key",
   "relays": [
    "wss://relay.primal.net",
    "wss://relay.coinos.pro"

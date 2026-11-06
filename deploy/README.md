@@ -60,7 +60,7 @@ It is running when the log says `maker answering quotes as <key>`, followed by `
 
 ## Several makers on one machine
 
-Each maker is a folder under `/var/lib/liq2sol`, with its own keys, configs and databases. To add `second`, repeat the folder steps with that name, change `first` to `second` in both of its configs, set its prices, and give it its own keys, including its own `nostr.key` and `solana.json`. Then start `liq2sol-signer@second` and `liq2sol-maker@second`.
+Each maker is a folder under `/var/lib/liq2sol`, with its own keys, configs and databases. Paths in a config are relative to that config, so the example configs work unchanged in any folder. To add `second`, repeat the folder steps with that name, set its prices, and give it its own `solana.json`. Its other keys are generated. Then start `liq2sol-signer@second` and `liq2sol-maker@second`.
 
 Two makers must never share keys or a database. Their prices and limits are independent, but they share this machine's IP, and so its API rate limits.
 

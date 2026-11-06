@@ -963,10 +963,21 @@ fn serve(signer: &Mutex<Signer>, stream: UnixStream) -> std::io::Result<()> {
     }
 }
 
+/// Paths in a config are relative to the config file, so a maker's folder can be copied without pointing at the original.
+fn load_config(path: &Path) -> Result<Config, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut cfg: Config = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let base = path.parent().unwrap_or(Path::new("."));
+    // An absolute path is kept as it is, because joining onto one replaces what came before.
+    cfg.socket = base.join(&cfg.socket);
+    cfg.ledger = base.join(&cfg.ledger);
+    cfg.keys_dir = base.join(&cfg.keys_dir);
+    Ok(cfg)
+}
+
 /// Run until the process is stopped.
 pub fn run(config_path: &Path) -> Result<(), String> {
-    let text = std::fs::read_to_string(config_path).map_err(|e| e.to_string())?;
-    let cfg: Config = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let cfg = load_config(config_path)?;
     // A chain outage must not stop us coming back up, or we couldn't sign claims when it ends. The mainnet check stays
     // fail-closed: nothing is served until it has actually passed.
     let signer = loop {
@@ -1058,6 +1069,18 @@ mod tests {
         assert!(refuse_mainnet(LIQUID_MAINNET_GENESIS, "x").is_err());
         assert!(refuse_mainnet("x", MAINNET_GENESIS).is_err());
         assert!(refuse_mainnet("x", "y").is_ok());
+    }
+
+    #[test]
+    fn the_example_config_stays_inside_the_folder_it_is_copied_to() {
+        let dir = std::env::temp_dir().join(format!("liq2sol-signer-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("signer.json");
+        std::fs::write(&path, include_str!("../../../deploy/signer.example.json")).unwrap();
+        let cfg = load_config(&path).unwrap();
+        assert_eq!(cfg.socket, dir.join("run/signer.sock"));
+        assert_eq!(cfg.ledger, dir.join("signer.db"));
+        assert_eq!(cfg.keys_dir, dir.join("keys"));
     }
 
     #[test]

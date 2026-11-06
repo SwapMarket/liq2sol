@@ -8,6 +8,13 @@ const keep = (bps) => BigInt(10000 - bps);
 /** What a maker pays for `send`, rounded in its favour, as it prices a quote. */
 export const receiveFor = (send, bps) => (send * keep(bps)) / 10000n;
 
+/** What the taker really pays per unit received across these fills, with rounding and any mix of price steps. */
+export const effectivePrice = (fills) => {
+  const paid = fills.reduce((sum, f) => sum + f.send, 0n);
+  const got = fills.reduce((sum, f) => sum + f.receive, 0n);
+  return Number(paid) / Number(got);
+};
+
 /** The most a taker can send to a maker that can pay `available`. */
 const sendFor = (available, bps) => (available * 10000n) / keep(bps);
 

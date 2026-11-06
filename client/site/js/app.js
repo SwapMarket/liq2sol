@@ -2,7 +2,7 @@
 import init, * as W from '../wasm/liq2sol_client_wasm.js';
 import { NETWORK, refuseMainnet } from './config.js';
 import { Esplora, Solana } from './chain.js';
-import { bpsAt, planOrder } from './plan.js';
+import { bpsAt, planOrder, effectivePrice } from './plan.js';
 import { Relays } from './relay.js';
 import { Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
@@ -116,7 +116,7 @@ function onEvent(event) {
     if (!known || known.created_at <= got.created_at) offers.set(got.maker, got);
     // Messages carry the time, so a clock far from a maker's would get them refused.
     if (Math.abs(now() - got.created_at) > 3600 * 24) return;
-    refreshForm();
+    updateForm();
     return;
   }
   if (event.kind !== WRAP_KIND) return;
@@ -148,13 +148,13 @@ function toggleFavorite(maker) {
   if (!set.delete(maker)) set.add(maker);
   settings.favorites = [...set];
   saveSettings(settings);
-  render();
+  updateForm();
 }
 
 function setOnlyFavorites(on) {
   settings.onlyFavorites = on;
   saveSettings(settings);
-  render();
+  updateForm();
 }
 
 // On unless the taker turned it off, because a new visitor has no favorites and fake offers cost nothing to publish.
@@ -163,7 +163,7 @@ const onlyVetted = () => settings.onlyVetted !== false;
 function setOnlyVetted(on) {
   settings.onlyVetted = on;
   saveSettings(settings);
-  render();
+  updateForm();
 }
 
 // The makers an order can use. Hidden ones aren't offered anything.
@@ -182,70 +182,120 @@ function currentPlan(send) {
   return planOrder(send ?? 0n, makers, ui.selected, settings.maxSpreadBps ?? NETWORK.maxSpreadBps, favorites());
 }
 
-// The price at this order's size, or the best step if there is no order yet. Hovering shows the whole ladder.
-function priceCell(o, direction, send, fills) {
-  const tiers = tiersOf(o, direction);
-  const ladder = tiers.map((t) => `up to ${size(sizeDown(t.up_to))}: ${price(t.bps)}`).join('\n');
-  if (fills.length) {
-    const rates = [...new Set(fills.map((f) => price(f.bps)))];
-    return h('td', { title: ladder }, rates.join(' / '));
-  }
-  const at = send && send > 0n ? bpsAt(tiers, send) : null;
-  if (at !== null) return h('td', { title: ladder }, price(at));
-  return h('td', { title: ladder }, `${tiers.length > 1 ? 'from ' : ''}${price(tiers[0].bps)}`);
+// Change what's on screen only if it differs, so a selection, a hover or a tap in progress isn't disturbed.
+function setText(el, text, title) {
+  if (el.textContent !== text) el.textContent = text;
+  if (title !== undefined && el.title !== title) el.title = title;
 }
 
-function bookView(send) {
-  const list = shownOffers(ui.direction);
+// Rebuild a part of the form only when what it shows has changed.
+function slot(el, key, build) {
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.replaceChildren(...[build()].flat().filter(Boolean));
+}
+
+// What to show for one maker: with an order typed in, the price and size of that order, and otherwise what the maker quotes.
+function bookCells(o, direction, send, fills) {
+  const tiers = tiersOf(o, direction);
+  const ladder = tiers.map((t) => `up to ${size(sizeDown(t.up_to))}: ${price(t.bps)}`).join('\n');
+  const max = BigInt(o.offer.max_sol_units);
+  if (fills.length) {
+    return { rate: effectivePrice(fills).toFixed(4), ladder, size: size(sizeUp(fills.reduce((sum, f) => sum + f.send, 0n))) };
+  }
+  if (send && send > 0n) return { rate: price(bpsAt(tiers, send < max ? send : max) ?? tiers[0].bps), ladder, size: '–' };
+  return {
+    rate: `${tiers.length > 1 ? 'from ' : ''}${price(tiers[0].bps)}`,
+    ladder,
+    size: `${size(sizeUp(o.offer.min_sol_units))} – ${size(sizeDown(o.offer.max_sol_units))}`,
+  };
+}
+
+// The book stays on the page for the whole visit, and each update touches only the cells that changed.
+const book = {
+  rows: new Map(),
+  title: h('h3'),
+  headers: ['Maker', 'Price', 'Per swap', 'Maker can pay'].map((t) => h('th', {}, t)),
+  body: h('tbody'),
+  empty: h('div', { class: 'empty' }),
+  onlyVetted: h('input', { type: 'checkbox', id: 'only-vetted', onchange: (e) => setOnlyVetted(e.target.checked) }),
+  onlyFavorites: h('input', { type: 'checkbox', id: 'only-favorites', onchange: (e) => setOnlyFavorites(e.target.checked) }),
+  warning: h('p', { class: 'note', id: 'unvetted-warning' },
+    'Anyone can publish an offer. A maker who never follows through can\'t take your funds, but it can hold them until the refund, for about 6 hours or more.'),
+};
+book.table = h('table', {}, h('thead', {}, h('tr', {}, book.headers)), book.body);
+book.el = h('div', { class: 'book' }, book.title,
+  h('div', { class: 'scroll' }, book.table, book.empty),
+  h('div', { class: 'book-filters' },
+    h('label', { class: 'check' }, book.onlyVetted, 'Only vetted by SwapMarket'),
+    h('label', { class: 'check' }, book.onlyFavorites, 'Only my favorites')),
+  book.warning);
+
+function newBookRow(maker) {
+  const star = h('button', { class: 'star', onclick: (e) => { e.stopPropagation(); toggleFavorite(maker); } });
+  const vetted = vettedMaker(NETWORK.name, maker);
+  const row = { star, rate: h('td'), size: h('td'), pays: h('td') };
+  row.el = h('tr', { onclick: () => { ui.selected = ui.selected === maker ? null : maker; updateForm(); } },
+    h('td', { class: 'mono', title: maker }, star, ` ${short(maker)}`,
+      vetted && h('span', { class: 'vetted', title: `Vetted by SwapMarket: ${vetted.name}`, 'aria-label': 'Vetted by SwapMarket' }, ' ✓')),
+    row.rate, row.size, row.pays);
+  return row;
+}
+
+function updateBook(send) {
+  const direction = ui.direction;
+  const [from, to] = names[direction];
+  const list = shownOffers(direction);
   const plan = currentPlan(send);
   const fav = favorites();
-  const rows = list.map((o) => {
+  const ordered = send && send > 0n;
+
+  setText(book.title, `Makers book: ${from} → ${to}`);
+  setText(book.headers[0], 'Maker', 'The maker\'s Nostr key');
+  setText(book.headers[1], 'Price', ordered
+    ? `What you pay per ${to} on this order, in ${from}`
+    : `${from} you pay for each ${to} you receive`);
+  setText(book.headers[2], ordered ? 'Your fill' : 'Per swap', ordered
+    ? `How much of your order goes to this maker, in ${from}`
+    : `The smallest and largest single swap, in ${from} and ${to} alike`);
+  setText(book.headers[3], 'Maker can pay', `How much ${to} this maker can pay you right now`);
+
+  const seen = new Set();
+  list.forEach((o, at) => {
+    seen.add(o.maker);
+    const row = book.rows.get(o.maker) ?? newBookRow(o.maker);
+    book.rows.set(o.maker, row);
     const mine = plan.fills.filter((f) => f.maker === o.maker);
-    return h('tr', {
-      class: mine.length ? 'on' : '',
-      onclick: () => { ui.selected = ui.selected === o.maker ? null : o.maker; render(); },
-    },
-    h('td', { class: 'mono', title: o.maker },
-      h('button', {
-        class: `star${fav.has(o.maker) ? ' on' : ''}`,
-        title: fav.has(o.maker) ? 'Remove from favorites' : 'Add to favorites',
-        'aria-label': fav.has(o.maker) ? `Remove ${short(o.maker)} from favorites` : `Add ${short(o.maker)} to favorites`,
-        'aria-pressed': fav.has(o.maker) ? 'true' : 'false',
-        onclick: (e) => { e.stopPropagation(); toggleFavorite(o.maker); },
-      }, fav.has(o.maker) ? '★' : '☆'),
-      ` ${short(o.maker)}`,
-      vettedMaker(NETWORK.name, o.maker)
-        ? h('span', { class: 'vetted', title: `Vetted by SwapMarket: ${vettedMaker(NETWORK.name, o.maker).name}`, 'aria-label': 'Vetted by SwapMarket' }, ' ✓')
-        : ''),
-    priceCell(o, ui.direction, send, mine),
-    h('td', {}, `${size(sizeUp(o.offer.min_sol_units))} – ${size(sizeDown(o.offer.max_sol_units))}`),
-    h('td', {}, size(sizeDown(available(o, ui.direction)))),
-    h('td', {}, mine.length ? size(sizeUp(mine.reduce((sum, f) => sum + f.send, 0n) - 1n)) : '–'));
+    const cells = bookCells(o, direction, send, mine);
+    setText(row.rate, cells.rate, cells.ladder);
+    setText(row.size, cells.size);
+    setText(row.pays, size(sizeDown(available(o, direction))));
+    row.el.classList.toggle('on', mine.length > 0);
+    const on = fav.has(o.maker);
+    setText(row.star, on ? '★' : '☆', on ? 'Remove from favorites' : 'Add to favorites');
+    row.star.classList.toggle('on', on);
+    row.star.setAttribute('aria-pressed', String(on));
+    row.star.setAttribute('aria-label', `${on ? 'Remove' : 'Add'} ${short(o.maker)} ${on ? 'from' : 'to'} favorites`);
+    if (book.body.children[at] !== row.el) book.body.insertBefore(row.el, book.body.children[at] ?? null);
   });
-  return h('div', { class: 'book' },
-    h('h3', {}, `Makers book: ${names[ui.direction].join(' → ')}`),
-    h('div', { class: 'scroll' }, rows.length
-      ? h('table', {},
-        h('thead', {}, h('tr', {}, [
-          ['Maker', 'The maker\'s Nostr key'],
-          ['Price', `${names[ui.direction][0]} you pay for each ${names[ui.direction][1]} you receive`],
-          ['Per swap', `The smallest and largest single swap, in ${names[ui.direction][0]} and ${names[ui.direction][1]} alike`],
-          ['Maker can pay', `How much ${names[ui.direction][1]} this maker can pay you right now`],
-          ['Your fill', `How much of your order goes to this maker, in ${names[ui.direction][0]}`],
-        ].map(([t, why]) => h('th', { title: why }, t)))),
-        h('tbody', {}, rows))
-      : h('div', { class: 'empty' }, liveOffers(ui.direction).length
-        ? `No maker you chose to see is offering this direction right now. ${liveOffers(ui.direction).length} hidden by the switches below.`
-        : relays?.connected() ? 'No maker is offering this direction right now.' : 'Connecting to Nostr relays…')),
-    h('div', { class: 'book-filters' },
-      h('label', { class: 'check' },
-        h('input', { type: 'checkbox', id: 'only-vetted', checked: onlyVetted(), onchange: (e) => setOnlyVetted(e.target.checked) }),
-        'Only vetted by SwapMarket'),
-      h('label', { class: 'check' },
-        h('input', { type: 'checkbox', id: 'only-favorites', checked: !!settings.onlyFavorites, onchange: (e) => setOnlyFavorites(e.target.checked) }),
-        'Only my favorites')),
-    onlyVetted() ? '' : h('p', { class: 'note', id: 'unvetted-warning' },
-      'Anyone can publish an offer. A maker who never follows through can\'t take your funds, but it can hold them until the refund, for about 6 hours or more.'));
+  for (const [maker, row] of book.rows) {
+    if (!seen.has(maker)) {
+      row.el.remove();
+      book.rows.delete(maker);
+    }
+  }
+
+  book.table.hidden = !list.length;
+  book.empty.hidden = !!list.length;
+  if (!list.length) {
+    const hidden = liveOffers(direction).length;
+    setText(book.empty, hidden
+      ? `No maker you chose to see is offering this direction right now. ${hidden} hidden by the switches below.`
+      : relays?.connected() ? 'No maker is offering this direction right now.' : 'Connecting to Nostr relays…');
+  }
+  book.onlyVetted.checked = onlyVetted();
+  book.onlyFavorites.checked = !!settings.onlyFavorites;
+  book.warning.hidden = onlyVetted();
 }
 
 // ---- Wallet ----
@@ -304,52 +354,64 @@ async function walletConnect() {
 // was being typed into it at that moment.
 const amountInput = h('input', {
   class: 'amount', inputMode: 'decimal', placeholder: '0', id: 'amount',
-  oninput: (e) => { ui.amount = e.target.value; refreshForm(); },
+  oninput: (e) => { ui.amount = e.target.value; updateForm(); },
 });
 const toInput = h('input', {
   class: 'input', id: 'to', placeholder: 'tlq1…',
-  oninput: (e) => { ui.to = e.target.value; refreshForm(); },
+  oninput: (e) => { ui.to = e.target.value; updateForm(); },
 });
 
-function formView() {
+// The form stays on the page too, and updateForm changes only what differs.
+const form = {
+  receive: h('input', { class: 'amount', readOnly: true, placeholder: '0' }),
+  fromCoin: h('span', { class: 'slot' }),
+  toCoin: h('span', { class: 'slot' }),
+  address: h('div'),
+  wallet: h('div'),
+  facts: h('div'),
+  unfilled: h('div'),
+  go: h('button', { class: 'btn', id: 'go', onclick: startQuote }),
+};
+form.el = h('div', { class: 'card' },
+  h('button', { class: 'gear', title: 'Settings', 'aria-label': 'Settings', onclick: () => settingsDialog() }, '⚙'),
+  h('h2', {}, 'Create Atomic Swap'),
+  h('p', { class: 'sub' }, 'Trustless and confidential. No server holds anything.'),
+  h('div', { class: 'row' }, form.fromCoin, amountInput),
+  h('button', { class: 'flip', title: 'Swap direction', 'aria-label': 'Swap direction', onclick: () => { ui.direction = ui.direction === 'L2S' ? 'S2L' : 'L2S'; ui.selected = null; updateForm(); } }, '⇅'),
+  h('div', { class: 'row to' }, form.toCoin, form.receive),
+  form.address, form.wallet, form.facts, form.unfilled, form.go);
+
+function updateForm() {
+  if (!form.el.isConnected) return;
   const send = units(ui.amount);
   const [from, to] = names[ui.direction];
   const plan = currentPlan(send);
   const hasAmount = send && send > 0n;
-  const received = hasAmount && plan.fills.length ? plan.receive : null;
+  const filled = hasAmount && plan.fills.length > 0;
   const needsAddress = ui.direction === 'S2L';
-  const ready = hasAmount && plan.fills.length && wallet && (!needsAddress || ui.to.trim());
+  const ready = filled && wallet && (!needsAddress || ui.to.trim());
   const label = !hasAmount ? 'Enter an amount' : !plan.fills.length ? 'No maker fits this amount' : !wallet ? 'Connect a Solana wallet' : needsAddress && !ui.to.trim() ? 'Enter a Liquid address' : plan.fills.length > 1 ? `Get ${plan.fills.length} firm quotes` : 'Get a firm quote';
+
   amountInput.setAttribute('aria-label', `You send, in ${from}`);
-  const receive = h('input', { class: 'amount', readOnly: true, value: received === null ? '' : show(received), placeholder: '0', 'aria-label': `You receive, in ${to}` });
-  return h('div', { class: 'card' },
-    h('button', { class: 'gear', title: 'Settings', 'aria-label': 'Settings', onclick: settingsDialog }, '⚙'),
-    h('h2', {}, 'Create Atomic Swap'),
-    h('p', { class: 'sub' }, 'Trustless and confidential. No server holds anything.'),
-    h('div', { class: 'row' }, coinPill(from),
-      amountInput),
-    h('button', { class: 'flip', title: 'Swap direction', 'aria-label': 'Swap direction', onclick: () => { ui.direction = ui.direction === 'L2S' ? 'S2L' : 'L2S'; ui.selected = null; render(); } }, '⇅'),
-    h('div', { class: 'row to' }, coinPill(to), receive),
-    needsAddress && h('label', { class: 'field' }, h('span', {}, 'Your Liquid address, confidential'),
-      toInput),
-    walletView(),
-    hasAmount && plan.fills.length > 0 && h('dl', { class: 'facts' },
-      h('div', {}, h('dt', {}, 'Filled by'), h('dd', {}, plan.fills.length === 1 ? short(plan.fills[0].maker) : `${plan.fills.length} separate swaps`)),
-      h('div', {}, h('dt', {}, 'Average price'), h('dd', {}, (Number(send - plan.unfilled) / Number(plan.receive)).toFixed(4)))),
-    hasAmount && plan.unfilled > 0n && plan.fills.length > 0 && h('p', { class: 'warn', id: 'unfilled' }, `The book can fill ${show(send - plan.unfilled)} of this right now. ${show(plan.unfilled)} would stay unswapped.`),
-    h('button', { class: 'btn', id: 'go', disabled: !ready, onclick: startQuote }, label));
+  form.receive.setAttribute('aria-label', `You receive, in ${to}`);
+  const received = filled ? show(plan.receive) : '';
+  if (form.receive.value !== received) form.receive.value = received;
+  slot(form.fromCoin, from, () => coinPill(from));
+  slot(form.toCoin, to, () => coinPill(to));
+  slot(form.address, String(needsAddress), () => needsAddress && h('label', { class: 'field' }, h('span', {}, 'Your Liquid address, confidential'), toInput));
+  slot(form.wallet, `${wallet?.name}|${wallet?.address}|${extensionWallets().map((w) => w.name).join()}`, walletView);
+  const filledBy = filled && (plan.fills.length === 1 ? short(plan.fills[0].maker) : `${plan.fills.length} separate swaps`);
+  const average = filled && effectivePrice(plan.fills).toFixed(4);
+  slot(form.facts, `${filledBy}|${average}`, () => filled && h('dl', { class: 'facts' },
+    h('div', {}, h('dt', {}, 'Filled by'), h('dd', {}, filledBy)),
+    h('div', {}, h('dt', {}, 'Average price'), h('dd', {}, average))));
+  const partial = filled && plan.unfilled > 0n;
+  slot(form.unfilled, partial ? `${send}|${plan.unfilled}` : '', () => partial && h('p', { class: 'warn', id: 'unfilled' }, `The book can fill ${show(send - plan.unfilled)} of this right now. ${show(plan.unfilled)} would stay unswapped.`));
+  setText(form.go, label);
+  form.go.disabled = !ready;
+  updateBook(send);
 }
 
-// Typing shouldn't rebuild the input under the cursor.
-function refreshForm() {
-  const focus = document.activeElement?.id;
-  const at = document.activeElement?.selectionStart;
-  render();
-  if (focus && $(focus)) {
-    $(focus).focus();
-    if (at !== undefined && at !== null) $(focus).setSelectionRange?.(at, at);
-  }
-}
 
 function waitFor(n, pred, ms) {
   return new Promise((resolve, reject) => {
@@ -746,6 +808,8 @@ function settingsDialog() {
 }
 
 // ---- Render and run ----
+const HERO = () => h('div', { class: 'hero' }, h('h1', {}, 'Liquid ⇄ Solana Atomic Swaps'), h('p', {}, 'Swap USDt across chains while staying in full control. Nobody can link the two sides.'));
+
 function render() {
   const tab = (location.hash.replace('#', '') || 'swap');
   document.querySelectorAll('.tab[data-tab]').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
@@ -754,6 +818,15 @@ function render() {
   // A file picker or a half-typed address shouldn't vanish when the chain is polled.
   const active = document.activeElement;
   if (active && (active.classList?.contains('refund-to') || active.type === 'file') && view.contains(active)) return;
+  const showForm = tab !== 'rescue' && tab !== 'history' && !(ui.openOrder && orderOf(ui.openOrder).length) && !ui.quote;
+  if (showForm) {
+    if (!form.el.isConnected) {
+      view.replaceChildren(form.el);
+      below.replaceChildren(book.el, HERO());
+    }
+    updateForm();
+    return;
+  }
   view.replaceChildren();
   below.replaceChildren();
   if (tab === 'rescue') {
@@ -762,12 +835,8 @@ function render() {
     view.append(historyView());
   } else if (ui.openOrder && orderOf(ui.openOrder).length) {
     view.append(...orderView(orderOf(ui.openOrder)).flat().filter(Boolean));
-  } else if (ui.quote) {
-    view.append(quoteView());
   } else {
-    view.append(formView());
-    below.append(bookView(units(ui.amount)));
-    below.append(h('div', { class: 'hero' }, h('h1', {}, 'Liquid ⇄ Solana Atomic Swaps'), h('p', {}, 'Swap USDt across chains while staying in full control. Nobody can link the two sides.')));
+    view.append(quoteView());
   }
 }
 
@@ -812,7 +881,10 @@ async function main() {
   setInterval(() => tickAll(), NETWORK.pollMs);
   tickAll();
   // Wallet extensions can register after load, and offers can expire.
-  setInterval(() => { if (!ui.openOrder && !ui.quote) refreshForm(); }, 5000);
+  setInterval(() => {
+    if (form.el.isConnected) updateForm();
+    else if (location.hash === '#history') render();
+  }, 5000);
 }
 
 main().catch(fail);

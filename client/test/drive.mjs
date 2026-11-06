@@ -372,7 +372,7 @@ async function vetting() {
   const page = await newPage();
   await page.locator('.empty', { hasText: 'hidden by the switches' }).waitFor({ timeout: 30000 });
   if (!(await page.locator('#only-vetted').isChecked())) throw new Error('"only vetted" should start on');
-  if (await page.locator('#unvetted-warning').count()) throw new Error('a warning with the switch on');
+  if (await page.locator('#unvetted-warning').isVisible()) throw new Error('a warning with the switch on');
   await page.locator('#amount').fill(env.AMOUNT);
   if (await page.locator('#go:not(:disabled)').count()) throw new Error('an order could go to a hidden maker');
   step('a new visitor sees no unvetted maker, and can\'t trade with one');
@@ -422,8 +422,50 @@ async function walletConnectWait() {
   step('WalletConnect shows a moving spinner at once, and a failure closes it with a message');
 }
 
+// Nothing is rebuilt: marks put on the elements must outlast typing, a flip, new offers and the page's own timers.
+async function liveBook() {
+  const page = await newPage();
+  const row = page.locator('tbody tr').first();
+  await row.waitFor({ timeout: 30000 });
+  const headers = async () => (await page.locator('thead th').allInnerTexts()).map((t) => t.toLowerCase());
+  const cells = async () => row.locator('td').allInnerTexts();
+  if ((await headers()).join() !== 'maker,price,per swap,maker can pay') throw new Error(`columns: ${await headers()}`);
+  const quoted = await cells();
+  if (!quoted[2].includes('–') || !/^(from )?\d\.\d{4}$/.test(quoted[1])) throw new Error(`before an order: ${quoted}`);
+  const mark = () => page.evaluate(() => {
+    for (const s of ['.card', '.book', 'tbody tr', 'tbody tr td:nth-child(2)', '#amount', '#go']) document.querySelector(s).dataset.mark = '1';
+  });
+  const marked = () => page.evaluate(() => ['.card', '.book', 'tbody tr', 'tbody tr td:nth-child(2)', '#amount', '#go'].filter((s) => !document.querySelector(s).dataset.mark));
+  await mark();
+
+  await page.locator('#amount').pressSequentially(env.AMOUNT);
+  if ((await page.locator('#amount').inputValue()) !== env.AMOUNT) throw new Error('typing was lost');
+  if (!(await page.locator('#amount').evaluate((e) => e === document.activeElement))) throw new Error('typing lost focus');
+  if ((await headers()).join() !== 'maker,price,your fill,maker can pay') throw new Error(`columns with an order: ${await headers()}`);
+  const ordered = await cells();
+  const average = await page.locator('.facts dd').nth(1).innerText();
+  if (ordered[1] !== average) throw new Error(`the row's price ${ordered[1]} isn't the order's ${average}`);
+  if (!/^\d+\.\d{2}$/.test(ordered[2]) || ordered[2] === '0.00') throw new Error(`the fill: ${ordered[2]}`);
+
+  await new Promise((r) => setTimeout(r, 6000));
+  await page.locator('.flip').click();
+  await page.locator('.flip').click();
+  let lost = await marked();
+  if (lost.length) throw new Error(`rebuilt: ${lost}`);
+
+  await page.locator('#amount').fill('');
+  if ((await headers())[2] !== 'per swap') throw new Error('the caption did not come back');
+  if ((await cells())[1] !== quoted[1]) throw new Error('the quoted price did not come back');
+  lost = await marked();
+  if (lost.length) throw new Error(`rebuilt: ${lost}`);
+  await checkNoErrors(page);
+  await page.context().close();
+  step('the book updates in place, and shows an order\'s own price and size under "your fill"');
+}
+
 async function look() {
   await walletConnectWait();
+  await liveBook();
   const phone = await newPage({ width: 400, height: 800 });
   await phone.locator('tbody tr').first().waitFor({ timeout: 30000 });
   await phone.locator('#amount').fill(env.AMOUNT);

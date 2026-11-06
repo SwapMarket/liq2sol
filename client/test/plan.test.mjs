@@ -1,7 +1,7 @@
 // node --test client/test/plan.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_FILLS, bpsAt, planOrder, receiveFor } from '../site/js/plan.js';
+import { MAX_FILLS, bpsAt, effectivePrice, planOrder, receiveFor } from '../site/js/plan.js';
 
 const flat = (bps, up_to = 1n << 60n) => [{ up_to, bps }];
 const maker = (name, bps, max, available, min = 10n) => ({ maker: name, tiers: flat(bps), min, max, available });
@@ -107,4 +107,11 @@ test('favorites fill first, even at a worse price, and a fake bargain can’t ge
   const big = planOrder(1200n, makers, null, 10000, favorites);
   assert.deepEqual([...new Set(big.fills.map((f) => f.maker))], ['also', 'mine', 'bargain'], 'others only for what favorites can’t fill');
   assert.equal(planOrder(100n, makers, 'bargain', 10000, favorites).fills[0].maker, 'bargain', 'picking a maker for this order beats a favorite');
+});
+
+test('the effective price is what the fills really pay, not the quoted step', () => {
+  assert.equal(effectivePrice([{ send: 1_000_000n, receive: 997_000n }]).toFixed(4), '1.0030');
+  assert.equal(effectivePrice([{ send: 100n, receive: 99n }]).toFixed(4), '1.0101', 'rounding at a tiny size');
+  assert.equal(effectivePrice([{ send: 1_000_000n, receive: 997_000n }, { send: 1_000_000n, receive: 995_000n }]).toFixed(4), '1.0040', 'a mix of steps');
+  assert.equal(effectivePrice([{ send: 2_000n, receive: 1_994n }, { send: 1_000n, receive: 997n }]).toFixed(4), '1.0030');
 });

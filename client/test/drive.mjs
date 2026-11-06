@@ -405,7 +405,25 @@ async function vetting() {
   step('once listed, the maker has its checkmark with the switch on');
 }
 
+// The library is held back here, so this shows the dialog doesn't wait for it, and needs no relay.
+async function walletConnectWait() {
+  const page = await newPage();
+  let release;
+  const held = new Promise((r) => { release = r; });
+  await page.route('**/vendor/walletconnect.js', async (route) => { await held; await route.abort(); });
+  await page.getByRole('button', { name: 'WalletConnect' }).click();
+  await page.locator('dialog .spinner').waitFor({ timeout: 2000 });
+  const turning = await page.locator('dialog .spinner').evaluate((e) => getComputedStyle(e).animationName);
+  if (turning !== 'spin') throw new Error(`the spinner isn't animated: ${turning}`);
+  release();
+  await page.locator('dialog').waitFor({ state: 'detached', timeout: 10000 });
+  await page.locator('#banner').waitFor({ timeout: 5000 });
+  await page.context().close();
+  step('WalletConnect shows a moving spinner at once, and a failure closes it with a message');
+}
+
 async function look() {
+  await walletConnectWait();
   const phone = await newPage({ width: 400, height: 800 });
   await phone.locator('tbody tr').first().waitFor({ timeout: 30000 });
   await phone.locator('#amount').fill(env.AMOUNT);

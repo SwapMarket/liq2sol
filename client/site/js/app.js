@@ -274,18 +274,24 @@ function walletView() {
 }
 
 async function walletConnect() {
-  const { qrcode } = await import('../vendor/qrcode.js');
-  const box = h('div', { class: 'qr' });
-  const dialog = h('dialog', {}, h('h3', {}, 'Scan with your Solana wallet'), box,
+  // Open at once: the library is large and the relay takes a few seconds, so the code comes later.
+  const title = h('h3', {}, 'Connecting to WalletConnect…');
+  const box = h('div', { class: 'qr-wait', role: 'status', 'aria-label': 'Connecting to WalletConnect' }, h('div', { class: 'spinner' }));
+  const dialog = h('dialog', {}, title, box,
     h('button', { class: 'btn quiet', onclick: () => dialog.close() }, 'Close'));
   document.body.append(dialog);
+  dialog.showModal();
   try {
+    const { qrcode } = await import('../vendor/qrcode.js');
     return await connectWalletConnect(settings.walletConnectProject || NETWORK.walletConnectProject, (uri) => {
       const qr = qrcode(0, 'L');
       qr.addData(uri);
       qr.make();
+      title.textContent = 'Scan with your Solana wallet';
+      box.className = 'qr';
+      box.removeAttribute('role');
+      box.removeAttribute('aria-label');
       box.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2, scalable: true });
-      dialog.showModal();
     });
   } finally {
     dialog.close();

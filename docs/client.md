@@ -180,5 +180,15 @@ Per D3:
 | Run locally | Release zip, `python3 -m http.server`, or `recovery.html` from disk. |
 | Hosting risk | A compromised GitHub account can replace the site. The page can't verify itself, so users who care should use a hash-checked local copy or an IPFS CID. The UI links to these instructions. |
 
+**Mainnet builds are obfuscated (user's decision, 2026-11-06).** There is no mainnet build yet, so this is the requirement for when there is. It follows `SwapMarket/swapmarket.github.io`, whose `vite.config.mjs` runs `javascript-obfuscator` through `vite-plugin-bundle-obfuscator`, with these settings: string arrays with RC4 encoding, split strings, hexadecimal names, `debugProtection` and `disableConsoleOutput` on, and `selfDefending` and `controlFlowFlattening` off, because that repo found the first hangs the app and the second quadruples its size. That build also skips obfuscation with `SKIP_OBFUSCATION=true` for tests. This client has no bundler, so it would run the obfuscator directly on `site/js`. The WASM is compiled already.
+
+To settle when that build is made:
+
+- **Reproducible builds:** obfuscation is randomized by default, so it needs a fixed `seed`, or nobody can check a release against its source.
+- **Test the obfuscated output:** the browser suite must run against it, not only against the plain source. `disableConsoleOutput` also hides the console messages used to diagnose wallet problems.
+- **`debugProtection`:** it freezes the tab for anyone with developer tools open, including people auditing a page that holds swap secrets. It also probably depends on evaluating strings, so check it against the CSP.
+- **CSP:** mainnet needs its own decision on `unsafe-eval`, for the same wallet reason as testnet.
+- **What it gives:** obfuscation slows down someone reading the code, but doesn't protect secrets from a determined attacker. The protections that count remain SRI, signed hashes and a local copy.
+
 No analytics, no external fonts, no CDN. Program ID, asset ID, mint and template CMR are pinned per network in the
 released code. The user can edit endpoints but not these, unless they use a clearly marked developer mode.

@@ -933,7 +933,8 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             Err(e) if e.starts_with("refusing") => return Err(e),
             Err(e) => {
                 eprintln!("waiting for the chains: {e}");
-                std::thread::sleep(std::time::Duration::from_secs(5));
+                // Not faster than this: if a public API is rate limiting us, retrying only prolongs it.
+                std::thread::sleep(std::time::Duration::from_secs(30));
             }
         }
     };

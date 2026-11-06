@@ -1,12 +1,21 @@
 //! Reading and writing the Liquid chain: a public Esplora API, or a local node. Native only, because it uses blocking HTTP and
 //! starts `elements-cli`. The browser client reaches the same APIs from JavaScript.
 
+use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value as Json;
 use simplicityhl::elements::encode::{deserialize, serialize_hex};
 use simplicityhl::elements::secp256k1_zkp::SecretKey;
 use simplicityhl::elements::{Address, BlockHash, OutPoint, Transaction, Txid};
+
+const MAX_CACHED_TXS: usize = 5_000;
+
+fn tx_cache() -> &'static Mutex<HashMap<Txid, Transaction>> {
+    static CACHE: OnceLock<Mutex<HashMap<Txid, Transaction>>> = OnceLock::new();
+    CACHE.get_or_init(Mutex::default)
+}
 
 use crate::liquid::{pay_from_coins, read_output, Coin, Payment, Res, SecretCoin, Wallet};
 
@@ -116,7 +125,30 @@ impl Esplora {
         }
     }
 
+    /// A transaction by its id. Over a public API these are kept, because its contents can never change and those APIs rate limit:
+    /// a wallet's coins would otherwise be fetched again on every read. The hash is checked, so a wrong answer is refused, not kept.
     pub fn tx(&self, txid: &Txid) -> Res<Transaction> {
+        if matches!(self, Esplora::Http(_)) {
+            if let Some(tx) = tx_cache().lock().ok().and_then(|c| c.get(txid).cloned()) {
+                return Ok(tx);
+            }
+        }
+        let tx = self.fetch_tx(txid)?;
+        if tx.txid() != *txid {
+            return Err(format!("asked for transaction {txid}, and got {}", tx.txid()));
+        }
+        if matches!(self, Esplora::Http(_)) {
+            if let Ok(mut cache) = tx_cache().lock() {
+                if cache.len() >= MAX_CACHED_TXS {
+                    cache.clear();
+                }
+                cache.insert(*txid, tx.clone());
+            }
+        }
+        Ok(tx)
+    }
+
+    fn fetch_tx(&self, txid: &Txid) -> Res<Transaction> {
         let hex = match self {
             Esplora::Http(u) => get(&format!("{u}/tx/{txid}/hex"))?,
             Esplora::Node(n) => n.call(&["getrawtransaction", &txid.to_string()])?,

@@ -249,8 +249,11 @@ impl Maker {
             let confirmations = found.coin.height.map_or(0, |h| (tip + 1).saturating_sub(h));
             let mut disagree = false;
             if let Some(second) = &self.second {
-                let coins = second.secret_coins(&address, &blinding)?;
-                disagree = exact_secret_coin(&coins, usdt(), swap.liquid_amount, second.tip()?, 0).is_none();
+                // A second source we can't read counts as disagreeing. That stops new locks, and must never stop a claim.
+                disagree = match (second.secret_coins(&address, &blinding), second.tip()) {
+                    (Ok(coins), Ok(tip)) => exact_secret_coin(&coins, usdt(), swap.liquid_amount, tip, 0).is_none(),
+                    _ => true,
+                };
             }
             return Ok((HtlcView::Unspent { confirmations }, disagree));
         }
@@ -336,7 +339,7 @@ impl Maker {
             reply => return Err(format!("signer: {reply:?}")),
         };
         let tips_disagree = match &self.second {
-            Some(second) => second.tip()?.abs_diff(tip) > 2,
+            Some(second) => second.tip().map_or(true, |t| t.abs_diff(tip) > 2),
             None => false,
         };
         Ok(View {
@@ -548,7 +551,8 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             Err(e) if e.starts_with("refusing") => return Err(e),
             Err(e) => {
                 eprintln!("waiting to start: {e}");
-                std::thread::sleep(Duration::from_secs(5));
+                // Not faster than this: if a public API is rate limiting us, retrying only prolongs it.
+                std::thread::sleep(Duration::from_secs(30));
             }
         }
     };

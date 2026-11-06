@@ -75,7 +75,8 @@ pub struct Handler {
     balances: Arc<Mutex<(u64, u64)>>,
 }
 
-const BALANCES_EVERY: Duration = Duration::from_secs(30);
+/// Often enough for an offer, and rarely enough for a public API's rate limit.
+const BALANCES_EVERY: Duration = Duration::from_secs(120);
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())

@@ -22,8 +22,8 @@ chmod 600 "$DIR/keys/"*
 cp maker/target/release/liq2sol-signer maker/target/release/liq2sol-maker "$DIR/bin/"
 
 ENGINE='"confirmations":2,"large_above":1000000000,"confirmations_large":10,"max_per_swap":1000000000,"max_open_l2s":5000000000,"max_open_s2l":5000000000,"l2s_gate_blocks":210,"l2s_fund_window_blocks":30,"l2s_deadline_slots":8400,"s2l_gate_slots":84500,"s2l_lock_window_blocks":30,"liquid_stale_secs":600,"solana_stale_secs":60,"extend_after_stall_secs":3600,"extend_within_slots":16900,"extend_by_slots":3000000,"urgent_blocks":60'
-PRIMARY='https://blockstream.info/liquidtestnet/api'
-SECOND='https://liquid.network/liquidtestnet/api'
+PRIMARY='https://liquid.network/liquidtestnet/api'
+SECOND='https://blockstream.info/liquidtestnet/api'
 SOLANA="${SOLANA_RPC:-https://api.devnet.solana.com}"
 cat > "$DIR/signer.json" <<EOF
 {"socket":"$DIR/run/signer.sock","ledger":"$DIR/signer.db","keys_dir":"$DIR/keys","liquid":{"Esplora":"$PRIMARY"},"solana_rpc":"$SOLANA",

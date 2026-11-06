@@ -1000,6 +1000,11 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     let _ = std::fs::remove_file(&cfg.socket);
     // The socket's own mode is set just after binding, so the directory must already keep everyone else out.
     let parent = cfg.socket.parent().ok_or("socket has no parent directory")?;
+    if !parent.exists() {
+        std::os::unix::fs::DirBuilderExt::mode(std::fs::DirBuilder::new().recursive(true), 0o700)
+            .create(parent)
+            .map_err(|e| format!("can't create {}: {e}", parent.display()))?;
+    }
     let mode = std::fs::metadata(parent).map_err(|e| e.to_string())?.permissions().mode();
     if mode & 0o077 != 0 {
         return Err(format!("refusing to start: {} must be private to this user (mode 700)", parent.display()));
@@ -1038,7 +1043,7 @@ pub struct Client {
 
 impl Client {
     pub fn connect(path: &Path) -> Result<Self, String> {
-        let writer = UnixStream::connect(path).map_err(|e| e.to_string())?;
+        let writer = UnixStream::connect(path).map_err(|e| format!("can't reach the signer at {}: {e}", path.display()))?;
         let reader = BufReader::new(writer.try_clone().map_err(|e| e.to_string())?);
         Ok(Self { writer, reader })
     }

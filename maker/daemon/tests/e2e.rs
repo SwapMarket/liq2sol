@@ -1330,7 +1330,7 @@ fn start_second_maker(w: &World) -> Res<SecondMaker> {
 
     let operator = read_keypair_file(keys.join("solana.json")).map_err(|e| e.to_string())?;
     let (owner, _, _) = new_vault(&w.sol, &operator);
-    let socket = std::env::temp_dir().join(format!("l2s-{}", std::process::id())).join("second.sock");
+    let socket = std::env::temp_dir().join(format!("l2s-{}", std::process::id())).join("second-run/s.sock");
     signer.socket = socket.clone();
     signer.ledger = root.join("signer.db");
     signer.keys_dir = keys;

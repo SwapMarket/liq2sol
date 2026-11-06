@@ -611,6 +611,8 @@ function recoveryView(swaps) {
         const has = (s) => read.some((r) => r.id === s.id && r.secrets.lock_secret === s.secrets.lock_secret);
         if (!swaps.every(has)) throw new Error('That recovery file is for a different swap.');
         await Promise.all(swaps.map((s) => withSwap(s.id, (fresh) => engine.set(fresh, { state: fresh.direction === 'L2S' ? 'fund' : 'lock', recovery_saved: true }))));
+        // render() leaves the page alone while a file picker has focus, and choosing a file leaves it there.
+        e.target.blur();
         render();
       } catch (err) {
         fail(err);
@@ -760,6 +762,7 @@ function rescueView() {
           ui.openOrder = s.order ?? s.id;
         }
         location.hash = '#swap';
+        e.target.blur();
         render();
       } catch (err) {
         fail(err);

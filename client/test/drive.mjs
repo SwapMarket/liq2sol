@@ -214,6 +214,7 @@ async function startSwap(page, flip, to) {
   await page.locator('#recovery-file').setInputFiles({ name: 'other.json', mimeType: 'application/json', buffer: Buffer.from('{"format":"nope"}') });
   await page.locator('#banner:not([hidden])').waitFor({ timeout: 5000 });
   if (await page.locator('.pay-address').count() || await page.locator('.lock').count()) throw new Error('a bad recovery file unlocked the next step');
+  await page.locator('#recovery-file').focus();
   await page.locator('#recovery-file').setInputFiles(file);
   step('a bad file is refused, and the funding step only appears after the real one is read back');
   return file;
@@ -251,6 +252,7 @@ async function split() {
   step('the review says these are separate swaps, and that some may refund');
   await page.locator('#accept').click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download').click()]);
+  await page.locator('#recovery-file').focus();
   await page.locator('#recovery-file').setInputFiles(await download.path());
   await page.locator('.pay-address').nth(1).waitFor({ timeout: 10000 });
   await page.screenshot({ path: path.join(shots, 'split-pay.png'), fullPage: true });
@@ -345,6 +347,7 @@ async function rescue() {
 
   const fresh = await newPage();
   await fresh.goto(`http://127.0.0.1:${site.port}/#rescue`);
+  await fresh.locator('#rescue-file').focus();
   await fresh.locator('#rescue-file').setInputFiles(file);
   await fresh.locator('.swap-card').waitFor({ timeout: 10000 });
   step('a browser with no stored data picked the swap up from the recovery file');

@@ -113,6 +113,8 @@ function onEvent(event) {
     const got = JSON.parse(W.read_offer(text, NETWORK.name, BigInt(now())));
     if (!got) return;
     const known = offers.get(got.maker);
+    // Checked when it arrives, and again by the book, so a maker that stops publishing drops off an open page too.
+    got.expires_at = Number(event.tags.find((t) => t[0] === 'expiration')?.[1] ?? 0);
     if (!known || known.created_at <= got.created_at) offers.set(got.maker, got);
     // Messages carry the time, so a clock far from a maker's would get them refused.
     if (Math.abs(now() - got.created_at) > 3600 * 24) return;
@@ -135,7 +137,7 @@ function onEvent(event) {
 
 // ---- The makers book ----
 const liveOffers = (direction) => [...offers.values()]
-  .filter((o) => o.offer.directions.includes(direction))
+  .filter((o) => o.expires_at > now() && o.offer.directions.includes(direction))
   .sort((a, b) => tiersOf(a, direction)[0].bps - tiersOf(b, direction)[0].bps);
 const tiersOf = (o, direction) => (direction === 'L2S' ? o.offer.l2s_prices : o.offer.s2l_prices).map((t) => ({ up_to: BigInt(t.up_to), bps: t.bps }));
 const available = (o, direction) => BigInt(direction === 'L2S' ? o.offer.available_l2s : o.offer.available_s2l);

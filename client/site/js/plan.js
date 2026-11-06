@@ -72,7 +72,38 @@ export function planOrder(total, makers, first = null, maxSpreadBps = 10000, fav
     left -= best.send;
     used.add(best.maker);
   }
+  if (left > 0n && fills.length < MAX_FILLS) {
+    const moved = moveToFitLeftover(fills, left, makers, used, maxSpreadBps);
+    if (moved) {
+      fills[moved.at] = moved.smaller;
+      fills.push(moved.extra);
+      left = 0n;
+    }
+  }
   return { fills, unfilled: left, receive: fills.reduce((sum, f) => sum + f.receive, 0n) };
+}
+
+// What's left can be below every other maker's minimum, though a fill could give up some of its size to reach one. Of the ways
+// to do that, the one paying the taker most, and none that changes what any maker's limits allow.
+function moveToFitLeftover(fills, left, makers, used, maxSpreadBps) {
+  let best = null;
+  for (const m of makers) {
+    if (used.has(m.maker)) continue;
+    const send = smallestFor(m, maxSpreadBps);
+    if (send === null || send <= left) continue;
+    const extra = fillFor(m, send, m.available, maxSpreadBps);
+    if (extra?.send !== send) continue;
+    fills.forEach((fill, at) => {
+      const giver = makers.find((x) => x.maker === fill.maker);
+      const reduced = fill.send - (send - left);
+      if (reduced <= 0n) return;
+      const smaller = fillFor(giver, reduced, giver.available, maxSpreadBps);
+      if (smaller?.send !== reduced) return;
+      const paid = smaller.receive + extra.receive;
+      if (!best || paid > best.paid) best = { at, smaller, extra, paid };
+    });
+  }
+  return best;
 }
 
 // The smallest amount this maker takes whole. Its minimum applies to both sides, and the step and rounding move with the size.

@@ -65,7 +65,7 @@
   "s2l_lock_blocks": 90,
   "min_deadline_slots": 101400,
   "offer_every_secs": 300,
-  "offer_ttl_secs": 1800,
+  "offer_ttl_secs": 660,
   "max_requests_per_sender": 60,
   "max_requests_per_window": 2000,
   "window_secs": 300,

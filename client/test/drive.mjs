@@ -832,7 +832,19 @@ async function faucet() {
   step('it says when a wallet has no SOL, stays disabled after a claim, even after a reload, and names the asset SideSwap uses');
 }
 
+// A maker that stops publishing has to drop off a page that's already open. Moving the page's clock past every offer's
+// expiry looks the same as all of them going quiet.
+async function deadMakers() {
+  const page = await newPage(undefined, (p) => p.clock.install());
+  await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
+  await page.clock.fastForward(5 * 60 * 1000);
+  await page.locator('tbody tr').first().waitFor({ state: 'detached', timeout: 15000 });
+  await page.context().close();
+  step('a maker that stops publishing drops off a page that is already open');
+}
+
 async function look() {
+  await deadMakers();
   await phoneWallets();
   await connectOrder();
   await s2lBalance();

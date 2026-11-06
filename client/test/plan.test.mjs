@@ -65,9 +65,9 @@ test('a fill whose rounding breaks the taker’s spread limit is not proposed', 
   // 120 fills, and 2 more units would receive 1, which is a 50% spread.
   const makers = [maker('a', 100, 120n, 120n, 1n), maker('b', 100, 120n, 120n, 1n)];
   const p = planOrder(122n, makers, null, 200);
-  assert.deepEqual(p.fills.map((f) => f.send), [120n]);
-  assert.equal(p.unfilled, 2n);
-  assert.equal(planOrder(122n, makers).fills.length, 2, 'with no limit it would have been');
+  for (const f of p.fills) assert.ok((f.send - f.receive) * 10000n <= f.send * 200n, `${f.send} gives up too much`);
+  assert.ok(p.fills.every((f) => f.send > 2n), 'not the 2 left over, which would receive 1');
+  assert.equal(p.unfilled, 0n, 'a fill gives up some size, so the second one can be a sensible one');
 });
 
 test('the price comes from the step covering the fill’s size', () => {
@@ -172,4 +172,24 @@ test('one swap per maker, however much it could pay, because its limit per swap 
   assert.equal(sendLimits([maker('a', 30, 100n, 100000n)]).max, 100n, 'send max follows');
   const two = planOrder(150n, [maker('a', 30, 100n, 100000n), maker('b', 90, 100n, 100000n)]);
   assert.deepEqual(two.fills.map((f) => [f.maker, f.send]), [['a', 100n], ['b', 50n]]);
+});
+
+test('a fill gives up some of its size, when what’s left is below the next maker’s minimum', () => {
+  const top = { maker: 'top', tiers: [{ up_to: 5_000_000n, bps: 30 }, { up_to: 25_000_000n, bps: 20 }], min: 100_000n, max: 25_000_000n, available: 100_000_000n };
+  const bottom = { maker: 'bottom', tiers: [{ up_to: 10_000_000n, bps: 50 }, { up_to: 50_000_000n, bps: 40 }], min: 10_000_000n, max: 50_000_000n, available: 100_000_000n };
+  const p = planOrder(30_000_000n, [top, bottom]);
+  assert.equal(p.unfilled, 0n, 'all of it fills');
+  assert.deepEqual(p.fills.map((f) => f.maker), ['top', 'bottom']);
+  assert.equal(p.fills[0].send + p.fills[1].send, 30_000_000n);
+  assert.ok(p.fills[1].receive >= bottom.min, 'the second maker’s minimum, on what it pays too');
+  assert.ok(p.fills[1].send < 10_100_000n, 'only as much as that needs, so the cheaper maker keeps the rest');
+  assert.equal(planOrder(25_000_000n, [top, bottom]).fills.length, 1, 'no split when one maker can take it all');
+});
+
+test('a fill won’t give up so much that it falls below its own maker’s minimum', () => {
+  const top = maker('top', 20, 25n, 1000n, 20n);
+  const bottom = maker('bottom', 40, 50n, 1000n, 20n);
+  const p = planOrder(26n, [top, bottom]);
+  assert.equal(p.fills.length, 1, '6 would be below the top maker’s minimum of 20');
+  assert.ok(p.unfilled > 0n);
 });

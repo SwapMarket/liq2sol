@@ -133,6 +133,8 @@ Every run below used real processes and a real node. Solana was a local validato
 | Maker daemon under crashes, vanishing takers, bad coins, a Liquid halt and a rollback | Passed, with the maker vault on. A taker who pays and never signs costs the maker nothing. | `maker/daemon/tests/e2e.rs` |
 | Failure scenarios E4, E5, E9, E11, E12, E13, E15a, E15b, E16 | Passed. E9 now rests on off-chain checks, and E5, E12, E15a, E15b and E16 still show the losses they are meant to. | `cli/tests/failures.rs` |
 | A compromised engine on the signer's socket | All refused: wrong asset, amount or blinding key, bad shares, repeat sessions, a flipped-parity point, a reserved fee coin, an explicit coin | `maker/signer/tests/process.rs` |
+| Both swap directions through a **public relay**, `relay.coinos.pro` | Passed, including a blinded claim of 4,690 bytes in a session message. Other relays are untested, and their size limits may differ. | `RFQ_RELAY=wss://relay.coinos.pro`, the same suite |
+| Each of 15 rules removed in turn | All 15 caught by a test. One survived at first, so it got a test. | `scripts/mutate-confidential.py` |
 | Sessions from a stranger, under another id, or during a rollback alarm | Refused, using real requests on real coins, with the honest session as the control | `maker/daemon/tests/e2e.rs` |
 
 Measured on the local validator: a program built for SBPF v3, because that cluster refuses to deploy v0 (SIMD-0500).
@@ -142,6 +144,7 @@ Measured on the local validator: a program built for SBPF v3, because that clust
 - The program on a public cluster. The branch has its own program id, and deploying it on devnet needs about 2.3 SOL.
 - Firefox and Safari, and a real wallet paying a confidential address of this form.
 - A real restart for E14, as on `main`.
+- Removing the old HTLC code. `contracts/liquid` and its helpers in `shared/chain` are unused by the maker and CLI, but still in the tree.
 - An audit of `musig2` 0.4.1's adaptor code.
 - A taker's own refund from a daemon-run swap. The refund leaf is proven on testnet through the CLI.
 

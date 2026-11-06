@@ -18,7 +18,7 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 ## Repo conventions
 
 - Commits are signed by SwapMarket (repo-local git config: user `SwapMarket`, key `01151A25AAE22F55`). Work directly on
-  `main`, and commit and push when it makes sense, with no need to ask (user's decision, 2026-11-06).
+  `main`. Commit when it makes sense, but ask before each push, because deploys are slow (user's decision, 2026-11-06).
 - Public repo: https://github.com/SwapMarket/liq2sol (`origin`, branch `main`).
 - End commit messages with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 

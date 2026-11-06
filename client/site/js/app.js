@@ -9,7 +9,7 @@ import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap }
 import { captureConsole, clearLogs, log, logsCount, logsText } from './logs.js';
 import { makeRecovery, offerDownload, readRecovery } from './recovery.js';
 import { vettedMaker } from './vetted.js';
-import { connectExtension, connectWalletConnect, extensionWallets } from './wallet.js';
+import { connectExtension, connectWalletConnect, extensionWallets, restoreWalletConnect } from './wallet.js';
 
 const OFFER_KIND = 38401;
 const WRAP_KIND = 21059;
@@ -329,11 +329,12 @@ function updateBook(send) {
 function walletView() {
   if (wallet) {
     return h('p', { class: 'note' }, `Solana: ${wallet.name} ${short(wallet.address)} `,
-      h('a', { href: '#', onclick: (e) => { e.preventDefault(); wallet = null; render(); } }, 'disconnect'));
+      h('a', { href: '#', onclick: (e) => { e.preventDefault(); wallet = null; rememberWallet(null); render(); } }, 'disconnect'));
   }
-  const choose = async (connect) => {
+  const choose = async (connect, remember) => {
     try {
       wallet = await connect();
+      rememberWallet(remember);
       render();
     } catch (e) {
       fail(e);
@@ -345,9 +346,40 @@ function walletView() {
       onclick: () => choose(() => connectExtension(w).catch((e) => {
         console.warn('wallet connect', w.name, e);
         throw new Error(`${w.name} refused to connect: ${e?.message ?? e}. Check that it is unlocked and has a Solana account, and that no other wallet is taking over this page.`);
-      })),
+      }), { kind: 'extension', name: w.name }),
     }, w.name)),
-    h('button', { class: 'btn quiet', onclick: () => choose(walletConnect) }, 'WalletConnect'));
+    h('button', { class: 'btn quiet', onclick: () => choose(walletConnect, { kind: 'walletconnect' }) }, 'WalletConnect'));
+}
+
+function rememberWallet(which) {
+  settings.lastWallet = which;
+  saveSettings(settings);
+}
+
+// Reconnect the wallet used last time, without a prompt, so reloading mid-swap doesn't ask again. If it doesn't trust this page any
+// more, the buttons are still there. A wallet only ever signs when the taker presses something.
+async function restoreWallet() {
+  const last = settings.lastWallet;
+  if (!last) return;
+  try {
+    let got = null;
+    if (last.kind === 'walletconnect') {
+      got = await restoreWalletConnect(settings.walletConnectProject || NETWORK.walletConnectProject);
+    } else {
+      // Extensions can register a little after the page loads.
+      for (let tries = 0; tries < 30 && !got; tries++) {
+        const w = extensionWallets().find((x) => x.name === last.name);
+        if (w) got = await connectExtension(w, true);
+        else await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    if (got && !wallet) {
+      wallet = got;
+      render();
+    }
+  } catch (e) {
+    console.warn('reconnecting the wallet', e?.message ?? e);
+  }
 }
 
 async function walletConnect() {
@@ -729,6 +761,7 @@ function swapBody(s) {
 function swapView(s) {
   const [from, to] = names[s.direction];
   return h('div', { class: 'card swap-card', 'data-state': s.state, 'data-id': s.id },
+    h('button', { class: 'gear', title: 'Settings', 'aria-label': 'Settings', onclick: () => settingsDialog() }, '⚙'),
     h('h2', {}, `${from} → ${to}`),
     h('dl', { class: 'facts' },
       h('div', {}, h('dt', {}, 'You send'), h('dd', {}, s.direction === 'L2S' ? `${show(BigInt(s.terms.liquid_amount) / 100n)} ${from}` : `${show(s.terms.solana_amount)} ${from}`)),
@@ -913,6 +946,7 @@ async function main() {
   if (open) ui.openOrder = open.order ?? open.id;
   window.addEventListener('hashchange', render);
   render();
+  restoreWallet();
   try {
     refuseMainnet(await esplora[0].genesis(), await solana.genesis());
   } catch (e) {

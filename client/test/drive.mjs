@@ -142,7 +142,11 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
     const wallet = {
       version: '1.0.0', name: 'Test Wallet', icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>', chains: ['solana:devnet'], accounts: [account],
       features: {
-        'standard:connect': { version: '1.0.0', connect: async () => ({ accounts: [account] }) },
+        'standard:connect': { version: '1.0.0', connect: async (input) => {
+          window.testWalletSilent = !!input?.silent;
+          if (input?.silent && localStorage.getItem('test.refuseSilent')) throw new Error('not trusted');
+          return { accounts: [account] };
+        } },
         'solana:signTransaction': {
           version: '1.0.0',
           signTransaction: async ({ transaction }) => [{ signedTransaction: bytes(await window.testWalletSign(hex(transaction))) }],
@@ -293,6 +297,16 @@ async function l2s() {
   await waitState(page, 'ready_claim');
   await page.screenshot({ path: path.join(shots, 'claim.png') });
   step('the page signed the maker’s claim, and sees its lock');
+  const setHelius = async (key) => {
+    await page.locator('.swap-card .gear').click();
+    await page.locator('#s-helius').fill(key);
+    await page.locator('dialog .btn', { hasText: 'Save' }).click();
+  };
+  await setHelius('test-key');
+  await page.locator('.one-endpoint').waitFor({ state: 'detached', timeout: 5000 });
+  await setHelius('');
+  await page.locator('.one-endpoint').waitFor({ timeout: 5000 });
+  step('Settings opens from the claim page, and a second endpoint set there takes effect at once');
   await page.locator('.claim').click();
   await page.locator('#banner:not([hidden])').waitFor({ timeout: 8000 });
   if (await state(page) !== 'ready_claim') throw new Error('claimed with one endpoint and no consent');
@@ -505,7 +519,37 @@ async function pageLoading() {
   step('a spinner shows while the page loads, and goes away if loading fails');
 }
 
+// Reloading mid-swap shouldn't mean connecting again, or a prompt, and disconnecting has to stick.
+async function walletStays() {
+  const page = await newPage();
+  const connected = page.getByRole('link', { name: 'disconnect' });
+  const button = page.getByRole('button', { name: 'Test Wallet' });
+  await button.click();
+  await connected.waitFor({ timeout: 5000 });
+  await page.reload();
+  await connected.waitFor({ timeout: 15000 });
+  if (!(await page.evaluate(() => window.testWalletSilent))) throw new Error('the reconnect could have shown the wallet\'s prompt');
+
+  await page.evaluate(() => localStorage.setItem('test.refuseSilent', '1'));
+  await page.reload();
+  await button.waitFor({ timeout: 15000 });
+  await new Promise((r) => setTimeout(r, 1000));
+  if (await connected.isVisible()) throw new Error('connected though the wallet refused');
+  if (await page.locator('#banner').isVisible()) throw new Error('a refused reconnect should be quiet');
+  await page.evaluate(() => localStorage.removeItem('test.refuseSilent'));
+
+  await button.click();
+  await connected.click();
+  await page.reload();
+  await button.waitFor({ timeout: 15000 });
+  await new Promise((r) => setTimeout(r, 4000));
+  if (await connected.isVisible()) throw new Error('disconnecting did not stick');
+  await page.context().close();
+  step('the wallet reconnects silently after a reload, unless refused or disconnected');
+}
+
 async function look() {
+  await walletStays();
   await pageLoading();
   await walletConnectWait();
   await liveBook();

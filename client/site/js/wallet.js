@@ -18,8 +18,9 @@ export function extensionWallets() {
   return [...found].filter((w) => w.features['standard:connect'] && w.features['solana:signTransaction']);
 }
 
-export async function connectExtension(w) {
-  const { accounts } = await w.features['standard:connect'].connect();
+// silent asks the wallet to reconnect only if it already trusts this page, with no prompt.
+export async function connectExtension(w, silent = false) {
+  const { accounts } = await w.features['standard:connect'].connect(silent ? { silent: true } : undefined);
   const account = accounts?.[0] ?? w.accounts[0];
   if (!account) throw new Error(`${w.name} gave no account.`);
   return {
@@ -58,23 +59,21 @@ function base58Decode(s) {
   return Uint8Array.from(out.reverse());
 }
 
-// Loaded only when someone picks WalletConnect, because it is large and needs Reown's relay.
-export async function connectWalletConnect(projectId, showUri) {
+// Loaded only when someone picks WalletConnect, or used it last time, because it is large and needs Reown's relay.
+async function walletConnectClient(projectId) {
   const { SignClient } = await import('../vendor/walletconnect.js');
-  const client = await SignClient.init({
+  return SignClient.init({
     projectId,
     metadata: {
       name: 'liq2sol', description: 'Trustless swaps between USDt on Liquid and USDT on Solana',
       url: new URL('.', location.href).href, icons: [],
     },
   });
+}
+
+function walletConnectWallet(client, session) {
   const chain = NETWORK.walletConnectChain;
-  const { uri, approval } = await client.connect({
-    requiredNamespaces: { solana: { chains: [chain], methods: ['solana_signTransaction'], events: [] } },
-  });
-  if (uri) showUri(uri);
-  const session = await approval();
-  const address = session.namespaces.solana.accounts[0].split(':')[2];
+  const address = session.namespaces.solana.accounts.find((a) => a.startsWith(`${chain}:`)).split(':')[2];
   return {
     name: session.peer.metadata.name,
     address,
@@ -89,4 +88,22 @@ export async function connectWalletConnect(projectId, showUri) {
       return signed;
     },
   };
+}
+
+export async function connectWalletConnect(projectId, showUri) {
+  const client = await walletConnectClient(projectId);
+  const { uri, approval } = await client.connect({
+    requiredNamespaces: { solana: { chains: [NETWORK.walletConnectChain], methods: ['solana_signTransaction'], events: [] } },
+  });
+  if (uri) showUri(uri);
+  return walletConnectWallet(client, await approval());
+}
+
+// A session the phone approved earlier and hasn't ended, with no QR code. Null if there is none.
+export async function restoreWalletConnect(projectId) {
+  const client = await walletConnectClient(projectId);
+  const session = client.session.getAll()
+    .filter((x) => x.expiry * 1000 > Date.now() && x.namespaces.solana?.accounts.some((a) => a.startsWith(`${NETWORK.walletConnectChain}:`)))
+    .sort((a, b) => b.expiry - a.expiry)[0];
+  return session ? walletConnectWallet(client, session) : null;
 }

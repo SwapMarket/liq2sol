@@ -18,9 +18,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anchor_lang::prelude::Pubkey;
+use liq2sol_chain::esplora::{build_confidential_pay, Esplora, Rpc};
 use liq2sol_chain::liquid::{
-    build_confidential_pay, build_swap_spend, exact_secret_coin, keypair_from, lbtc, random32, usdt, use_network,
-    Esplora, NetworkConfig, Payment, Rpc, SecretCoin, Wallet, FEE,
+    build_swap_spend, exact_secret_coin, keypair_from, lbtc, random32, usdt, use_network, NetworkConfig, Payment,
+    SecretCoin, Wallet, FEE,
 };
 use liq2sol_chain::sol::{self, ata, escrow_pda, Sol, MAINNET_GENESIS};
 use liq2sol_chain::swap::{answer_claim, TakerClaim};
@@ -1025,6 +1026,7 @@ fn build_world(root: &Path) -> World {
         limits: Limits::from(&engine),
         regtest_assets: assets.clone(),
         vault_owner: Some(vault_owner.pubkey().to_string()),
+        fee_coin_sats: FEE,
     };
     let signer_path = root.join("signer.json");
     std::fs::write(&signer_path, serde_json::to_string(&signer_cfg).unwrap()).unwrap();
@@ -1036,7 +1038,7 @@ fn build_world(root: &Path) -> World {
         std::thread::sleep(Duration::from_millis(200));
     }
     let mut client = Client::connect(&socket).unwrap();
-    let Reply::Identity { liquid_address, solana, escrow_initiator } = client.call(&Call::Identity).unwrap() else {
+    let Reply::Identity { liquid_address, solana, escrow_initiator, .. } = client.call(&Call::Identity).unwrap() else {
         panic!()
     };
     let maker_blinding = SecretKey::from_slice(&std::fs::read(keys.join("liquid-blinding.key")).unwrap()).unwrap();

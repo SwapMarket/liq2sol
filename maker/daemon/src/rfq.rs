@@ -9,7 +9,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use liq2sol_chain::liquid::{usdt, Esplora};
+use liq2sol_chain::esplora::Esplora;
+use liq2sol_chain::liquid::usdt;
 use liq2sol_maker_core::engine::{self, Terms};
 use liq2sol_maker_core::store::Store;
 use liq2sol_maker_core::LockPoint;
@@ -61,12 +62,16 @@ pub struct Handler {
     signer: Client,
     our_solana: String,
     our_initiator: String,
+    fee_coin_sats: u64,
     engine: engine::Config,
     rate: RateLimit,
     negotiations: HashMap<String, Negotiation>,
     seen_events: HashSet<String>,
     recent: Vec<u64>,
+    capacity: Option<(u64, u64, u64)>,
 }
+
+const CAPACITY_CACHE_SECS: u64 = 30;
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
@@ -90,7 +95,7 @@ impl Handler {
         let store = Store::open(&maker.db).map_err(|e| e.to_string())?;
         let chain = crate::source(&maker.liquid);
         let mut signer = Client::connect(&maker.signer_socket)?;
-        let Reply::Identity { solana, escrow_initiator, .. } = signer.call(&Call::Identity)? else {
+        let Reply::Identity { solana, escrow_initiator, fee_coin_sats, .. } = signer.call(&Call::Identity)? else {
             return Err("unexpected reply from the signer".into());
         };
         Ok(Self {
@@ -101,16 +106,50 @@ impl Handler {
             signer,
             our_solana: solana,
             our_initiator: escrow_initiator,
+            fee_coin_sats,
             engine: maker.engine.clone(),
             rate: RateLimit::default(),
             negotiations: HashMap::new(),
             seen_events: HashSet::new(),
             recent: vec![],
+            capacity: None,
         })
     }
 
-    fn rules(&self) -> MakerRules {
+    /// What we can pay in each direction, less what open swaps are counting on, and never above `max_sol_units`. Cached briefly,
+    /// because each look is several chain reads and anyone can ask for a quote. A failed read shows nothing available.
+    fn available(&mut self, now: u64) -> (u64, u64) {
+        if let Some((at, l2s, s2l)) = self.capacity {
+            if now.saturating_sub(at) < CAPACITY_CACHE_SECS {
+                return (l2s, s2l);
+            }
+        }
+        let (solana, liquid) = match self.signer.call(&Call::Capacity) {
+            Ok(Reply::Capacity { solana_units, liquid_units }) => (solana_units, liquid_units / 100),
+            other => {
+                eprintln!("rfq: could not read capacity: {other:?}");
+                (0, 0)
+            }
+        };
+        let committed = |direction| -> u64 {
+            let open = self.store.open_swaps().unwrap_or_default();
+            open.iter()
+                .filter(|(t, s)| t.direction == direction && *s == engine::State::WatchLock)
+                .map(|(t, _)| t.solana_amount)
+                .sum()
+        };
+        let cap = self.cfg.max_sol_units;
+        let l2s = solana.saturating_sub(committed(engine::Direction::L2S)).min(cap);
+        let s2l = liquid.saturating_sub(committed(engine::Direction::S2L)).min(cap);
+        self.capacity = Some((now, l2s, s2l));
+        (l2s, s2l)
+    }
+
+    fn rules(&mut self, now: u64) -> MakerRules {
+        let (available_l2s, available_s2l) = self.available(now);
         MakerRules {
+            available_l2s,
+            available_s2l,
             network: self.cfg.network.clone(),
             min_sol_units: self.cfg.min_sol_units,
             max_sol_units: self.cfg.max_sol_units,
@@ -124,8 +163,11 @@ impl Handler {
         }
     }
 
-    pub fn offer(&self, now: u64) -> Result<Event, String> {
+    pub fn offer(&mut self, now: u64) -> Result<Event, String> {
+        let (available_l2s, available_s2l) = self.available(now);
         let offer = Offer {
+            available_l2s: Units(available_l2s),
+            available_s2l: Units(available_s2l),
             v: VERSION,
             network: self.cfg.network.clone(),
             program_id: solana_escrow::id().to_string(),
@@ -135,7 +177,7 @@ impl Handler {
             max_sol_units: Units(self.cfg.max_sol_units),
             l2s_bps: self.cfg.l2s_bps,
             s2l_bps: self.cfg.s2l_bps,
-            fee_coin_sats: liq2sol_chain::liquid::FEE,
+            fee_coin_sats: self.fee_coin_sats,
             confirmations: self.engine.confirmations,
             relays: self.cfg.relays.clone(),
         };
@@ -193,7 +235,8 @@ impl Handler {
         if self.negotiations.len() >= self.cfg.max_negotiations {
             return None;
         }
-        let quote = rules::make_quote(&self.rules(), &request, now).ok()?;
+        let rules = self.rules(now);
+        let quote = rules::make_quote(&rules, &request, now).ok()?;
         let (event, quote_rumor_id) = self.reply(sender, id, Body::RfqQuote(quote.clone()), now).ok()?;
         self.negotiations.insert(
             id.to_string(),
@@ -414,7 +457,7 @@ fn run_relay(
                 }
             }
             if last_offer.is_none_or(|t| t.elapsed() >= offer_every) {
-                let offer = handler.lock().map_err(|_| "poisoned".to_string()).and_then(|h| h.offer(now_secs()));
+                let offer = handler.lock().map_err(|_| "poisoned".to_string()).and_then(|mut h| h.offer(now_secs()));
                 match offer.and_then(|o| relay.publish(&o)) {
                     Ok(()) => last_offer = Some(Instant::now()),
                     Err(e) => {

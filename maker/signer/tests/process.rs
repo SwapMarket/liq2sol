@@ -12,9 +12,10 @@ use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
+use liq2sol_chain::esplora::{build_confidential_pay, Esplora, Rpc};
 use liq2sol_chain::liquid::{
-    build_confidential_pay, build_swap_spend, exact_secret_coin, is_key_path_spend, keypair_from, lbtc,
-    published_signature, random32, usdt, use_network, Esplora, NetworkConfig, Payment, Rpc, SecretCoin, Wallet, FEE,
+    build_swap_spend, exact_secret_coin, is_key_path_spend, keypair_from, lbtc, published_signature, random32, usdt,
+    use_network, NetworkConfig, Payment, SecretCoin, Wallet, FEE,
 };
 use liq2sol_chain::sol::{self, escrow_pda, Sol};
 use liq2sol_chain::swap::{answer_claim, TakerClaim};
@@ -192,6 +193,7 @@ fn the_signer_process_resists_a_compromised_engine() {
         limits,
         regtest_assets: Some((usdt_id.clone(), lbtc_id.clone())),
         vault_owner: None,
+        fee_coin_sats: FEE,
     };
     let config_path = root.join("signer.json");
     std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();

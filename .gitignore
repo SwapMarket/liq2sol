@@ -3,3 +3,4 @@ node_modules/
 pkg/
 .vscode/
 programs/.keys/
+client/site/wasm/

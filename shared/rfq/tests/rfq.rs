@@ -35,6 +35,8 @@ fn maker_rules() -> MakerRules {
         network: NET.into(),
         min_sol_units: 10_000,
         max_sol_units: 1_000_000_000,
+        available_l2s: 1_000_000_000,
+        available_s2l: 1_000_000_000,
         l2s_bps: 30,
         s2l_bps: 30,
         quote_secs: 60,
@@ -133,6 +135,18 @@ fn accept_fields_are_validated() {
     bad(Accept { blinding_key: hex(&[4; 33]), ..accept() });
     bad(Accept { blinding_key: "".into(), ..accept() });
     bad(Accept { taker_solana: "not a solana address".into(), ..accept() });
+}
+
+/// A quote the maker can't fill would tie up the taker's funds until a refund.
+#[test]
+fn a_maker_never_quotes_more_than_it_can_pay() {
+    let request = |direction| Request { direction, amount_side: AmountSide::Receive, amount: Units(1_000_000) };
+    let rules = MakerRules { available_l2s: 1_000_000, available_s2l: 999_999, ..maker_rules() };
+    assert!(make_quote(&rules, &request(Direction::L2S), NOW).is_ok());
+    assert_eq!(make_quote(&rules, &request(Direction::S2L), NOW), Err(Refused::OutOfLimits));
+    let rules = MakerRules { available_l2s: 999_999, available_s2l: 1_000_000, ..maker_rules() };
+    assert_eq!(make_quote(&rules, &request(Direction::L2S), NOW), Err(Refused::OutOfLimits));
+    assert!(make_quote(&rules, &request(Direction::S2L), NOW).is_ok());
 }
 
 #[test]
@@ -435,6 +449,8 @@ fn offers_expire_and_are_network_scoped() {
         directions: vec![Direction::L2S, Direction::S2L],
         min_sol_units: Units(10_000),
         max_sol_units: Units(1_000_000_000),
+        available_l2s: Units(1_000_000_000),
+        available_s2l: Units(1_000_000_000),
         l2s_bps: 30,
         s2l_bps: 30,
         fee_coin_sats: 300,

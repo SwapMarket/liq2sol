@@ -2457,7 +2457,6 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "getrandom 0.2.17",
- "liq2sol-htlc",
  "liq2sol-swapkey",
  "rand 0.8.8",
  "serde_json",
@@ -2484,14 +2483,6 @@ dependencies = [
  "solana-escrow",
  "solana-sdk",
  "ureq",
-]
-
-[[package]]
-name = "liq2sol-htlc"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "simplicityhl",
 ]
 
 [[package]]

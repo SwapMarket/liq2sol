@@ -78,6 +78,8 @@ fn main() -> Result<(), String> {
         directions: vec![],
         min_sol_units: Units(0),
         max_sol_units: Units(0),
+        available_l2s: Units(0),
+        available_s2l: Units(0),
         l2s_bps: 0,
         s2l_bps: 0,
         fee_coin_sats: 0,

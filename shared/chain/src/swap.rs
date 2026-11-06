@@ -5,13 +5,38 @@
 
 use liq2sol_swapkey::{
     combine, complete, key_spend_sighash, set_key_spend_witness, verify_share, Nonce, Session, Share, SwapOutput,
+    SwapParams,
 };
-use simplicityhl::elements::secp256k1_zkp::Keypair;
-use simplicityhl::elements::{BlockHash, OutPoint, Transaction, TxOut};
+use simplicityhl::elements::secp256k1_zkp::{Keypair, PublicKey, Secp256k1, SecretKey, XOnlyPublicKey};
+use simplicityhl::elements::{Address, BlockHash, OutPoint, Transaction, TxOut};
 
-use crate::liquid::{sign_keypath, Esplora, Res};
+#[cfg(feature = "native")]
+use crate::esplora::Esplora;
+use crate::liquid::{network, sign_keypath, Res};
+
+/// The swap's output, as both parties derive it. Whoever funded the coin is the one who can refund it.
+pub fn swap_output(maker_key: &[u8; 33], taker_key: &[u8; 33], taker_funds: bool, lock_height: u32) -> Res<SwapOutput> {
+    let funder = if taker_funds { taker_key } else { maker_key };
+    let mut refund_pk = [0u8; 32];
+    refund_pk.copy_from_slice(&funder[1..]);
+    SwapOutput::new(&SwapParams { maker_key: *maker_key, taker_key: *taker_key, refund_pk, lock_height })
+        .map_err(|e| e.to_string())
+}
+
+/// The confidential address that funds it.
+pub fn swap_address(output: &SwapOutput, blinding: &SecretKey) -> Address {
+    output.address(PublicKey::from_secret_key(&Secp256k1::new(), blinding), network().params)
+}
+
+/// Where a fee coin for the taker goes. Derived, so a separate address can't be swapped in.
+pub fn taker_fee_address(taker_key: &[u8; 33], blinding: &SecretKey) -> Res<Address> {
+    let taker = XOnlyPublicKey::from_slice(&taker_key[1..]).map_err(|e| e.to_string())?;
+    let secp = Secp256k1::new();
+    Ok(Address::p2tr(&secp, taker, None, Some(PublicKey::from_secret_key(&secp, blinding)), network().params))
+}
 
 /// The outputs a transaction spends, in input order, read from the chain rather than from anyone's word for it.
+#[cfg(feature = "native")]
 pub fn spent_outputs(chain: &Esplora, tx: &Transaction) -> Res<Vec<TxOut>> {
     tx.input
         .iter()
@@ -42,6 +67,7 @@ fn seckey(key: &Keypair) -> [u8; 32] {
 
 /// L→S: the maker claims our coin, so we sign its claim, locked to our point. Nothing is usable until we reveal the secret
 /// on Solana, which pays us first. Returns what to send back.
+#[cfg(feature = "native")]
 pub fn answer_claim(
     chain: &Esplora,
     key: &Keypair,
@@ -54,10 +80,28 @@ pub fn answer_claim(
 ) -> Res<(Nonce, Share)> {
     check_claim_shape(tx, coin)?;
     let utxos = spent_outputs(chain, tx)?;
+    answer_claim_with(key, output, coin, lock_point, maker_nonce, tx, &utxos, genesis)
+}
+
+/// The same, given the spent outputs in input order.
+pub fn answer_claim_with(
+    key: &Keypair,
+    output: &SwapOutput,
+    coin: &OutPoint,
+    lock_point: &[u8; 33],
+    maker_nonce: &Nonce,
+    tx: &Transaction,
+    utxos: &[TxOut],
+    genesis: BlockHash,
+) -> Res<(Nonce, Share)> {
+    check_claim_shape(tx, coin)?;
+    if utxos.len() != tx.input.len() {
+        return Err("one spent output is needed per input".into());
+    }
     if utxos[0].script_pubkey != output.script_pubkey() {
         return Err("input 0 doesn't spend this swap's output".into());
     }
-    let message = key_spend_sighash(tx, &utxos, 0, genesis).map_err(|e| e.to_string())?;
+    let message = key_spend_sighash(tx, utxos, 0, genesis).map_err(|e| e.to_string())?;
     let ctx = output.key_ctx();
     let session = Session::start(&seckey(key), ctx, &message).map_err(|e| e.to_string())?;
     let nonce = session.public.clone();
@@ -75,6 +119,7 @@ pub struct TakerClaim {
 
 impl TakerClaim {
     /// Step one, for the unsigned claim: the nonce to send with it.
+    #[cfg(feature = "native")]
     pub fn start(
         chain: &Esplora,
         key: &Keypair,
@@ -83,6 +128,17 @@ impl TakerClaim {
         genesis: BlockHash,
     ) -> Res<Self> {
         let utxos = spent_outputs(chain, &tx)?;
+        Self::start_with(key, output, tx, utxos, genesis)
+    }
+
+    /// The same, given the spent outputs in input order.
+    pub fn start_with(
+        key: &Keypair,
+        output: &SwapOutput,
+        tx: Transaction,
+        utxos: Vec<TxOut>,
+        genesis: BlockHash,
+    ) -> Res<Self> {
         let message = key_spend_sighash(&tx, &utxos, 0, genesis).map_err(|e| e.to_string())?;
         let session = Session::start(&seckey(key), output.key_ctx(), &message).map_err(|e| e.to_string())?;
         Ok(Self { tx, utxos, message, session })
@@ -116,14 +172,15 @@ impl TakerClaim {
     }
 }
 
-/// S→L: waiting for the maker's share.
+/// S→L: waiting for the maker's share. Its nonce is used up, so nothing here can sign again, and a client can keep this across a
+/// reload. It should: the maker gives its share once, and only this can use it.
 pub struct SignedClaim {
-    tx: Transaction,
-    utxos: Vec<TxOut>,
-    message: [u8; 32],
-    aggregate: liq2sol_swapkey::AggregateNonce,
-    share: Share,
-    maker_nonce: Nonce,
+    pub tx: Transaction,
+    pub utxos: Vec<TxOut>,
+    pub message: [u8; 32],
+    pub aggregate: liq2sol_swapkey::AggregateNonce,
+    pub share: Share,
+    pub maker_nonce: Nonce,
 }
 
 impl SignedClaim {

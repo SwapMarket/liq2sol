@@ -69,14 +69,12 @@ Details and sources are in the docs. These are recorded because older assumption
 
 - This shell sets `RUSTFLAGS=-C link-arg=-fuse-ld=lld`, which breaks wasm32 links: build wasm with `RUSTFLAGS=""`.
 - Tools present: Rust 1.97.1 with `wasm32-unknown-unknown`, clang 18 (wasm32 backend), wasm-pack, Node, Foundry.
-- Regtest tests: `ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli cargo test -p liq2sol-htlc --test regtest -- --ignored`.
-  WASM parity: `scripts/check-wasm-parity.sh`.
+- Regtest tests: `ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli cargo test -p liq2sol-swapkey --test regtest -- --ignored --nocapture`.
 - Solana program, from `programs/`: `cargo build-sbf --manifest-path solana-escrow/Cargo.toml && cargo test`. It is a separate
   workspace pinned to Rust 1.95.0 and to Anchor's template lockfile, because LiteSVM's newest dependencies need a newer Rust.
   PATH needs `~/.local/share/solana/install/active_release/bin` and `~/.avm/bin`. `programs/.keys/` holds devnet-only keypairs
   and is gitignored; losing them means changing `declare_id!` and `USDT_MINT`.
 - `simc` (SimplicityHL CLI with `.args`/`.wit` support): `cargo install simplicityhl --version 0.9.0 --features serde --locked`.
-  Compile-check the draft: `simc contracts/liquid/src/htlc.simf --args contracts/liquid/htlc.args`. It has no `--version` flag.
 - End-to-end, from `cli/`: `SOLANA_RPC=https://api.devnet.solana.com cargo run -- swap l2s` (also `swap s2l`, `abort l2s|s2l`, `liquid-check`, `balances`). It refuses mainnet.
   Test wallets are in `cli/.keys/` (gitignored). The Liquid faucet is rate-limited, and the devnet CLI faucet often refuses this machine, so use faucet.solana.com.
 - Maker rules, from `maker/`: `cargo test`. Signer attack suite: `ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli SOLANA_RPC=https://api.devnet.solana.com cargo test -p liq2sol-signer --test process -- --ignored --nocapture`.

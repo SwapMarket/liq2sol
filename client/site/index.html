@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self' https: wss:; base-uri 'none'; form-action 'none'">
+<meta name="description" content="Trustless, confidential atomic swaps between USDt on Liquid and USDT on Solana. No server, no custodian.">
+<title>liq2sol</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<nav>
+  <div class="nav-inner">
+    <a class="logo" href="#swap"><span>liq</span><b>2</b><span>sol</span></a>
+    <a class="tab" data-tab="swap" href="#swap">Swap</a>
+    <a class="tab" data-tab="rescue" href="#rescue">Rescue</a>
+    <a class="tab" data-tab="history" href="#history">History</a>
+    <a class="tab ext" href="https://github.com/SwapMarket/liq2sol/tree/main/docs" target="_blank" rel="noopener noreferrer">Docs</a>
+    <span class="net" id="net"></span>
+  </div>
+</nav>
+<main>
+  <div id="banner" class="banner" hidden></div>
+  <section id="view"></section>
+  <section id="below"></section>
+</main>
+<footer>
+  <p>No server and no custodian: your funds stay under keys only you and the chains control. This build is for test networks.</p>
+  <p id="build"></p>
+</footer>
+</body>
+</html>

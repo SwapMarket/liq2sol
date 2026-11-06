@@ -604,23 +604,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
-name = "liq2sol-htlc"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "simplicityhl",
-]
-
-[[package]]
-name = "liq2sol-htlc-wasm"
-version = "0.1.0"
-dependencies = [
- "liq2sol-htlc",
- "simplicityhl",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "liq2sol-swapkey"
 version = "0.1.0"
 dependencies = [

@@ -2,6 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "native")]
+pub mod esplora;
 pub mod liquid;
+#[cfg(feature = "native")]
 pub mod sol;
 pub mod swap;

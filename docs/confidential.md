@@ -106,7 +106,7 @@ regtest nodes must be started with `-acceptdiscountct=1` to behave like the real
 | A refund: 2 inputs, 1 blinded output, fee, the Simplicity leaf | 1,409 | 285 | 29 sats |
 
 Ordinary payments pay about twice the floor, computed from their shape. A swap claim's fee can't be raised, because the signature
-commits to the whole transaction, so a fee coin holds a fixed 30 sats (the `FEE` constant). That is just above the floor for both a claim and a refund, on
+commits to the whole transaction, so a fee coin holds a fixed 30 sats by default (the signer's `fee_coin_sats` setting). That is just above the floor for both a claim and a refund, on
 the operator's judgement that Liquid has no fee spikes. **It leaves no margin if the relay floor ever rises.** A child transaction spending the claim's
 blinded output can still bump it.
 
@@ -147,7 +147,6 @@ Devnet also found what the local validator had hidden by timing: a lock signed r
 - Priority fees on Solana. The code sets none, so a claim could miss its deadline on a congested mainnet. **To fix before mainnet.**
 - Firefox and Safari, and a real wallet paying a confidential address of this form.
 - A real restart for E14, as on `main`.
-- Removing the old HTLC code. `contracts/liquid` and its helpers in `shared/chain` are unused by the maker and CLI, but still in the tree.
 - An audit of `musig2` 0.4.1's adaptor code.
 - A taker's own refund from a daemon-run swap. The refund leaf is proven on testnet through the CLI.
 

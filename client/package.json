@@ -1,0 +1,14 @@
+{
+  "name": "liq2sol-client-tools",
+  "private": true,
+  "description": "Only for vendoring libraries and running browser tests. The site itself has no build step for JavaScript.",
+  "scripts": {
+    "vendor": "esbuild vendor-src/walletconnect.js --bundle --format=esm --minify --target=es2020 --define:global=globalThis --outfile=site/vendor/walletconnect.js && esbuild vendor-src/qrcode.js --bundle --format=esm --minify --target=es2020 --outfile=site/vendor/qrcode.js"
+  },
+  "devDependencies": {
+    "@walletconnect/sign-client": "2.17.2",
+    "esbuild": "0.24.0",
+    "playwright-core": "1.58.0",
+    "qrcode-generator": "1.4.4"
+  }
+}

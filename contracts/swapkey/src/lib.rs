@@ -14,7 +14,9 @@
 use std::sync::Arc;
 
 use musig2::secp::{MaybeScalar, Point, Scalar};
-use musig2::{AdaptorSignature, AggNonce, KeyAggContext, LiftedSignature, PartialSignature, PubNonce, SecNonce};
+use musig2::{
+    AdaptorSignature, AggNonce, BinaryEncoding, KeyAggContext, LiftedSignature, PartialSignature, PubNonce, SecNonce,
+};
 use simplicityhl::elements::secp256k1_zkp::{self, XOnlyPublicKey};
 use simplicityhl::elements::sighash::{Prevouts, SighashCache};
 use simplicityhl::elements::taproot::{ControlBlock, LeafVersion, TaprootBuilder, TaprootSpendInfo};
@@ -402,6 +404,14 @@ pub fn share_from(bytes: &[u8]) -> Result<PartialSignature, Error> {
         Ok(MaybeScalar::Valid(s)) => Ok(MaybeScalar::Valid(s)),
         _ => Err(Error::BadPartialSignature),
     }
+}
+
+pub fn aggregate_bytes(nonce: &AggNonce) -> Vec<u8> {
+    nonce.to_bytes().to_vec()
+}
+
+pub fn aggregate_from(bytes: &[u8]) -> Result<AggNonce, Error> {
+    AggNonce::from_bytes(bytes).map_err(|e| Error::Signing(e.to_string()))
 }
 
 pub fn adaptor_bytes(sig: &AdaptorSignature) -> Vec<u8> {

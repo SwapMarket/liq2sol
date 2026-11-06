@@ -53,6 +53,9 @@ pub struct MakerRules {
     pub network: String,
     pub min_sol_units: u64,
     pub max_sol_units: u64,
+    /// What the maker can pay right now, less what open swaps are counting on.
+    pub available_l2s: u64,
+    pub available_s2l: u64,
     pub l2s_bps: u32,
     pub s2l_bps: u32,
     pub quote_secs: u64,
@@ -89,6 +92,14 @@ pub fn make_quote(r: &MakerRules, request: &Request, now: u64) -> Result<Quote, 
         return Err(Refused::OutOfLimits);
     }
     if send.checked_mul(100).is_none() || receive.checked_mul(100).is_none() {
+        return Err(Refused::OutOfLimits);
+    }
+    // The maker pays `receive`. A quote it can't fill would tie up the taker's funds until a refund.
+    let available = match request.direction {
+        Direction::L2S => r.available_l2s,
+        Direction::S2L => r.available_s2l,
+    };
+    if receive > available {
         return Err(Refused::OutOfLimits);
     }
     Ok(Quote {

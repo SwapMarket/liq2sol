@@ -7,6 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
+use liq2sol_chain::esplora::*;
 use liq2sol_chain::liquid::*;
 use serde_json::Value as Json;
 use simplicityhl::elements::confidential::{Asset, Value};

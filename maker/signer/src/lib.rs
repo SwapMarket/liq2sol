@@ -20,26 +20,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anchor_lang::prelude::Pubkey;
+use liq2sol_chain::esplora::{Esplora, Rpc};
 use liq2sol_chain::liquid::{
-    self, keypair_from, network, pay_from_coins, sign_keypath, usdt, use_network, Esplora, NetworkConfig, Payment, Rpc,
-    SecretCoin, Wallet, FEE, LIQUID_MAINNET_GENESIS,
+    self, keypair_from, pay_from_coins, sign_keypath, usdt, use_network, NetworkConfig, Payment, SecretCoin, Wallet,
+    FEE, LIQUID_MAINNET_GENESIS,
 };
 use liq2sol_chain::sol::{self, escrow_pda, Sol, MAINNET_GENESIS};
-use liq2sol_chain::swap::{check_claim_shape, spent_outputs};
+use liq2sol_chain::swap::{check_claim_shape, spent_outputs, swap_address, swap_output, taker_fee_address};
 use liq2sol_maker_core::engine::Direction;
 use liq2sol_maker_core::policy::{self, CoinEvidence, EscrowEvidence, Ledger, Limits, Refusal, Request};
 use liq2sol_maker_core::store::SignerLedger;
 use liq2sol_maker_core::{CompressedKey, LockPoint};
 use liq2sol_swapkey::{
     adaptor_bytes, adaptor_from, combine, complete, extract_secret, key_spend_sighash, nonce_bytes, nonce_from,
-    set_key_spend_witness, share_bytes, share_from, solana_value, verify_share, Nonce, Session, SwapOutput, SwapParams,
+    set_key_spend_witness, share_bytes, share_from, solana_value, verify_share, Nonce, Session, SwapOutput,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use simplicityhl::elements::encode::{deserialize, serialize, serialize_hex};
-use simplicityhl::elements::secp256k1_zkp::{
-    Keypair as LiquidKey, Message, PublicKey, Secp256k1, SecretKey, XOnlyPublicKey,
-};
+use simplicityhl::elements::secp256k1_zkp::{Keypair as LiquidKey, Message, Secp256k1, SecretKey};
 use simplicityhl::elements::{Address, AddressParams, AssetId, BlockHash, Sequence, Transaction as LiquidTx};
 use solana_escrow::state::{Escrow, EscrowState};
 use solana_sdk::signature::{read_keypair_file, write_keypair_file, Keypair};
@@ -72,6 +71,13 @@ pub struct Config {
     /// The cold owner of the maker vault this signer operates, if any. With one, Solana locks draw from the vault under
     /// its on-chain window cap, and a stolen hot key can't exceed that. The owner's key is never on this host.
     pub vault_owner: Option<String>,
+    /// What each fee coin holds. Only the relay floor limits it: a claim needs about 26 sats, and a refund 29, at 0.1 sat/vB.
+    #[serde(default = "default_fee_coin")]
+    pub fee_coin_sats: u64,
+}
+
+fn default_fee_coin() -> u64 {
+    FEE
 }
 
 /// One swap's agreed terms. The same for both directions, apart from who refunds. Nothing here is trusted: a wrong value
@@ -100,31 +106,17 @@ impl SwapTerms {
 
     /// Who may refund: the party that funded the coin.
     pub fn output(&self, maker_key: &CompressedKey) -> Result<SwapOutput, String> {
-        let funder = match self.direction {
-            Direction::L2S => &self.taker_key,
-            Direction::S2L => maker_key,
-        };
-        let refund_pk = funder.id();
-        SwapOutput::new(&SwapParams {
-            maker_key: maker_key.0,
-            taker_key: self.taker_key.0,
-            refund_pk,
-            lock_height: self.lock_height,
-        })
-        .map_err(|e| e.to_string())
+        swap_output(&maker_key.0, &self.taker_key.0, self.direction == Direction::L2S, self.lock_height)
     }
 
     /// The confidential address to fund. Both parties derive it, and neither takes it from the other.
     pub fn address(&self, maker_key: &CompressedKey) -> Result<Address, String> {
-        let blinder = PublicKey::from_secret_key(&Secp256k1::new(), &self.blinding()?);
-        Ok(self.output(maker_key)?.address(blinder, network().params))
+        Ok(swap_address(&self.output(maker_key)?, &self.blinding()?))
     }
 
-    /// S→L: where the taker's fee coin goes. Derived, so a separate address can't be swapped in.
+    /// S→L: where the taker's fee coin goes.
     pub fn taker_fee_address(&self) -> Result<Address, String> {
-        let taker = XOnlyPublicKey::from_slice(&self.taker_key.id()).map_err(|e| e.to_string())?;
-        let blinder = PublicKey::from_secret_key(&Secp256k1::new(), &self.blinding()?);
-        Ok(Address::p2tr(&Secp256k1::new(), taker, None, Some(blinder), network().params))
+        taker_fee_address(&self.taker_key.0, &self.blinding()?)
     }
 }
 
@@ -140,6 +132,8 @@ pub enum Call {
     },
     /// Keep a pool of fee coins ready. Only ever pays our own wallet.
     TopUpFeeCoins,
+    /// What we hold and could lock, for the offer. Nothing is signed.
+    Capacity,
     /// L→S, step one: check the taker's coin, build our claim, and start a signing session on it.
     PrepareClaim {
         terms: SwapTerms,
@@ -210,11 +204,17 @@ pub enum Reply {
         solana: String,
         /// What our Solana escrows are seeded with: the vault if there is one, or `solana`.
         escrow_initiator: String,
+        fee_coin_sats: u64,
     },
     SwapKey {
         key: CompressedKey,
     },
     Held(bool),
+    /// In base units of each chain's token.
+    Capacity {
+        solana_units: u64,
+        liquid_units: u64,
+    },
     /// Nothing needed doing.
     Nothing,
     /// L→S: our unsigned claim and nonce, for the taker to sign.
@@ -309,6 +309,7 @@ pub struct Signer {
     solana: Keypair,
     swap_seed: [u8; 32],
     vault_owner: Option<Pubkey>,
+    fee_coin_sats: u64,
     sessions: HashMap<[u8; 32], OpenSession>,
 }
 
@@ -378,6 +379,7 @@ impl Signer {
             solana,
             swap_seed,
             vault_owner: cfg.vault_owner.as_deref().map(parse_pubkey).transpose()?,
+            fee_coin_sats: cfg.fee_coin_sats,
             sessions: HashMap::new(),
         })
     }
@@ -410,14 +412,14 @@ impl Signer {
         Ok(coins.into_iter().filter(|c| !c.coin.out.asset.is_explicit() && !c.coin.out.value.is_explicit()).collect())
     }
 
-    fn is_fee_coin(c: &SecretCoin) -> bool {
-        c.secrets.asset == liquid::lbtc() && c.secrets.value == FEE
+    fn is_fee_coin(&self, c: &SecretCoin) -> bool {
+        c.secrets.asset == liquid::lbtc() && c.secrets.value == self.fee_coin_sats
     }
 
     fn free_fee_coins(&self, coins: Vec<SecretCoin>) -> Result<Vec<SecretCoin>, String> {
         let mut free = vec![];
         for c in coins {
-            if Self::is_fee_coin(&c) && !self.ledger.is_reserved(&outpoint_text(&c)).map_err(|e| e.to_string())? {
+            if self.is_fee_coin(&c) && !self.ledger.is_reserved(&outpoint_text(&c)).map_err(|e| e.to_string())? {
                 free.push(c);
             }
         }
@@ -428,7 +430,7 @@ impl Signer {
     fn payable_coins(&self) -> Result<Vec<SecretCoin>, String> {
         let mut coins = vec![];
         for c in self.wallet_coins()? {
-            if !Self::is_fee_coin(&c) && !self.ledger.is_used(&outpoint_text(&c)).map_err(|e| e.to_string())? {
+            if !self.is_fee_coin(&c) && !self.ledger.is_used(&outpoint_text(&c)).map_err(|e| e.to_string())? {
                 coins.push(c);
             }
         }
@@ -468,12 +470,22 @@ impl Signer {
         }
         let to = self.wallet.address();
         let payments = (0..FEE_COINS_TOP_UP)
-            .map(|_| Payment { asset: liquid::lbtc(), amount: FEE, address: to.clone() })
+            .map(|_| Payment { asset: liquid::lbtc(), amount: self.fee_coin_sats, address: to.clone() })
             .collect();
         let tx = pay_from_coins(&self.payable_coins()?, &self.wallet, payments, self.genesis)?;
         let raw = serialize(&tx);
         self.ledger.set_pending_top_up(&raw, &spends_of(&tx)).map_err(|e| e.to_string())?;
         Ok(Reply::Liquid(hex(&raw)))
+    }
+
+    fn capacity(&self) -> Outcome {
+        let token = match &self.vault_owner {
+            Some(owner) => sol::maker_vault_token_pda(&sol::maker_vault_pda(owner)),
+            None => sol::ata(&self.solana.pubkey()),
+        };
+        let liquid_units =
+            self.payable_coins()?.iter().filter(|c| c.secrets.asset == usdt()).map(|c| c.secrets.value).sum();
+        Ok(Reply::Capacity { solana_units: self.sol.token_balance(&token)?, liquid_units })
     }
 
     fn escrow_initiator(&self) -> Pubkey {
@@ -662,7 +674,7 @@ impl Signer {
         let payments = vec![
             Payment { asset: usdt(), amount: t.liquid_amount, address },
             // Exactly one fee coin's worth of L-BTC, so this can't be used to drain the wallet's L-BTC.
-            Payment { asset: liquid::lbtc(), amount: FEE, address: t.taker_fee_address()? },
+            Payment { asset: liquid::lbtc(), amount: self.fee_coin_sats, address: t.taker_fee_address()? },
         ];
         let tx = pay_from_coins(&self.payable_coins()?, &self.wallet, payments, self.genesis)?;
         let raw = serialize(&tx);
@@ -838,12 +850,14 @@ impl Signer {
                 liquid_address: self.wallet.address().to_string(),
                 solana: self.solana.pubkey().to_string(),
                 escrow_initiator: self.escrow_initiator().to_string(),
+                fee_coin_sats: self.fee_coin_sats,
             }),
             Call::SwapKey { swap_id } => {
                 self.maker_key(swap_id).map(|key| Reply::SwapKey { key }).map_err(Stop::Failed)
             }
             Call::AdaptorHeld { swap_id } => Ok(Reply::Held(self.ledger.record(swap_id).adaptor_held)),
             Call::TopUpFeeCoins => self.top_up_fee_coins(),
+            Call::Capacity => self.capacity(),
             Call::PrepareClaim { terms } => self.prepare_claim(terms),
             Call::StoreAdaptor { terms, taker_nonce, taker_share } => {
                 self.store_adaptor(terms, taker_nonce, taker_share)
@@ -1006,6 +1020,7 @@ mod tests {
             Reply::Identity { .. }
             | Reply::SwapKey { .. }
             | Reply::Held(_)
+            | Reply::Capacity { .. }
             | Reply::Nothing
             | Reply::ClaimTemplate { .. }
             | Reply::Nonce(_)

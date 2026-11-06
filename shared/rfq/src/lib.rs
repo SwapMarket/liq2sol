@@ -13,8 +13,11 @@
 #![forbid(unsafe_code)]
 
 pub mod messages;
+#[cfg(feature = "native")]
 pub mod mock_relay;
+#[cfg(feature = "native")]
 pub mod relay;
 pub mod rules;
+#[cfg(feature = "native")]
 pub mod taker;
 pub mod wrap;

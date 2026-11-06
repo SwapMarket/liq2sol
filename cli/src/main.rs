@@ -24,9 +24,10 @@ use liq2sol_swapkey::{
     solana_value, verify_share, Session, SwapOutput, SwapParams,
 };
 use liquid::{
-    build_confidential_pay, build_swap_spend, exact_secret_coin, keypair_from, lbtc, network, published_signature,
-    random32, sign_keypath, usdt, Esplora, Payment, Res, SecretCoin, Wallet, FEE,
+    build_swap_spend, exact_secret_coin, keypair_from, lbtc, network, published_signature, random32, sign_keypath, usdt,
+    Payment, Res, SecretCoin, Wallet, FEE,
 };
+use liq2sol_chain::esplora::{build_confidential_pay, Esplora};
 use simplicityhl::elements::encode::serialize_hex;
 use simplicityhl::elements::secp256k1_zkp::{Keypair as LiquidKey, Message, PublicKey, Secp256k1, SecretKey};
 use simplicityhl::elements::{Address, BlockHash, OutPoint, Sequence, Transaction};

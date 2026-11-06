@@ -14,9 +14,9 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use anchor_lang::prelude::Pubkey;
+use liq2sol_chain::esplora::{Esplora, Rpc};
 use liq2sol_chain::liquid::{
-    exact_secret_coin, is_key_path_spend, published_signature, usdt, use_network, Esplora, NetworkConfig, Rpc,
-    LIQUID_MAINNET_GENESIS,
+    exact_secret_coin, is_key_path_spend, published_signature, usdt, use_network, NetworkConfig, LIQUID_MAINNET_GENESIS,
 };
 use liq2sol_chain::sol::{ata, escrow_pda, Sol, MAINNET_GENESIS};
 use liq2sol_maker_core::engine::{

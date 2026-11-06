@@ -60,6 +60,10 @@ pub struct Offer {
     pub directions: Vec<Direction>,
     pub min_sol_units: Units,
     pub max_sol_units: Units,
+    /// What the maker can pay right now, in SOL-USDT base units: on Solana for L→S, and on Liquid for S→L. A maker may publish
+    /// less than it holds, because this reveals its capacity. It doesn't quote above it.
+    pub available_l2s: Units,
+    pub available_s2l: Units,
     pub l2s_bps: u32,
     pub s2l_bps: u32,
     pub fee_coin_sats: u64,

@@ -19,9 +19,10 @@ use std::cell::RefCell;
 
 use anchor_lang::prelude::Pubkey;
 use liq2sol_chain::liquid::{
-    build_confidential_pay, build_swap_spend, exact_secret_coin, keypair_from, lbtc, published_signature, random32,
-    read_output, sign_keypath, usdt, use_network, Esplora, NetworkConfig, Payment, Res, Rpc, SecretCoin, Wallet, FEE,
+    build_swap_spend, exact_secret_coin, keypair_from, lbtc, published_signature, random32, read_output, sign_keypath,
+    usdt, use_network, NetworkConfig, Payment, Res, SecretCoin, Wallet, FEE,
 };
+use liq2sol_chain::esplora::{build_confidential_pay, Esplora, Rpc};
 use liq2sol_chain::sol::{ata, vault_pda, Sol, MAINNET_GENESIS};
 use liq2sol_swapkey::{
     combine, complete, extract_secret, key_spend_sighash, point_of, secret_from_solana, set_key_spend_witness,

@@ -9,17 +9,24 @@ publish = false
 
 [workspace]
 
+[features]
+default = ["native"]
+# Blocking chain access and the Solana client. The browser client builds without it.
+native = ["dep:solana-escrow", "dep:anchor-lang", "dep:anchor-spl", "dep:solana-client", "dep:solana-sdk", "dep:solana-commitment-config", "dep:ureq", "dep:serde_json"]
+
 [dependencies]
-liq2sol-htlc = { path = "../../contracts/liquid" }
 liq2sol-swapkey = { path = "../../contracts/swapkey" }
 rand = "0.8"
-solana-escrow = { path = "../../programs/solana-escrow", features = ["no-entrypoint"] }
 simplicityhl = "=0.9.0"
-anchor-lang = "=1.2.2"
-anchor-spl = "=1.2.2"
-solana-client = "3"
-solana-sdk = "3"
-solana-commitment-config = "3"
-ureq = "2"
-serde_json = "1"
 getrandom = "0.2"
+solana-escrow = { path = "../../programs/solana-escrow", features = ["no-entrypoint"], optional = true }
+anchor-lang = { version = "=1.2.2", optional = true }
+anchor-spl = { version = "=1.2.2", optional = true }
+solana-client = { version = "3", optional = true }
+solana-sdk = { version = "3", optional = true }
+solana-commitment-config = { version = "3", optional = true }
+ureq = { version = "2", optional = true }
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+serde_json = "1"

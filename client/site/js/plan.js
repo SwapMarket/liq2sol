@@ -39,11 +39,13 @@ function fillFor(m, wanted, room, maxSpreadBps) {
 /**
  * @param total what the taker wants to send
  * @param makers [{ maker, tiers: [{ up_to, bps }], min, max, available }], in any order
- * @param first a maker to prefer over the best price, if the taker picked one
+ * @param first a maker to prefer over everything, if the taker picked one for this order
  * @param maxSpreadBps the most the taker will give up on a fill, after rounding, which matters for very small fills
+ * @param favorites makers to prefer over a better price from anyone else, because the taker trusts them
  * @returns { fills: [{ maker, bps, send, receive }], unfilled, receive }
  */
-export function planOrder(total, makers, first = null, maxSpreadBps = 10000) {
+export function planOrder(total, makers, first = null, maxSpreadBps = 10000, favorites = new Set()) {
+  const rank = (maker) => (maker === first ? 2 : favorites.has(maker) ? 1 : 0);
   const room = new Map(makers.map((m) => [m.maker, m.available]));
   const fills = [];
   let left = total;
@@ -53,8 +55,7 @@ export function planOrder(total, makers, first = null, maxSpreadBps = 10000) {
     for (const m of makers) {
       const fill = fillFor(m, left, room.get(m.maker), maxSpreadBps);
       if (!fill) continue;
-      const better = !best || (m.maker === first && best.maker !== first)
-        || (best.maker !== first && fill.bps < best.bps);
+      const better = !best || rank(m.maker) > rank(best.maker) || (rank(m.maker) === rank(best.maker) && fill.bps < best.bps);
       if (better) best = fill;
     }
     if (!best) break;

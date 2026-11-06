@@ -369,6 +369,18 @@ async function look() {
   await phone.locator('tbody tr').first().waitFor({ timeout: 30000 });
   await phone.locator('#amount').fill(env.AMOUNT);
   await checkSettingsLogs(phone);
+  await phone.locator('.star').first().click();
+  await phone.locator('.star.on').first().waitFor({ timeout: 3000 });
+  await phone.locator('#only-favorites').check();
+  await phone.locator('.star.on').first().waitFor({ timeout: 3000 });
+  await phone.reload();
+  await phone.locator('.star.on').first().waitFor({ timeout: 30000 });
+  if (!(await phone.locator('#only-favorites').isChecked())) throw new Error('"only favorites" did not survive a reload');
+  await phone.locator('.star.on').first().click();
+  await phone.locator('tbody tr').waitFor({ state: 'detached', timeout: 3000 });
+  await phone.locator('#only-favorites').uncheck();
+  await phone.locator('tbody tr').first().waitFor({ timeout: 3000 });
+  step('a favorite and the switch survive a reload, and the switch hides everyone else');
   step('Settings can download and delete the logs');
   await phone.screenshot({ path: path.join(shots, 'phone.png'), fullPage: true });
   const wide = await phone.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);

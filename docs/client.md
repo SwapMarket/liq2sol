@@ -113,6 +113,8 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 Offers show each maker's price, per-swap limits and what it can pay now. A taker can trade any amount inside those limits, not only whole offers. Prices show what the taker pays per unit received, so a worse price is a higher number, such as 1.0030. They show to 4 places
 and sizes to 2, with minimums rounded up and maximums and availability rounded down. Quotes and payments stay exact, because a coin must match to the last unit.
 
+**Favorites.** A star on a maker keeps it in this browser's settings. Favorites sort first and fill first, even at a worse price, and "Only my favorites" hides everyone else. A fake maker quoting a bargain can't get ahead of them.
+
 When an order is larger than the best offer, `js/plan.js` fills it best price first, across makers and across several swaps with one maker, up to 5 swaps. What the book can't cover is shown before accepting.
 
 **The fills are not atomic together.** Each is its own swap, with its own secret, keys and refund, so some can complete while others refund, and the review screen says so. An L→S taker makes one exact payment per fill, and an S→L taker approves one lock per fill. One recovery file covers the whole order. In S→L every fill pays the same Liquid address, so an observer can see those payments went to one place, though not their amounts.

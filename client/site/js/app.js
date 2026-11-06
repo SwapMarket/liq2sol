@@ -139,11 +139,36 @@ const liveOffers = (direction) => [...offers.values()]
 const tiersOf = (o, direction) => (direction === 'L2S' ? o.offer.l2s_prices : o.offer.s2l_prices).map((t) => ({ up_to: BigInt(t.up_to), bps: t.bps }));
 const available = (o, direction) => BigInt(direction === 'L2S' ? o.offer.available_l2s : o.offer.available_s2l);
 
+// Saved with the settings, so they outlast this visit.
+const favorites = () => new Set(settings.favorites ?? []);
+
+function toggleFavorite(maker) {
+  const set = favorites();
+  if (!set.delete(maker)) set.add(maker);
+  settings.favorites = [...set];
+  saveSettings(settings);
+  render();
+}
+
+function setOnlyFavorites(on) {
+  settings.onlyFavorites = on;
+  saveSettings(settings);
+  render();
+}
+
+// The makers an order can use. Hidden ones aren't offered anything.
+const shownOffers = (direction) => {
+  const fav = favorites();
+  const list = liveOffers(direction);
+  return (settings.onlyFavorites ? list.filter((o) => fav.has(o.maker)) : list)
+    .sort((a, b) => Number(fav.has(b.maker)) - Number(fav.has(a.maker)));
+};
+
 function currentPlan(send) {
-  const makers = liveOffers(ui.direction).map((o) => ({
+  const makers = shownOffers(ui.direction).map((o) => ({
     maker: o.maker, tiers: tiersOf(o, ui.direction), min: BigInt(o.offer.min_sol_units), max: BigInt(o.offer.max_sol_units), available: available(o, ui.direction),
   }));
-  return planOrder(send ?? 0n, makers, ui.selected, settings.maxSpreadBps ?? NETWORK.maxSpreadBps);
+  return planOrder(send ?? 0n, makers, ui.selected, settings.maxSpreadBps ?? NETWORK.maxSpreadBps, favorites());
 }
 
 // The price at this order's size, or the best step if there is no order yet. Hovering shows the whole ladder.
@@ -160,15 +185,24 @@ function priceCell(o, direction, send, fills) {
 }
 
 function bookView(send) {
-  const list = liveOffers(ui.direction);
+  const list = shownOffers(ui.direction);
   const plan = currentPlan(send);
+  const fav = favorites();
   const rows = list.map((o) => {
     const mine = plan.fills.filter((f) => f.maker === o.maker);
     return h('tr', {
       class: mine.length ? 'on' : '',
       onclick: () => { ui.selected = ui.selected === o.maker ? null : o.maker; render(); },
     },
-    h('td', { class: 'mono' }, short(o.maker)),
+    h('td', { class: 'mono' },
+      h('button', {
+        class: `star${fav.has(o.maker) ? ' on' : ''}`,
+        title: fav.has(o.maker) ? 'Remove from favorites' : 'Add to favorites',
+        'aria-label': fav.has(o.maker) ? `Remove ${short(o.maker)} from favorites` : `Add ${short(o.maker)} to favorites`,
+        'aria-pressed': fav.has(o.maker) ? 'true' : 'false',
+        onclick: (e) => { e.stopPropagation(); toggleFavorite(o.maker); },
+      }, fav.has(o.maker) ? '★' : '☆'),
+      ` ${short(o.maker)}`),
     priceCell(o, ui.direction, send, mine),
     h('td', {}, `${size(sizeUp(o.offer.min_sol_units))} – ${size(sizeDown(o.offer.max_sol_units))}`),
     h('td', {}, size(sizeDown(available(o, ui.direction)))),
@@ -186,7 +220,12 @@ function bookView(send) {
           ['Your fill', `How much of your order goes to this maker, in ${names[ui.direction][0]}`],
         ].map(([t, why]) => h('th', { title: why }, t)))),
         h('tbody', {}, rows))
-      : h('div', { class: 'empty' }, relays?.connected() ? 'No maker is offering this direction right now.' : 'Connecting to Nostr relays…')));
+      : h('div', { class: 'empty' }, settings.onlyFavorites && liveOffers(ui.direction).length
+        ? 'None of your favorites is offering this direction right now.'
+        : relays?.connected() ? 'No maker is offering this direction right now.' : 'Connecting to Nostr relays…')),
+    h('label', { class: 'check only-favorites' },
+      h('input', { type: 'checkbox', id: 'only-favorites', checked: !!settings.onlyFavorites, onchange: (e) => setOnlyFavorites(e.target.checked) }),
+      'Only my favorites'));
 }
 
 // ---- Wallet ----

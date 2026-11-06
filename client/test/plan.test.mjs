@@ -98,3 +98,13 @@ test('short of funds, a fill can drop into a cheaper step, and still never pays 
   for (const f of p.fills) assert.equal(f.bps, bpsAt(m.tiers, f.send));
   assert.equal(p.fills.reduce((s, f) => s + f.send, 0n) + p.unfilled, 500n);
 });
+
+test('favorites fill first, even at a worse price, and a fake bargain can’t get ahead of them', () => {
+  const makers = [maker('bargain', 1, 500n, 500n), maker('mine', 90, 500n, 500n), maker('also', 50, 500n, 500n)];
+  const favorites = new Set(['mine', 'also']);
+  assert.equal(planOrder(100n, makers).fills[0].maker, 'bargain', 'without favorites, the best price wins');
+  assert.equal(planOrder(100n, makers, null, 10000, favorites).fills[0].maker, 'also', 'the better of the two favorites');
+  const big = planOrder(1200n, makers, null, 10000, favorites);
+  assert.deepEqual([...new Set(big.fills.map((f) => f.maker))], ['also', 'mine', 'bargain'], 'others only for what favorites can’t fill');
+  assert.equal(planOrder(100n, makers, 'bargain', 10000, favorites).fills[0].maker, 'bargain', 'picking a maker for this order beats a favorite');
+});

@@ -113,9 +113,9 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 Offers show each maker's price, per-swap limits and what it can pay now. A taker can trade any amount inside those limits, not only whole offers. Prices show what the taker pays per unit received, so a worse price is a higher number, such as 1.0030. They show to 4 places
 and sizes to 2, with minimums rounded up and maximums and availability rounded down. Quotes and payments stay exact, because a coin must match to the last unit.
 
-**The book's columns.** Maker, price, per-swap range and what the maker can pay. Once an order is typed in, the price is what that order would really pay and "Per swap" becomes "Your fill", the part of the order going to that maker. The form and book stay on the page and change only the cells that differ.
+**The book's columns.** Maker, price, per-swap range and Max, which is what the maker can pay now. Once an order is typed in, the price is what that order would really pay and "Per swap" becomes "Your fill", the part of the order going to that maker. The form and book stay on the page and change only the cells that differ.
 
-**Send min and Send max.** Links above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
+**Send Min and Max.** Buttons above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
 
 **Vetted makers.** `site/js/vetted.js` lists makers vetted by SwapMarket, by full key and network. Listed makers have a ✓, and "Only vetted by SwapMarket" starts on and is saved in settings. Turning it off shows everyone, with a warning. Vetting limits griefing and doesn't protect funds. Offers are signed, so a checkmark can't be copied without the maker's key. It only filters new orders: swaps in progress and Rescue never consult it.
 

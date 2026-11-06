@@ -235,7 +235,7 @@ function bookCells(o, direction, send, fills) {
 const book = {
   rows: new Map(),
   title: h('h3'),
-  headers: ['Maker', 'Price', 'Per swap', 'Maker can pay'].map((t) => h('th', {}, t)),
+  headers: ['Maker', 'Price', 'Per swap', 'Max'].map((t) => h('th', {}, t)),
   body: h('tbody'),
   empty: h('div', { class: 'empty' }),
   onlyVetted: h('input', { type: 'checkbox', id: 'only-vetted', onchange: (e) => setOnlyVetted(e.target.checked) }),
@@ -256,8 +256,9 @@ function newBookRow(maker) {
   const vetted = vettedMaker(NETWORK.name, maker);
   const row = { star, rate: h('td'), size: h('td'), pays: h('td') };
   row.el = h('tr', { onclick: () => { ui.selected = ui.selected === maker ? null : maker; updateForm(); } },
-    h('td', { class: 'mono', title: maker }, star, ` ${short(maker)}`,
-      vetted && h('span', { class: 'vetted', title: `Vetted by SwapMarket: ${vetted.name}`, 'aria-label': 'Vetted by SwapMarket' }, ' ✓')),
+    h('td', { class: 'mono', title: maker },
+      h('div', { class: 'maker-cell' }, star, h('span', {}, short(maker)),
+        vetted && h('span', { class: 'vetted', title: `Vetted by SwapMarket: ${vetted.name}`, 'aria-label': 'Vetted by SwapMarket' }, '✓'))),
     row.rate, row.size, row.pays);
   return row;
 }
@@ -281,7 +282,7 @@ function updateBook(send) {
   setText(book.headers[2], ordered ? 'Your fill' : 'Per swap', ordered
     ? `How much of your order goes to this maker, in ${from}`
     : `The smallest and largest single swap, in ${from} and ${to} alike`);
-  setText(book.headers[3], 'Maker can pay', `How much ${to} this maker can pay you right now`);
+  setText(book.headers[3], 'Max', `How much ${to} this maker can pay you right now`);
 
   const seen = new Set();
   list.forEach((o, at) => {
@@ -398,10 +399,12 @@ const form = {
   unfilled: h('div'),
   go: h('button', { class: 'btn', id: 'go', onclick: startQuote }),
   limits: null,
-  sendMin: h('a', { href: '#', id: 'send-min', onclick: (e) => { e.preventDefault(); if (form.limits) setAmount(form.limits.min); } }),
-  sendMax: h('a', { href: '#', id: 'send-max', onclick: (e) => { e.preventDefault(); if (form.limits) setAmount(form.limits.max); } }),
+  sendMin: h('button', { class: 'send-limit', id: 'send-min', type: 'button', onclick: () => { if (form.limits) setAmount(form.limits.min); } }),
+  sendMax: h('button', { class: 'send-limit', id: 'send-max', type: 'button', onclick: () => { if (form.limits) setAmount(form.limits.max); } }),
 };
-form.links = h('div', { class: 'send-links' }, form.sendMin, form.sendMax);
+form.links = h('div', { class: 'send-links' },
+  h('span', {}, 'Send Min:'), form.sendMin,
+  h('span', {}, 'Max:'), form.sendMax);
 form.el = h('div', { class: 'card' },
   h('button', { class: 'gear', title: 'Settings', 'aria-label': 'Settings', onclick: () => settingsDialog() }, '⚙'),
   h('h2', {}, 'Create Atomic Swap'),
@@ -441,8 +444,8 @@ function updateForm() {
   form.limits = currentLimits();
   form.links.hidden = !form.limits;
   if (form.limits) {
-    setText(form.sendMin, `Send min ${show(form.limits.min)}`, 'The smallest order the makers shown below can fill');
-    setText(form.sendMax, `Send max ${show(form.limits.max)}`, 'The largest order the makers shown below can fill. It doesn\'t check your balance.');
+    setText(form.sendMin, show(form.limits.min), 'The smallest order the makers shown below can fill');
+    setText(form.sendMax, show(form.limits.max), 'The largest order the makers shown below can fill. It doesn\'t check your balance.');
   }
   setText(form.go, label);
   form.go.disabled = !ready;

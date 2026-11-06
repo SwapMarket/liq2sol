@@ -431,7 +431,7 @@ async function liveBook() {
   await row.waitFor({ timeout: 30000 });
   const headers = async () => (await page.locator('thead th').allInnerTexts()).map((t) => t.toLowerCase());
   const cells = async () => row.locator('td').allInnerTexts();
-  if ((await headers()).join() !== 'maker,price,per swap,maker can pay') throw new Error(`columns: ${await headers()}`);
+  if ((await headers()).join() !== 'maker,price,per swap,max') throw new Error(`columns: ${await headers()}`);
   const quoted = await cells();
   if (!quoted[2].includes('–') || !/^(from )?\d\.\d{4}$/.test(quoted[1])) throw new Error(`before an order: ${quoted}`);
   const mark = () => page.evaluate(() => {
@@ -443,7 +443,7 @@ async function liveBook() {
   await page.locator('#amount').pressSequentially(env.AMOUNT);
   if ((await page.locator('#amount').inputValue()) !== env.AMOUNT) throw new Error('typing was lost');
   if (!(await page.locator('#amount').evaluate((e) => e === document.activeElement))) throw new Error('typing lost focus');
-  if ((await headers()).join() !== 'maker,price,your fill,maker can pay') throw new Error(`columns with an order: ${await headers()}`);
+  if ((await headers()).join() !== 'maker,price,your fill,max') throw new Error(`columns with an order: ${await headers()}`);
   const ordered = await cells();
   const average = await page.locator('.facts dd').nth(1).innerText();
   if (ordered[1] !== average) throw new Error(`the row's price ${ordered[1]} isn't the order's ${average}`);
@@ -462,10 +462,10 @@ async function liveBook() {
   if (lost.length) throw new Error(`rebuilt: ${lost}`);
 
   for (const [link, name] of [['#send-min', 'Send min'], ['#send-max', 'Send max']]) {
-    const text = await page.locator(link).innerText();
+    const shown = await page.locator(link).innerText();
     await page.locator(link).click();
     const amount = await page.locator('#amount').inputValue();
-    if (!text.startsWith(name) || Number(text.slice(name.length).replaceAll(',', '')) !== Number(amount)) throw new Error(`${text} put ${amount} in the form`);
+    if (!shown || Number(shown.replaceAll(',', '')) !== Number(amount)) throw new Error(`${name} shows ${shown} but put ${amount} in the form`);
     if (await page.locator('#unfilled').isVisible()) throw new Error(`${name} left part of the order unfilled`);
     if (!(await page.locator('.facts').isVisible())) throw new Error(`no maker takes ${name}`);
     if ((await headers())[2] !== 'your fill') throw new Error(`${name} did not count as an order`);

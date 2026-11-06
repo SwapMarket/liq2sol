@@ -82,7 +82,7 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 
 | Option | Reaches | Needs the relay? |
 |---|---|---|
-| **WalletConnect** | Phone wallets by QR code, such as Trust Wallet. `sol2base` documents that Phantom isn't reachable this way. | Yes |
+| **WalletConnect** | Phone wallets by QR code. Trust Wallet lists only Solana mainnet in [Reown's registry](https://explorer-api.walletconnect.com/v3/wallets?search=trust) (checked 2026-11-06), so a devnet build's session should be refused; it can only apply to a mainnet build. **UNVERIFIED** on a real device. `sol2base` documents that Phantom isn't reachable this way. | Yes |
 | **Extension wallets** | Phantom, Solflare, Backpack and others, through the Wallet Standard. The older injected objects need a Solana library's transaction type, so they aren't supported. | No |
 
 `sol2base` (`app.js`) has a working version of both, which is the starting point.

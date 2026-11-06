@@ -980,6 +980,12 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             }
         }
     };
+    // Public addresses only, so an operator with new keys knows where to send funds.
+    if let Ok(mut guard) = signer.lock() {
+        if let Reply::Identity { liquid_address, solana, .. } = guard.handle(&Call::Identity) {
+            println!("signer ready. To fund it: Liquid {liquid_address}, Solana {solana}");
+        }
+    }
     let _ = std::fs::remove_file(&cfg.socket);
     // The socket's own mode is set just after binding, so the directory must already keep everyone else out.
     let parent = cfg.socket.parent().ok_or("socket has no parent directory")?;

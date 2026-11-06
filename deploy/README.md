@@ -32,7 +32,13 @@ Put these in `/var/lib/liq2sol/first/keys`, owned by `liq2sol`, mode 600:
 | `swap-seed.key` | Derives each swap's key. Without it, open swaps can't be claimed |
 | `nostr.key` | The maker's public identity. Keep it to stay on the vetted list |
 
-Missing Liquid, seed and Nostr keys are generated on first start. `solana.json` must be supplied. Only ever use test keys here.
+Missing Liquid, seed and Nostr keys are generated on first start. `solana.json` must be supplied: make it with `solana-keygen new -o solana.json`, on any machine. Only ever use test keys here.
+
+## Starting with new keys
+
+1. Start the services as below. The signer's log gives the addresses to fund: `journalctl -u liq2sol-signer@first | grep "signer ready"`.
+2. Fund them: USDt and L-BTC on Liquid, and stand-in USDT and devnet SOL on Solana. Quotes in a direction wait until the funds that pay it are there.
+3. Find its public key in the maker's log, `maker answering quotes as <key>`. A new key isn't on the page's vetted list, so its offers stay hidden unless a taker turns off "Only vetted by SwapMarket", until the key is added to `client/site/js/vetted.js`.
 
 ## Moving a running maker
 

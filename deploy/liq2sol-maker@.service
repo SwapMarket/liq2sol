@@ -1,0 +1,22 @@
+[Unit]
+Description=liq2sol daemon for maker %i
+After=liq2sol-signer@%i.service
+Wants=liq2sol-signer@%i.service
+
+[Service]
+User=liq2sol
+Group=liq2sol
+WorkingDirectory=/var/lib/liq2sol/%i
+ExecStart=/opt/liq2sol/liq2sol-maker /var/lib/liq2sol/%i/maker.json
+# It stops if the signer isn't up yet, and tries again.
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/liq2sol/%i
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

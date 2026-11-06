@@ -1,0 +1,21 @@
+[Unit]
+Description=liq2sol signer for maker %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=liq2sol
+Group=liq2sol
+WorkingDirectory=/var/lib/liq2sol/%i
+ExecStart=/opt/liq2sol/liq2sol-signer /var/lib/liq2sol/%i/signer.json
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/liq2sol/%i
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

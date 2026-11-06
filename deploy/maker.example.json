@@ -1,0 +1,74 @@
+{
+ "db": "/var/lib/liq2sol/first/maker.db",
+ "signer_socket": "/var/lib/liq2sol/first/run/signer.sock",
+ "pages": "/var/lib/liq2sol/first/pages.log",
+ "engine": {
+  "confirmations": 2,
+  "large_above": 1000000000,
+  "confirmations_large": 10,
+  "max_per_swap": 1000000000,
+  "max_open_l2s": 5000000000,
+  "max_open_s2l": 5000000000,
+  "l2s_gate_blocks": 210,
+  "l2s_fund_window_blocks": 30,
+  "l2s_deadline_slots": 8400,
+  "s2l_gate_slots": 84500,
+  "s2l_lock_window_blocks": 30,
+  "liquid_stale_secs": 600,
+  "solana_stale_secs": 60,
+  "extend_after_stall_secs": 3600,
+  "extend_within_slots": 16900,
+  "extend_by_slots": 3000000,
+  "urgent_blocks": 60
+ },
+ "liquid": {
+  "Esplora": "https://liquid.network/liquidtestnet/api"
+ },
+ "second_liquid": {
+  "Esplora": "https://blockstream.info/liquidtestnet/api"
+ },
+ "solana_rpc": "https://api.devnet.solana.com",
+ "tick_millis": 20000,
+ "retry_secs": 60,
+ "regtest_assets": null,
+ "rfq": {
+  "nostr_key": "/var/lib/liq2sol/first/keys/nostr.key",
+  "relays": [
+   "wss://relay.primal.net",
+   "wss://relay.coinos.pro"
+  ],
+  "network": "testnet",
+  "min_sol_units": 100000,
+  "max_sol_units": 25000000,
+  "l2s_prices": [
+   {
+    "up_to": "5000000",
+    "bps": 30
+   },
+   {
+    "up_to": "25000000",
+    "bps": 40
+   }
+  ],
+  "s2l_prices": [
+   {
+    "up_to": "5000000",
+    "bps": 40
+   },
+   {
+    "up_to": "25000000",
+    "bps": 50
+   }
+  ],
+  "quote_secs": 60,
+  "l2s_lock_blocks": 300,
+  "s2l_lock_blocks": 90,
+  "min_deadline_slots": 101400,
+  "offer_every_secs": 300,
+  "offer_ttl_secs": 1800,
+  "max_requests_per_sender": 60,
+  "max_requests_per_window": 2000,
+  "window_secs": 300,
+  "max_negotiations": 500
+ }
+}

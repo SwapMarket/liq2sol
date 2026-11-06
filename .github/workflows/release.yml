@@ -1,0 +1,57 @@
+# Builds the maker for Debian when a version tag is pushed, and publishes it as a pre-release with checksums.
+# It builds in Debian 12, because a binary needs a glibc no newer than the machine it runs on. Actions are pinned to exact commits.
+name: Release the maker
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: rust:1.99.1-bookworm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test the maker's rules and signer
+        working-directory: maker
+        run: cargo test --locked
+      - name: Build
+        working-directory: maker
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          name="liq2sol-maker-${GITHUB_REF_NAME}-x86_64-linux"
+          mkdir -p "dist/$name"
+          cp maker/target/release/liq2sol-signer maker/target/release/liq2sol-maker deploy/* "dist/$name/"
+          cd dist
+          tar czf "$name.tar.gz" "$name"
+          rm -r "$name"
+          sha256sum "$name.tar.gz" > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release
+          path: dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --prerelease --title "$GITHUB_REF_NAME" \
+            --notes "The liq2sol maker, for x86-64 Debian 12 or later. Test networks only: both programs refuse mainnet. Installation is in README.md inside the archive."

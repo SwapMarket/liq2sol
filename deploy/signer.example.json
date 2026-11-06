@@ -1,0 +1,27 @@
+{
+ "socket": "/var/lib/liq2sol/first/run/signer.sock",
+ "ledger": "/var/lib/liq2sol/first/signer.db",
+ "keys_dir": "/var/lib/liq2sol/first/keys",
+ "liquid": {
+  "Esplora": "https://liquid.network/liquidtestnet/api"
+ },
+ "solana_rpc": "https://api.devnet.solana.com",
+ "limits": {
+  "max_per_swap": 1000000000,
+  "window_secs": 3600,
+  "max_per_window": 5000000000,
+  "confirmations": 2,
+  "large_above": 1000000000,
+  "confirmations_large": 10,
+  "s2l_gate_slots": 84500,
+  "l2s_gate_blocks": 210,
+  "l2s_max_deadline_slots": 8400,
+  "s2l_min_blocks": 30,
+  "s2l_max_blocks": 120,
+  "extend_after_stall_secs": 3600,
+  "extend_by_slots": 3000000
+ },
+ "regtest_assets": null,
+ "vault_owner": null,
+ "fee_coin_sats": 30
+}

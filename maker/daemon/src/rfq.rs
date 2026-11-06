@@ -71,10 +71,11 @@ pub struct Handler {
     negotiations: HashMap<String, Negotiation>,
     seen_events: HashSet<String>,
     recent: Vec<u64>,
-    capacity: Option<(u64, u64, u64)>,
+    /// (Solana, Liquid) that we hold, in SOL-USDT base units.
+    balances: Arc<Mutex<(u64, u64)>>,
 }
 
-const CAPACITY_CACHE_SECS: u64 = 30;
+const BALANCES_EVERY: Duration = Duration::from_secs(30);
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
@@ -115,25 +116,15 @@ impl Handler {
             negotiations: HashMap::new(),
             seen_events: HashSet::new(),
             recent: vec![],
-            capacity: None,
+            balances: Arc::default(),
         })
     }
 
-    /// What we can pay in each direction, less what open swaps are counting on. Cached briefly,
-    /// because each look is several chain reads and anyone can ask for a quote. A failed read shows nothing available.
-    fn available(&mut self, now: u64) -> (u64, u64) {
-        if let Some((at, l2s, s2l)) = self.capacity {
-            if now.saturating_sub(at) < CAPACITY_CACHE_SECS {
-                return (l2s, s2l);
-            }
-        }
-        let (solana, liquid) = match self.signer.call(&Call::Capacity) {
-            Ok(Reply::Capacity { solana_units, liquid_units }) => (solana_units, liquid_units / 100),
-            other => {
-                eprintln!("rfq: could not read capacity: {other:?}");
-                (0, 0)
-            }
-        };
+    /// What we can pay in each direction, less what open swaps are counting on. The balances come from a background reader,
+    /// because reading them takes many chain calls, and a taker asking for a quote shouldn't wait on that. Nothing read yet, or
+    /// a failed read, shows nothing available.
+    fn available(&mut self) -> (u64, u64) {
+        let (solana, liquid) = self.balances.lock().map_or((0, 0), |b| *b);
         let committed = |direction| -> u64 {
             let open = self.store.open_swaps().unwrap_or_default();
             open.iter()
@@ -144,12 +135,11 @@ impl Handler {
         let cap = self.cfg.show_available_up_to.unwrap_or(u64::MAX);
         let l2s = solana.saturating_sub(committed(engine::Direction::L2S)).min(cap);
         let s2l = liquid.saturating_sub(committed(engine::Direction::S2L)).min(cap);
-        self.capacity = Some((now, l2s, s2l));
         (l2s, s2l)
     }
 
-    fn rules(&mut self, now: u64) -> MakerRules {
-        let (available_l2s, available_s2l) = self.available(now);
+    fn rules(&mut self) -> MakerRules {
+        let (available_l2s, available_s2l) = self.available();
         MakerRules {
             available_l2s,
             available_s2l,
@@ -167,7 +157,7 @@ impl Handler {
     }
 
     pub fn offer(&mut self, now: u64) -> Result<Event, String> {
-        let (available_l2s, available_s2l) = self.available(now);
+        let (available_l2s, available_s2l) = self.available();
         let offer = Offer {
             available_l2s: Units(available_l2s),
             available_s2l: Units(available_s2l),
@@ -238,7 +228,7 @@ impl Handler {
         if self.negotiations.len() >= self.cfg.max_negotiations {
             return None;
         }
-        let rules = self.rules(now);
+        let rules = self.rules();
         let quote = rules::make_quote(&rules, &request, now).ok()?;
         let (event, quote_rumor_id) = self.reply(sender, id, Body::RfqQuote(quote.clone()), now).ok()?;
         self.negotiations.insert(
@@ -490,6 +480,20 @@ fn run_relay(
     }
 }
 
+/// One read of what we hold. A failure reads as nothing, so we don't quote on stale funds.
+fn read_balances(signer: &mut Client, balances: &Mutex<(u64, u64)>) {
+    let read = match signer.call(&Call::Capacity) {
+        Ok(Reply::Capacity { solana_units, liquid_units }) => (solana_units, liquid_units / 100),
+        other => {
+            eprintln!("rfq: could not read our balances: {other:?}");
+            (0, 0)
+        }
+    };
+    if let Ok(mut b) = balances.lock() {
+        *b = read;
+    }
+}
+
 /// Start answering on every configured relay.
 pub fn start(cfg: RfqConfig, maker: &crate::Config) -> Result<(PublicKey, Outbox), String> {
     let relays = cfg.relays.clone();
@@ -497,6 +501,14 @@ pub fn start(cfg: RfqConfig, maker: &crate::Config) -> Result<(PublicKey, Outbox
     let handler = Handler::new(cfg, maker)?;
     let pubkey = handler.keys.public_key();
     let mut outbox = Outbox { keys: handler.keys.clone(), network: handler.cfg.network.clone(), relays: vec![] };
+    // Once before any relay starts, so the first offer is right, and then in the background, on a connection of its own.
+    let mut reader = Client::connect(&maker.signer_socket)?;
+    let balances = handler.balances.clone();
+    read_balances(&mut reader, &balances);
+    std::thread::spawn(move || loop {
+        std::thread::sleep(BALANCES_EVERY);
+        read_balances(&mut reader, &balances);
+    });
     let handler = Arc::new(Mutex::new(handler));
     for url in relays {
         let h = handler.clone();

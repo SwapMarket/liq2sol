@@ -297,7 +297,7 @@ async function quoteFill(fill, direction) {
   relays.subscribe(`talk-${nostr.public.slice(0, 12)}`, { kinds: [WRAP_KIND], '#p': [nostr.public], since: now() - 300 });
   await new Promise((r) => setTimeout(r, 300));
   const request = { direction, amount_side: 'send', amount: fill.send.toString() };
-  const answered = waitFor(n, (g) => g.body.type === 'rfq-quote', 20000);
+  const answered = waitFor(n, (g) => g.body.type === 'rfq-quote', 30000);
   sendTo(n, 'rfq-request', request);
   const got = await answered;
   const problem = W.quote_problem(spreadLimit(), JSON.stringify(request), JSON.stringify(got.body.body), BigInt(now()));
@@ -360,7 +360,7 @@ function quoteView() {
 async function acceptFill(f, q, order, tip) {
   const { n } = f;
   const secrets = JSON.parse(W.new_swap_secrets());
-  const answered = waitFor(n, (g) => g.body.type === 'rfq-terms', 20000);
+  const answered = waitFor(n, (g) => g.body.type === 'rfq-terms', 30000);
   const rumor = sendTo(n, 'rfq-accept', {
     quote_event: f.rumor, lock_point: secrets.lock_point, taker_key: secrets.taker_key, blinding_key: secrets.blinding_key, taker_solana: q.owner,
   });

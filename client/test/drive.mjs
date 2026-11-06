@@ -168,6 +168,9 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
         'standard:connect': { version: '1.0.0', connect: async (input) => {
           window.testWalletSilent = !!input?.silent;
           if (input?.silent && localStorage.getItem('test.refuseSilent')) throw new Error('not trusted');
+          const refuse = localStorage.getItem('test.refuseConnect');
+          if (!input?.silent && refuse === 'person') throw Object.assign(new Error('User rejected the request'), { code: 4001 });
+          if (!input?.silent && refuse === 'broken') throw new Error('Unexpected wallet failure');
           return { accounts: [account] };
         } },
         'solana:signTransaction': {
@@ -186,6 +189,12 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
 }
 
 const step = (t) => console.log(`    ${t}`);
+async function connectTestWallet(page) {
+  const go = page.locator('#go', { hasText: 'Connect a Solana wallet' });
+  await go.waitFor({ timeout: 15000 });
+  await go.click();
+  await page.getByRole('link', { name: 'disconnect' }).waitFor({ timeout: 5000 });
+}
 const state = (page) => page.locator('.swap-card').first().getAttribute('data-state');
 const waitState = (page, want, ms = 240000) => page.locator(`.swap-card[data-state="${want}"]`).first().waitFor({ timeout: ms });
 
@@ -221,7 +230,7 @@ async function checkNoErrors(page) {
 }
 
 async function startSwap(page, flip, to) {
-  await page.getByRole('button', { name: 'Test Wallet' }).click();
+  await connectTestWallet(page);
   if (flip) await page.locator('.flip').click();
   await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
   await page.screenshot({ path: path.join(shots, `book-${flip ? 's2l' : 'l2s'}.png`) });
@@ -268,7 +277,7 @@ async function split() {
   const page = await newPage();
   await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
   await page.locator('#amount').fill(env.SPLIT_AMOUNT);
-  await page.getByRole('button', { name: 'Test Wallet' }).click();
+  await connectTestWallet(page);
   await page.locator('#go:not(:disabled)').click();
   await page.locator('#not-atomic').waitFor({ timeout: 30000 });
   await page.screenshot({ path: path.join(shots, 'split-quote.png') });
@@ -499,6 +508,7 @@ async function vetting() {
   await page.locator('.empty', { hasText: 'hidden by the switches' }).waitFor({ timeout: 30000 });
   if (!(await page.locator('#only-vetted').isChecked())) throw new Error('"only vetted" should start on');
   if (await page.locator('#unvetted-warning').isVisible()) throw new Error('a warning with the switch on');
+  await connectTestWallet(page);
   await page.locator('#amount').fill(env.AMOUNT);
   if (await page.locator('#go:not(:disabled)').count()) throw new Error('an order could go to a hidden maker');
   if (await page.locator('#send-max').isVisible()) throw new Error('send limits from makers that are hidden');
@@ -538,7 +548,8 @@ async function walletConnectWait() {
   let release;
   const held = new Promise((r) => { release = r; });
   await page.route('**/vendor/walletconnect.js', async (route) => { await held; await route.abort(); });
-  await page.getByRole('button', { name: 'WalletConnect' }).click();
+  await page.evaluate(() => localStorage.setItem('test.refuseConnect', 'broken'));
+  await page.locator('#go', { hasText: 'Connect a Solana wallet' }).click();
   await page.locator('dialog .spinner').waitFor({ timeout: 2000 });
   const turning = await page.locator('dialog .spinner').evaluate((e) => getComputedStyle(e).animationName);
   if (turning !== 'spin') throw new Error(`the spinner isn't animated: ${turning}`);
@@ -546,7 +557,7 @@ async function walletConnectWait() {
   await page.locator('dialog').waitFor({ state: 'detached', timeout: 10000 });
   await page.locator('#banner').waitFor({ timeout: 5000 });
   await page.context().close();
-  step('WalletConnect shows a moving spinner at once, and a failure closes it with a message');
+  step('a wallet that fails falls back to WalletConnect, whose spinner shows at once, and a failure closes it with a message');
 }
 
 // Nothing is rebuilt: marks put on the elements must outlast typing, a flip, new offers and the page's own timers.
@@ -632,7 +643,9 @@ async function pageLoading() {
 async function walletStays() {
   const page = await newPage();
   const connected = page.getByRole('link', { name: 'disconnect' });
-  const button = page.getByRole('button', { name: 'Test Wallet' });
+  const button = page.locator('#go', { hasText: 'Connect a Solana wallet' });
+  await button.waitFor({ timeout: 15000 });
+  if (await button.isDisabled()) throw new Error('the connect button should be clickable before any amount');
   await button.click();
   await connected.waitFor({ timeout: 5000 });
   await page.reload();
@@ -669,7 +682,7 @@ async function s2lBalance() {
       if (body?.method !== method) return route.fallback();
       return route.fulfill({ json: { jsonrpc: '2.0', id: body.id, result: { context: { slot: 1 }, ...empty } } });
     });
-    await page.getByRole('button', { name: 'Test Wallet' }).click();
+    await connectTestWallet(page);
     await page.locator('.flip').click();
     await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
     await page.locator('#amount').fill(env.AMOUNT);
@@ -685,18 +698,43 @@ async function s2lBalance() {
 
 async function phoneWallets() {
   const page = await newPage({ width: 400, height: 800 }, null, true);
-  const links = page.locator('.open-wallet');
+  await page.locator('.connect-wallet, #go', { hasText: 'Connect a Solana wallet' }).first().click();
+  const links = page.locator('.phone-wallets .open-wallet');
   await links.first().waitFor({ timeout: 15000 });
   const hrefs = await links.evaluateAll((all) => all.map((a) => a.href));
   const here = encodeURIComponent(page.url());
   if (hrefs.length !== 2 || !hrefs[0].startsWith(`https://phantom.app/ul/browse/${here}`) || !hrefs[1].startsWith(`https://solflare.com/ul/v1/browse/${here}`)) throw new Error(`the links: ${hrefs}`);
+  await page.locator('.phone-wallets').getByRole('button', { name: 'WalletConnect' }).waitFor({ timeout: 2000 });
+  await page.screenshot({ path: path.join(shots, 'phone-wallets.png') });
   await page.context().close();
+  step('a phone with no wallet in its browser gets a list of wallets, and WalletConnect');
+}
 
-  const desktop = await newPage();
-  await desktop.getByRole('button', { name: 'Test Wallet' }).waitFor({ timeout: 15000 });
-  if (await desktop.locator('.open-wallet').count()) throw new Error('phone links on a computer');
-  await desktop.context().close();
-  step('a phone with no wallet gets links to open the page in a wallet\'s browser');
+// The order to try, and when to stop. Phantom registers beside the test wallet here, which would otherwise be first.
+async function connectOrder() {
+  const page = await newPage(undefined, (p) => p.addInitScript(() => {
+    const account = { address: '11111111111111111111111111111111', publicKey: new Uint8Array(32), chains: ['solana:devnet'], features: [] };
+    const phantom = {
+      version: '1.0.0', name: 'Phantom', icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>', chains: ['solana:devnet'], accounts: [account],
+      features: {
+        'standard:connect': { version: '1.0.0', connect: async () => { if (localStorage.getItem('test.phantom') === 'no') throw Object.assign(new Error('no'), { code: 4001 }); return { accounts: [account] }; } },
+        'solana:signTransaction': { version: '1.0.0', signTransaction: async () => { throw new Error('unused'); } },
+      },
+    };
+    const register = ({ register: r }) => r(phantom);
+    window.addEventListener('wallet-standard:app-ready', ({ detail }) => register(detail));
+    window.dispatchEvent(new CustomEvent('wallet-standard:register-wallet', { detail: register }));
+  }));
+  const go = page.locator('#go', { hasText: 'Connect a Solana wallet' });
+  await page.evaluate(() => localStorage.setItem('test.phantom', 'no'));
+  await go.click();
+  await page.locator('#banner:not([hidden])', { hasText: 'Phantom declined' }).waitFor({ timeout: 5000 });
+  if (await page.getByRole('link', { name: 'disconnect' }).count()) throw new Error('moved on to another wallet after a person said no');
+  await page.evaluate(() => localStorage.removeItem('test.phantom'));
+  await go.click();
+  await page.locator('.note', { hasText: 'Solana: Phantom' }).waitFor({ timeout: 5000 });
+  await page.context().close();
+  step('Phantom is tried first, and saying no to a wallet stops there');
 }
 
 // The maker locks as soon as it has the page's signature, so the page's messages are held back until it asks for its refund.
@@ -741,6 +779,7 @@ async function early() {
 
 async function look() {
   await phoneWallets();
+  await connectOrder();
   await s2lBalance();
   await walletStays();
   await pageLoading();

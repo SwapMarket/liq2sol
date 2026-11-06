@@ -331,29 +331,70 @@ function walletView() {
     return h('p', { class: 'note' }, `Solana: ${wallet.name} ${short(wallet.address)} `,
       h('a', { href: '#', onclick: (e) => { e.preventDefault(); wallet = null; rememberWallet(null); render(); } }, 'disconnect'));
   }
-  const choose = async (connect, remember) => {
-    try {
-      wallet = await connect();
-      rememberWallet(remember);
-      render();
-    } catch (e) {
-      fail(e);
+  return h('button', { class: 'btn quiet connect-wallet', onclick: connectWallet }, 'Connect a Solana wallet');
+}
+
+// A wallet saying no is the person's answer, so it isn't a reason to open another one.
+const refusedByUser = (e) => e?.code === 4001 || /reject|denied|declin|cancel/i.test(e?.message ?? '');
+
+function useWallet(got, remember) {
+  wallet = got;
+  rememberWallet(remember);
+  render();
+}
+
+// Wallets in this browser, Phantom first. If none is here or none will connect: on a phone, the wallets it could use, and
+// otherwise WalletConnect's code.
+let connecting = false;
+
+async function connectWallet() {
+  if (connecting) return;
+  connecting = true;
+  try {
+    const here = [...extensionWallets()].sort((a, b) => Number(b.name === 'Phantom') - Number(a.name === 'Phantom'));
+    for (const w of here) {
+      try {
+        useWallet(await connectExtension(w), { kind: 'extension', name: w.name });
+        return;
+      } catch (e) {
+        console.warn('wallet connect', w.name, e?.message ?? e);
+        if (refusedByUser(e)) {
+          fail(new Error(`${w.name} declined the connection.`));
+          return;
+        }
+      }
     }
-  };
-  // A phone has no extensions, and can't scan its own screen. A wallet's own browser gives the page a wallet to talk to.
-  const here = encodeURIComponent(location.href);
-  const links = matchMedia('(pointer: coarse)').matches && !extensionWallets().length ? openInWallets(here, encodeURIComponent(location.origin)) : [];
-  return h('div', { class: 'wallets' },
-    links.length > 0 && h('p', { class: 'note open-in' }, `On a phone, open this page in your wallet’s browser, on ${NETWORK.walletNetwork}:`),
-    links.map(({ name, href }) => h('a', { class: 'btn quiet open-wallet', href }, `Open in ${name}`)),
-    extensionWallets().map((w) => h('button', {
+    if (matchMedia('(pointer: coarse)').matches) phoneWalletsDialog();
+    else useWallet(await walletConnect(), { kind: 'walletconnect' });
+  } catch (e) {
+    fail(e);
+  } finally {
+    connecting = false;
+  }
+}
+
+// A phone has no extensions, and can't scan its own screen. A wallet's own browser gives the page a wallet to talk to.
+function phoneWalletsDialog() {
+  const links = openInWallets(encodeURIComponent(location.href), encodeURIComponent(location.origin));
+  const dialog = h('dialog', { class: 'phone-wallets' },
+    h('h3', {}, 'Choose a wallet'),
+    h('p', { class: 'note' }, `These wallets work with ${NETWORK.walletNetwork}. Each opens this page in its own browser.`),
+    links.map(({ name, href }) => h('a', { class: 'btn quiet open-wallet', href }, name)),
+    h('button', {
       class: 'btn quiet',
-      onclick: () => choose(() => connectExtension(w).catch((e) => {
-        console.warn('wallet connect', w.name, e);
-        throw new Error(`${w.name} refused to connect: ${e?.message ?? e}. Check that it is unlocked and has a Solana account, and that no other wallet is taking over this page.`);
-      }), { kind: 'extension', name: w.name }),
-    }, w.name)),
-    h('button', { class: 'btn quiet', onclick: () => choose(walletConnect, { kind: 'walletconnect' }) }, 'WalletConnect'));
+      onclick: async () => {
+        dialog.close();
+        dialog.remove();
+        try {
+          useWallet(await walletConnect(), { kind: 'walletconnect' });
+        } catch (e) {
+          fail(e);
+        }
+      },
+    }, 'Another wallet, with WalletConnect'),
+    h('button', { class: 'btn quiet', onclick: () => { dialog.close(); dialog.remove(); } }, 'Close'));
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 function rememberWallet(which) {
@@ -436,7 +477,7 @@ const form = {
   wallet: h('div'),
   facts: h('div'),
   unfilled: h('div'),
-  go: h('button', { class: 'btn', id: 'go', onclick: startQuote }),
+  go: h('button', { class: 'btn', id: 'go', onclick: () => (wallet ? startQuote() : connectWallet()) }),
   limits: null,
   sendMin: h('button', { class: 'send-limit', id: 'send-min', type: 'button', onclick: () => { if (form.limits) setAmount(form.limits.min); } }),
   sendMax: h('button', { class: 'send-limit', id: 'send-max', type: 'button', onclick: () => { if (form.limits) setAmount(form.limits.max); } }),
@@ -462,8 +503,8 @@ function updateForm() {
   const hasAmount = send && send > 0n;
   const filled = hasAmount && plan.fills.length > 0;
   const needsAddress = ui.direction === 'S2L';
-  const ready = filled && wallet && (!needsAddress || ui.to.trim());
-  const label = !hasAmount ? 'Enter an amount' : !plan.fills.length ? 'No maker fits this amount' : !wallet ? 'Connect a Solana wallet' : needsAddress && !ui.to.trim() ? 'Enter a Liquid address' : plan.fills.length > 1 ? `Get ${plan.fills.length} firm quotes` : 'Get a firm quote';
+  const ready = !wallet || (filled && (!needsAddress || ui.to.trim()));
+  const label = !wallet ? 'Connect a Solana wallet' : !hasAmount ? 'Enter an amount' : !plan.fills.length ? 'No maker fits this amount' : needsAddress && !ui.to.trim() ? 'Enter a Liquid address' : plan.fills.length > 1 ? `Get ${plan.fills.length} firm quotes` : 'Get a firm quote';
 
   amountInput.setAttribute('aria-label', `You send, in ${from}`);
   form.receive.setAttribute('aria-label', `You receive, in ${to}`);
@@ -472,7 +513,8 @@ function updateForm() {
   slot(form.fromCoin, from, () => coinPill(from));
   slot(form.toCoin, to, () => coinPill(to));
   slot(form.address, String(needsAddress), () => needsAddress && h('label', { class: 'field' }, h('span', {}, 'Your Liquid address, confidential'), toInput));
-  slot(form.wallet, `${wallet?.name}|${wallet?.address}|${extensionWallets().map((w) => w.name).join()}`, walletView);
+  // The main button connects, so the form only needs this once there is a wallet to show.
+  slot(form.wallet, `${wallet?.name}|${wallet?.address}`, () => wallet && walletView());
   const filledBy = filled && (plan.fills.length === 1 ? short(plan.fills[0].maker) : `${plan.fills.length} separate swaps`);
   const average = filled && effectivePrice(plan.fills).toFixed(4);
   slot(form.facts, `${filledBy}|${average}`, () => filled && h('dl', { class: 'facts' },

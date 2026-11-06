@@ -82,7 +82,7 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 
 | Option | Reaches | Needs the relay? |
 |---|---|---|
-| **Wallet's own browser** | On a phone with no injected wallet, links open the page inside Phantom or Solflare. Trust joins them on mainnet. **UNVERIFIED** on a real device. | Yes |
+| **Wallet's own browser** | On a phone with no injected wallet, a list opens the page inside Phantom or Solflare. Trust joins them on mainnet. **UNVERIFIED** on a real device. | Yes |
 | **WalletConnect** | Phone wallets by QR code. Trust Wallet lists only Solana mainnet in [Reown's registry](https://explorer-api.walletconnect.com/v3/wallets?search=trust) (checked 2026-11-06), so a devnet build's session should be refused; it can only apply to a mainnet build. **UNVERIFIED** on a real device. `sol2base` documents that Phantom isn't reachable this way. | Yes |
 | **Extension wallets** | Phantom, Solflare, Backpack and others, through the Wallet Standard. The older injected objects need a Solana library's transaction type, so they aren't supported. | No |
 
@@ -125,6 +125,8 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 **Restoring from a file.** The file is saved before a swap starts, so it can't say how far the swap got. A restored swap reads both chains first: payment history on Liquid, and the lock's account and history on Solana. Until that succeeds, no step that spends is offered. A browser that already knows the swap keeps its own record.
 
 **Early refund.** While waiting for the maker on L→S, the taker can ask it to refund now (`docs/protocol.md`). It needs the same fee coin as a timed refund. A refusal or silence puts the page back where it was.
+
+**Connecting.** With no wallet, the main button says "Connect a Solana wallet" and is always clickable. It tries wallets in the browser, Phantom first. A person saying no stops there. If none is present or none works, a phone gets a list of supported wallets and WalletConnect, and a computer gets WalletConnect's code.
 
 **Send Min and Max.** Buttons above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
 

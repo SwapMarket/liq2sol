@@ -821,12 +821,15 @@ async function faucet() {
   await page.locator('#drip').click();
   await page.locator('#faucet-balance', { hasText: '100 SOL-USDT' }).waitFor({ timeout: 60000 });
   step('a new wallet gets its test USDT from the faucet program');
-  await page.locator('#drip').click();
-  await page.locator('#banner:not([hidden])', { hasText: 'already had' }).waitFor({ timeout: 10000 });
-  await page.locator('#faucet-balance', { hasText: '100 SOL-USDT' }).waitFor({ timeout: 1000 });
+  const spent = page.locator('#drip:disabled', { hasText: 'Already claimed' });
+  await spent.waitFor({ timeout: 5000 });
+  await page.reload();
+  await page.locator('#sideswap-note').waitFor({ timeout: 15000 });
+  await page.locator('#drip').first().waitFor({ timeout: 15000 });
+  await spent.waitFor({ timeout: 15000 });
   await checkNoErrors(page);
   await page.context().close();
-  step('it says so when a wallet has no SOL or has already claimed, and names the asset SideSwap uses');
+  step('it says when a wallet has no SOL, stays disabled after a claim, even after a reload, and names the asset SideSwap uses');
 }
 
 async function look() {

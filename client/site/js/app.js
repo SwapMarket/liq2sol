@@ -1030,27 +1030,42 @@ function faucetView() {
     balance.textContent = `This wallet holds ${show(units)} SOL-USDT and ${(Number(lamports) / 1e9).toFixed(3)} SOL.`;
   };
   showBalance().catch(() => {});
-  const claim = async (e) => {
-    const button = e.target;
+  const label = `Get ${f.drip} SOL-USDT`;
+  const button = h('button', { class: 'btn', id: 'drip', onclick: () => claim() }, label);
+  // A wallet claims once, and the chain is what remembers.
+  let claimed = false;
+  const markClaimed = () => {
+    claimed = true;
+    button.disabled = true;
+    button.textContent = 'Already claimed by this wallet';
+  };
+  const hasClaimed = async () => (await solana.lamports(W.faucet_claim_address(f.program, wallet.address))) > 0n;
+  if (wallet) hasClaimed().then((yes) => { if (yes) markClaimed(); }).catch(() => {});
+  const claim = async () => {
     button.disabled = true;
     try {
+      if (await hasClaimed()) {
+        markClaimed();
+        return;
+      }
       if (await solana.lamports(wallet.address) < NETWORK.minSolLamports) throw new Error('This wallet needs a little devnet SOL first. Get some from the link above.');
-      if (await solana.lamports(W.faucet_claim_address(f.program, wallet.address)) > 0n) throw new Error('This wallet has already had its test USDT.');
       status.textContent = `Waiting for ${wallet.name} to sign…`;
       const account = W.token_account(wallet.address, NETWORK.mint);
+      const before = await solana.tokenBalance(account);
       const fee = await solana.priorityFee([account], NETWORK.priorityFloor, NETWORK.priorityCap);
       const signed = await wallet.sign(hexToBytes(W.build_faucet_tx(f.program, NETWORK.mint, wallet.address, await solana.blockhash(), BigInt(fee))));
       await solana.simulate(signed);
       await solana.send(signed);
       status.textContent = `${f.drip} SOL-USDT are on the way.`;
-      for (let i = 0; i < 20 && (await solana.tokenBalance(account)) === 0n; i++) await new Promise((r) => setTimeout(r, 1500));
+      markClaimed();
+      for (let i = 0; i < 20 && (await solana.tokenBalance(account)) === before; i++) await new Promise((r) => setTimeout(r, 1500));
       await showBalance();
     } catch (err) {
       status.textContent = '';
       const empty = /Custom"?:? ?\(?6000/.test(err?.message ?? '');
       fail(empty ? new Error('The faucet is empty right now.') : err);
     } finally {
-      button.disabled = false;
+      button.disabled = claimed;
     }
   };
   const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, text);
@@ -1066,10 +1081,10 @@ function faucetView() {
     wallet ? walletView() : null,
     balance,
     wallet
-      ? h('button', { class: 'btn', id: 'drip', onclick: claim }, `Get ${f.drip} SOL-USDT`)
+      ? button
       : h('button', { class: 'btn', id: 'faucet-connect', onclick: connectWallet }, 'Connect a Solana wallet'),
     status,
-    h('p', { class: 'note', id: 'sideswap-note' }, 'The USDt on Liquid testnet here is the same asset SideSwap uses, so you can also get it there:'),
+    h('p', { class: 'note', id: 'sideswap-note' }, 'To get testnet USDt on Liquid, swap L-BTC for it in the SideSwap wallet. It’s the same asset as here:'),
     h('div', { class: 'addr' }, NETWORK.usdt));
 }
 

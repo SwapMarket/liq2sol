@@ -1303,6 +1303,17 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     println!("    the claim went through the relay in pieces, and is {} bytes", serialize_hex(&claim).len() / 2);
     w.chain.broadcast(&claim)?;
     w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    // The report, as an operator would run it, after this swap and the one before it.
+    let printed = Command::new(env!("CARGO_BIN_EXE_liq2sol-maker")).arg("report").arg(&w.daemon_config).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&printed.stdout).to_string();
+    println!("{text}");
+    check(printed.status.success(), "the report runs while the maker does")?;
+    let r = w.store.report().map_err(|e| e.to_string())?;
+    let earned = r.swaps.iter().find(|((day, dir, outcome), _)| day.is_some() && dir == "S2L" && outcome == "Completed");
+    check(earned.is_some_and(|(_, l)| l.swaps >= 1 && l.spread > 0), "it shows this swap, on a day, with its spread")?;
+    let (sats, lamports) = r.costs.values().fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1));
+    check(sats >= FEE && lamports >= 5_000, "and what the maker spent on both chains")?;
+    check(text.contains("S2L") && text.contains("Completed"), "and prints it")?;
     Ok(())
 }
 

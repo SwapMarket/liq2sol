@@ -104,3 +104,37 @@ fn an_abandoned_swap_stays_abandoned_and_starts_nothing() {
     assert_eq!(s.state(&[1; 32]).unwrap().map(|(_, state)| state), Some(State::Abandoned));
     assert!(s.unfinished_intents().unwrap().is_empty());
 }
+
+/// What a report is made of: spread by direction, each cost once, and no day for what finished before days were kept.
+#[test]
+fn the_report_counts_spread_and_each_cost_once() {
+    let s = Store::open(&path("report")).unwrap();
+    let (mut l2s, mut s2l, mut refunded) = (terms(1), terms(2), terms(3));
+    (l2s.direction, l2s.liquid_amount, l2s.solana_amount) = (Direction::L2S, 1_000_000_00, 997_000);
+    (s2l.direction, s2l.liquid_amount, s2l.solana_amount) = (Direction::S2L, 995_000_00, 1_000_000);
+    (refunded.direction, refunded.liquid_amount, refunded.solana_amount) = (Direction::L2S, 500_000_00, 498_000);
+    for t in [&l2s, &s2l, &refunded] {
+        assert!(s.accept(t, &State::WatchLock).unwrap());
+    }
+    let done = State::Done { outcome: Outcome::Completed };
+    s.commit_step(&l2s.swap_id(), &done, &[]).unwrap();
+    s.commit_step(&s2l.swap_id(), &done, &[]).unwrap();
+    s.commit_step(&refunded.swap_id(), &State::Done { outcome: Outcome::Refunded }, &[]).unwrap();
+    s.record_cost(&l2s.swap_id(), "ClaimLiquid", 30, 0).unwrap();
+    s.record_cost(&l2s.swap_id(), "ClaimLiquid", 30, 0).unwrap();
+    s.record_cost(&l2s.swap_id(), "LockSolana", 0, 5_000).unwrap();
+    let r = s.report().unwrap();
+    let total = |d: &str, o: &str| r.swaps.iter().find(|((_, dir, out), _)| dir == d && out == o).map(|(_, l)| *l).unwrap();
+    assert_eq!(total("L2S", "Completed"), liq2sol_maker_core::store::ReportLine { swaps: 1, volume: 1_000_000, spread: 3_000 });
+    assert_eq!(total("S2L", "Completed"), liq2sol_maker_core::store::ReportLine { swaps: 1, volume: 1_000_000, spread: 5_000 });
+    let refund = total("L2S", "Refunded");
+    assert_eq!((refund.swaps, refund.spread), (1, 0), "a refund earns nothing");
+    assert_eq!(r.costs.values().copied().fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1)), (30, 5_000), "a retry isn't a second cost");
+}
+
+#[test]
+fn a_date_comes_out_right() {
+    assert_eq!(liq2sol_maker_core::store::day_of(0), "1970-01-01");
+    assert_eq!(liq2sol_maker_core::store::day_of(1_793_996_585), "2026-11-06");
+    assert_eq!(liq2sol_maker_core::store::day_of(951_782_400), "2000-02-29");
+}

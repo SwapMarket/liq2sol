@@ -6,9 +6,10 @@ fn main() {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
         ["clear-rollback", path] => liq2sol_maker::clear_rollback(std::path::Path::new(path)),
+        ["report", path] => liq2sol_maker::report(std::path::Path::new(path)),
         [path] => liq2sol_maker::run(std::path::Path::new(path)),
         _ => {
-            eprintln!("usage: liq2sol-maker [clear-rollback] <config.json>");
+            eprintln!("usage: liq2sol-maker [clear-rollback | report] <config.json>");
             std::process::exit(2);
         }
     };

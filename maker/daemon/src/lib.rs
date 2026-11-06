@@ -71,10 +71,23 @@ pub fn accept(store: &Store, terms: &Terms, details: &Details) -> Result<bool, S
     Ok(added)
 }
 
+/// Solana's base fee. The maker sets no priority fee, and rent on a lock's accounts comes back, so neither is a cost here.
+const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
+
+/// Where a top-up's cost is filed: under its transaction, since it belongs to no swap.
+fn top_up_id(reply: &Reply) -> Result<[u8; 32], String> {
+    let Reply::Liquid(text) = reply else {
+        return Err(format!("signer: {reply:?}"));
+    };
+    let tx: LiquidTx = deserialize(&unhex(text)?).map_err(|e| e.to_string())?;
+    unhex(&tx.txid().to_string())?.try_into().map_err(|_| "a txid of the wrong length".to_string())
+}
+
 struct Identity {
     solana: Pubkey,
     initiator: Pubkey,
     vault: bool,
+    fee_coin_sats: u64,
 }
 
 pub struct Maker {
@@ -132,12 +145,12 @@ impl Maker {
         }
         let store = Store::open(&cfg.db).map_err(|e| e.to_string())?;
         let mut signer = Client::connect(&cfg.signer_socket)?;
-        let Reply::Identity { solana, escrow_initiator, .. } = signer.call(&Call::Identity)? else {
+        let Reply::Identity { solana, escrow_initiator, fee_coin_sats, .. } = signer.call(&Call::Identity)? else {
             return Err("unexpected reply from the signer".into());
         };
         let parse = |s: &str| Pubkey::from_str(s).map_err(|e| e.to_string());
         let (solana, initiator) = (parse(&solana)?, parse(&escrow_initiator)?);
-        let identity = Identity { solana, initiator, vault: initiator != solana };
+        let identity = Identity { solana, initiator, vault: initiator != solana, fee_coin_sats };
         // Whatever was in flight at a crash is settled by reading the chains, so old intents need nothing more.
         for (id, hash, action) in store.unfinished_intents().map_err(|e| e.to_string())? {
             println!("resuming: {} may have been in flight for {}", action_name(&action), hex(&hash));
@@ -215,7 +228,8 @@ impl Maker {
         match self.signer.call(&Call::TopUpFeeCoins) {
             Ok(Reply::Nothing) => {}
             Ok(reply) => {
-                if let Err(e) = self.send_liquid(reply) {
+                let sent = top_up_id(&reply).and_then(|id| self.send_liquid(&id, "TopUp", reply));
+                if let Err(e) = sent {
                     eprintln!("could not top up the fee coins: {}", e.chars().take(200).collect::<String>());
                 }
             }
@@ -357,15 +371,24 @@ impl Maker {
         })
     }
 
-    fn send_solana(&mut self, reply: Reply) -> Result<(), String> {
+    fn send_solana(&mut self, swap: &[u8; 32], kind: &str, reply: Reply) -> Result<(), String> {
         let Reply::Solana(hex) = reply else {
             return Err(format!("signer: {reply:?}"));
         };
         let tx: SolanaTx = bincode::deserialize(&unhex(&hex)?).map_err(|e| e.to_string())?;
-        self.sol.send_signed(&tx).map(|_| ())
+        self.sol.send_signed(&tx).map(|_| ())?;
+        self.note_cost(swap, kind, 0, LAMPORTS_PER_SIGNATURE * tx.signatures.len() as u64);
+        Ok(())
     }
 
-    fn send_liquid(&mut self, reply: Reply) -> Result<Vec<u8>, String> {
+    /// For the report, so a failure here must not stop a swap.
+    fn note_cost(&self, swap: &[u8; 32], kind: &str, lbtc_sats: u64, lamports: u64) {
+        if let Err(e) = self.store.record_cost(swap, kind, lbtc_sats, lamports) {
+            eprintln!("could not record a cost: {e}");
+        }
+    }
+
+    fn send_liquid(&mut self, swap: &[u8; 32], kind: &str, reply: Reply) -> Result<Vec<u8>, String> {
         let Reply::Liquid(hex) = reply else {
             return Err(format!("signer: {reply:?}"));
         };
@@ -377,6 +400,8 @@ impl Maker {
             Err(e) if e.contains("already") || e.contains("txn-mempool-conflict") => {}
             Err(e) => return Err(e),
         }
+        let fee: u64 = tx.output.iter().filter(|o| o.is_fee()).filter_map(|o| o.value.explicit()).sum();
+        self.note_cost(swap, kind, fee, 0);
         Ok(raw)
     }
 
@@ -402,11 +427,12 @@ impl Maker {
         let id = terms.swap_id();
         let lock_point = terms.lock_point;
         let t = &details.terms;
+        let kind = action_name(action);
         match (action, t.direction) {
             (Action::RequestAdaptor, Direction::L2S) => self.offer_claim(details),
             (Action::LockSolana { deadline_slot }, Direction::L2S) => {
                 let reply = self.signer.call(&Call::LockSolana { terms: t.clone(), deadline_slot: *deadline_slot })?;
-                self.send_solana(reply)
+                self.send_solana(&id, &kind, reply)
             }
             (Action::LockLiquid | Action::RebroadcastLock, Direction::S2L) => {
                 // The signer returns the same bytes every time, so this can't pay twice. They are kept here too, so
@@ -417,35 +443,38 @@ impl Maker {
                 };
                 let raw = unhex(text)?;
                 self.store.store_lock_tx(&id, &raw).map_err(|e| e.to_string())?;
-                self.send_liquid(reply).map(|_| ())
+                // A rebroadcast is the same transaction, so it shares the lock's name. The taker's fee coin goes with it.
+                self.send_liquid(&id, "LockLiquid", reply)?;
+                self.note_cost(&id, "FeeCoinForTaker", self.identity.fee_coin_sats, 0);
+                Ok(())
             }
             (Action::ClaimLiquid { secret }, Direction::L2S) => {
                 let reply = self.signer.call(&Call::ClaimLiquid { terms: t.clone(), secret: *secret })?;
-                self.send_liquid(reply).map(|_| ())
+                self.send_liquid(&id, &kind, reply).map(|_| ())
             }
             (Action::ClaimSolana { secret }, Direction::S2L) => {
                 let call = Call::ClaimSolana { taker_solana: t.taker_solana.clone(), lock_point, secret: *secret };
                 let reply = self.signer.call(&call)?;
-                self.send_solana(reply)
+                self.send_solana(&id, &kind, reply)
             }
             (Action::RefundSolana, Direction::L2S) => {
                 let reply = self.signer.call(&Call::RefundSolana { lock_point })?;
-                self.send_solana(reply)
+                self.send_solana(&id, &kind, reply)
             }
             (Action::RefundLiquid, Direction::S2L) => {
                 let reply = self.signer.call(&Call::RefundLiquid { terms: t.clone() })?;
-                self.send_liquid(reply).map(|_| ())
+                self.send_liquid(&id, &kind, reply).map(|_| ())
             }
             (Action::Extend { new_deadline }, Direction::S2L) => {
                 let call =
                     Call::Extend { taker_solana: t.taker_solana.clone(), lock_point, new_deadline: *new_deadline };
                 let reply = self.signer.call(&call)?;
-                self.send_solana(reply)
+                self.send_solana(&id, &kind, reply)
             }
             (Action::Release, Direction::S2L) => {
                 let call = Call::Release { taker_solana: t.taker_solana.clone(), lock_point };
                 let reply = self.signer.call(&call)?;
-                self.send_solana(reply)
+                self.send_solana(&id, &kind, reply)
             }
             (Action::Page(page), _) => {
                 self.page(&id, page);
@@ -505,7 +534,7 @@ impl Maker {
             && next != *state
         {
             let reply = self.signer.call(&Call::DepositToVault { amount: terms.solana_amount })?;
-            if let Err(e) = self.send_solana(reply) {
+            if let Err(e) = self.send_solana(&hash, "DepositToVault", reply) {
                 eprintln!("{} could not sweep to the vault: {e}", hex(&hash));
             }
         }
@@ -543,6 +572,35 @@ fn load_config(path: &Path) -> Result<Config, String> {
         rfq.nostr_key = base.join(&rfq.nostr_key);
     }
     Ok(cfg)
+}
+
+/// What this maker has earned and spent, from its own records. Read-only in effect, and safe while the maker runs.
+pub fn report(config_path: &Path) -> Result<(), String> {
+    let cfg = load_config(config_path)?;
+    let store = Store::open(&cfg.db).map_err(|e| e.to_string())?;
+    let r = store.report().map_err(|e| e.to_string())?;
+    let money = |units: i128| format!("{:.6}", units as f64 / 1e6);
+    println!("{:<12} {:<4} {:<10} {:>6} {:>14} {:>12}", "day (UTC)", "dir", "outcome", "swaps", "volume", "spread");
+    let mut totals = (0u64, 0i128, 0i128);
+    for ((day, direction, outcome), line) in &r.swaps {
+        let day = day.as_deref().unwrap_or("earlier");
+        println!("{day:<12} {direction:<4} {outcome:<10} {:>6} {:>14} {:>12}", line.swaps, money(line.volume), money(line.spread));
+        totals = (totals.0 + line.swaps, totals.1 + line.volume, totals.2 + line.spread);
+    }
+    println!("{:<12} {:<4} {:<10} {:>6} {:>14} {:>12}", "total", "", "", totals.0, money(totals.1), money(totals.2));
+    println!();
+    println!("{:<12} {:>12} {:>14}", "day (UTC)", "L-BTC sats", "SOL");
+    let mut spent = (0u64, 0u64);
+    for (day, (sats, lamports)) in &r.costs {
+        println!("{day:<12} {sats:>12} {:>14.9}", *lamports as f64 / 1e9);
+        spent = (spent.0 + sats, spent.1 + lamports);
+    }
+    println!("{:<12} {:>12} {:>14.9}", "total", spent.0, spent.1 as f64 / 1e9);
+    println!();
+    println!("{} open, {} never started.", r.open, r.abandoned);
+    println!("Spread is on completed swaps, in USDT. Costs are close estimates, by when they were sent: SOL from each transaction's signatures,");
+    println!("without rent, which comes back. Swaps are by when they finished. Swaps from before this was recorded show as earlier, with no costs.");
+    Ok(())
 }
 
 pub fn clear_rollback(config_path: &Path) -> Result<(), String> {

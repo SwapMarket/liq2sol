@@ -144,6 +144,10 @@ recommended.
 Metrics are written to local logs, plus an optional outbound push. A second machine should run a dead-man's switch that
 pages if the daemon stops reporting, because downtime during a reveal window is what costs money.
 
+## 6a. Earnings report
+
+`liq2sol-maker report <config>` prints each day's swaps, volume and USDT spread by direction and outcome, and the L-BTC and SOL the maker sent. Liquid costs come from each transaction's fee output, plus the fee coin given to the taker on S→L. Solana costs are 5,000 lamports per signature, without rent, which comes back. Each step counts once however often it is retried. Costs are recorded when a transaction is accepted for sending, so one that never lands is still counted, and these figures are close estimates. Wallet balances have the final word.
+
 ## 7. Dependencies and operations
 
 - Dependencies are pinned and minimal, with `cargo-deny` and `cargo-audit` in CI.

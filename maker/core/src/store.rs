@@ -6,7 +6,7 @@ use std::path::Path;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::engine::{Action, State, Terms};
+use crate::engine::{Action, Direction, Outcome, State, Terms};
 use crate::policy::{Ledger, SwapRecord};
 
 #[derive(Debug)]
@@ -51,6 +51,43 @@ fn open(path: &Path, schema: &str) -> Result<Connection> {
     Ok(conn)
 }
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// A UTC date, from Howard Hinnant's civil_from_days, so this needs no date library.
+pub fn day_of(secs: u64) -> String {
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// One line of the report: swaps of one direction and outcome, on one day.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReportLine {
+    pub swaps: u64,
+    /// In Solana base units.
+    pub volume: i128,
+    pub spread: i128,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Report {
+    /// By day (none for swaps from before days were kept), direction and outcome.
+    pub swaps: std::collections::BTreeMap<(Option<String>, String, String), ReportLine>,
+    /// By day: L-BTC sats and lamports.
+    pub costs: std::collections::BTreeMap<String, (u64, u64)>,
+    pub open: u64,
+    pub abandoned: u64,
+}
+
 /// The engine's store. The signer's ledger is separate, in its own file and process.
 pub struct Store {
     conn: Connection,
@@ -75,6 +112,12 @@ impl Store {
              CREATE TABLE IF NOT EXISTS flags (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS details (swap BLOB PRIMARY KEY, body TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS seen_coins (swap BLOB PRIMARY KEY, txid TEXT NOT NULL, vout INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS finished (swap BLOB PRIMARY KEY, at_secs INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS costs (
+                 swap BLOB NOT NULL, kind TEXT NOT NULL, at_secs INTEGER NOT NULL,
+                 lbtc_sats INTEGER NOT NULL, lamports INTEGER NOT NULL,
+                 PRIMARY KEY (swap, kind)
+             );
              CREATE TABLE IF NOT EXISTS last_tip (id INTEGER PRIMARY KEY CHECK (id = 1), height INTEGER NOT NULL, hash TEXT NOT NULL);",
         )?;
         Ok(Self { conn })
@@ -124,6 +167,9 @@ impl Store {
             return Ok(vec![]);
         }
         tx.execute("UPDATE swaps SET state = ?1 WHERE swap = ?2", params![json(state)?, swap.as_slice()])?;
+        if matches!(state, State::Done { .. }) {
+            tx.execute("INSERT OR IGNORE INTO finished (swap, at_secs) VALUES (?1, ?2)", params![swap.as_slice(), now_secs() as i64])?;
+        }
         let mut ids = vec![];
         for action in actions {
             tx.execute("INSERT INTO intents (swap, action) VALUES (?1, ?2)", params![swap.as_slice(), json(action)?])?;
@@ -131,6 +177,60 @@ impl Store {
         }
         tx.commit()?;
         Ok(ids)
+    }
+
+    /// What one step cost, for the report. Counted once, because a retry sends the same step again.
+    pub fn record_cost(&self, swap: &[u8; 32], kind: &str, lbtc_sats: u64, lamports: u64) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO costs (swap, kind, at_secs, lbtc_sats, lamports) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![swap.as_slice(), kind, now_secs() as i64, lbtc_sats as i64, lamports as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Every finished swap, and every recorded cost. Swaps from before this was recorded have no day.
+    pub fn report(&self) -> Result<Report> {
+        let mut report = Report::default();
+        let mut query = self.conn.prepare(
+            "SELECT s.terms, s.state, f.at_secs FROM swaps s LEFT JOIN finished f ON f.swap = s.swap",
+        )?;
+        let rows = query.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?)))?;
+        for row in rows {
+            let (terms, state, at) = row?;
+            let terms: Terms = from_json(&terms)?;
+            let outcome = match from_json::<State>(&state)? {
+                State::Done { outcome } => outcome,
+                State::Abandoned => {
+                    report.abandoned += 1;
+                    continue;
+                }
+                _ => {
+                    report.open += 1;
+                    continue;
+                }
+            };
+            let day = at.map(|secs| day_of(secs as u64));
+            let line = report.swaps.entry((day, format!("{:?}", terms.direction), format!("{outcome:?}"))).or_default();
+            line.swaps += 1;
+            if outcome == Outcome::Completed {
+                // Liquid amounts have two more decimals than Solana's.
+                let (liquid, solana) = (i128::from(terms.liquid_amount / 100), i128::from(terms.solana_amount));
+                line.volume += liquid.max(solana);
+                line.spread += match terms.direction {
+                    Direction::L2S => liquid - solana,
+                    Direction::S2L => solana - liquid,
+                };
+            }
+        }
+        let mut query = self.conn.prepare("SELECT at_secs, lbtc_sats, lamports FROM costs")?;
+        let rows = query.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
+        for row in rows {
+            let (at, sats, lamports) = row?;
+            let line = report.costs.entry(day_of(at as u64)).or_default();
+            line.0 += sats as u64;
+            line.1 += lamports as u64;
+        }
+        Ok(report)
     }
 
     /// Keep the exact lock transaction, before its first broadcast, so a retry can only ever send the same one.

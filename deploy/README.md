@@ -64,6 +64,14 @@ Each maker is a folder under `/var/lib/liq2sol`, with its own keys, configs and 
 
 Two makers must never share keys or a database. Their prices and limits are independent, but they share this machine's IP, and so its API rate limits.
 
+## Earnings
+
+```sh
+sudo -u liq2sol /opt/liq2sol/liq2sol-maker report /var/lib/liq2sol/first/maker.json
+```
+
+It prints, per day and direction, swaps, volume and USDT spread earned, then L-BTC and SOL spent. It is safe while the maker runs. Rent isn't counted, because it comes back. Costs are recorded when a transaction is sent, so one that never lands still counts. Treat them as close estimates, and wallet balances as the final word.
+
 ## Back up
 
 `keys/` and both `.db` files. Prices, limits and API endpoints are in `maker.json`. Restart both services after changing a config.

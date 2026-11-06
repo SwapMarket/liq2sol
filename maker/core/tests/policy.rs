@@ -369,3 +369,36 @@ fn the_real_ledger_survives_a_restart_and_keeps_the_lock_transaction() {
     assert_eq!(ledger.locked_in_window(NOW + 3_601, 3_600), 0, "an old lock leaves the window");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ---- An early refund and a Solana lock can never both happen ----
+
+#[test]
+fn after_an_early_refund_the_swap_can_never_lock() {
+    let m = held();
+    apply(&m, &Request::EarlyRefund { swap_id: hash() }).unwrap();
+    assert_eq!(apply(&m, &lock_solana()), Err(Refusal::EarlyRefunded));
+    let fresh = Mem::default();
+    apply(&fresh, &Request::EarlyRefund { swap_id: hash() }).unwrap();
+    assert_eq!(apply(&fresh, &Request::HoldAdaptor { swap_id: hash() }), Err(Refusal::EarlyRefunded));
+}
+
+#[test]
+fn after_signing_a_lock_there_is_no_early_refund() {
+    let m = held();
+    apply(&m, &lock_solana()).unwrap();
+    assert_eq!(apply(&m, &Request::EarlyRefund { swap_id: hash() }), Err(Refusal::AlreadyLocked));
+}
+
+#[test]
+fn an_early_refund_can_be_asked_for_again() {
+    let m = held();
+    apply(&m, &Request::EarlyRefund { swap_id: hash() }).unwrap();
+    apply(&m, &Request::EarlyRefund { swap_id: hash() }).unwrap();
+}
+
+#[test]
+fn an_unreadable_record_refuses_an_early_refund() {
+    let m = Mem::default();
+    m.records.borrow_mut().insert(hash(), SwapRecord { direction: Some(Direction::S2L), ..SwapRecord::default() });
+    assert_eq!(apply(&m, &Request::EarlyRefund { swap_id: hash() }), Err(Refusal::AlreadyLocked));
+}

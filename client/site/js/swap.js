@@ -32,11 +32,14 @@ const ALREADY_SENT = /already in block chain|already.*mempool|txn-already/i;
 
 const FINISHED_EARLIER = 'This swap already finished, so there is nothing left to do here.';
 
+const EARLY_REFUND_WAIT_SECS = 60;
+
 export class Engine {
   constructor({ esplora, solana, secondSolana, getWallet, relays, onChange, allowOneEndpoint, feeCoinSats }) {
     Object.assign(this, { esplora, solana, secondSolana, getWallet, relays, onChange, allowOneEndpoint, feeCoinSats });
     this.sessions = new Map();
     this.pendingOffers = new Map();
+    this.earlyRefunds = new Map();
   }
 
   save(s) {
@@ -129,6 +132,12 @@ export class Engine {
       this.set(s, { state: 'done', status: 'You were paid on Solana. The maker can now collect the Liquid coin.' });
       return;
     }
+    // The maker locked first, so it won't agree now, and the swap carries on as normal.
+    if ((s.state === 'early_form' || s.state === 'early_asked') && escrow) s.state = 'await_maker';
+    if (s.state === 'early_asked' && now() - s.early_asked_at > EARLY_REFUND_WAIT_SECS) {
+      s.state = 'await_maker';
+      s.status = 'The maker did not answer. Nothing has changed, and the timed refund still protects you.';
+    }
     if (s.state === 'fund' || s.state === 'await_maker') {
       const coins = await this.exactCoins(this.esplora[0], s);
       const wrong = await this.wrongCoins(s);
@@ -152,7 +161,7 @@ export class Engine {
         s.state = 'await_maker';
       }
     }
-    if (!['done', 'refund_wait', 'refund'].includes(s.state)) {
+    if (!['done', 'refund_wait', 'refund', 'refunding'].includes(s.state)) {
       // The maker's gate leaves 210 blocks when it locks, so past that it won't. With no coin, there is nothing to get back either.
       const makerGone = tip > s.terms.lock_height - 200 && !escrow;
       const refunded = escrow?.state === 'Refunded';
@@ -384,6 +393,41 @@ export class Engine {
     this.set(s, { refund_tx: hex, refund_txid: txid, state: 'refunding', status: 'Refund sent, waiting for a confirmation.' });
   }
 
+  // ---- An early refund, if the maker agrees ----
+
+  // Only ever a request. Whatever the maker does, the timed refund is still there.
+  async askEarlyRefund(s, toAddress) {
+    if (s.state !== 'early_form') return;
+    const [coin] = await this.exactCoins(this.esplora[0], s);
+    if (!coin) throw new Error('There is no coin at the swap address to refund.');
+    const fees = await this.esplora[0].readCoins(s.info.plain_fee_address, s.info.fee_script, s.secrets.blinding_key);
+    const fee = fees.find((c) => c.is_lbtc && c.confirmations >= 1 && BigInt(c.amount) >= BigInt(NETWORK.refundFeeCoinSats));
+    if (!fee) throw new Error(`Send at least ${NETWORK.refundFeeCoinSats} sats of L-BTC to the fee address first, and wait for a confirmation.`);
+    const session = new W.EarlyRefundSession(JSON.stringify({
+      swap: swapArgs(s), taker_sk: s.secrets.taker_sk, coin_tx: coin.hex, coin_vout: coin.vout,
+      fee_tx: await this.esplora[0].txHex(fee.txid), fee_vout: fee.vout, to_address: toAddress, genesis: NETWORK.genesis,
+    }));
+    this.earlyRefunds.set(s.id, session);
+    this.send(s, { type: 'early-refund-ask', body: { lock_point: s.secrets.lock_point, tx: session.tx, nonce: session.nonce } });
+    this.set(s, { state: 'early_asked', early_asked_at: now(), status: '' });
+  }
+
+  async onEarlyRefundShare(s, body) {
+    const session = this.earlyRefunds.get(s.id);
+    if (s.state !== 'early_asked' || !session) return;
+    this.earlyRefunds.delete(s.id);
+    let hex;
+    try {
+      hex = session.finish(body.nonce, body.share);
+    } catch (e) {
+      this.set(s, { state: 'await_maker', status: `The maker's answer didn't check out, so nothing was sent: ${e.message ?? e}` });
+      return;
+    }
+    // Saved first, so the refund is watched and sent again whatever happens to this send.
+    this.set(s, { refund_tx: hex, refund_txid: W.tx_id(hex), state: 'refunding', status: 'Refund sent, waiting for a confirmation.' });
+    await this.esplora[0].broadcast(hex).catch(() => {});
+  }
+
   // ---- Messages and ticks ----
 
   async onMessage(s, got) {
@@ -395,6 +439,11 @@ export class Engine {
       await this.answerPendingOffer(s);
     } else if (type === 'session-nonce' && s.direction === 'S2L') {
       this.onSessionNonce(s, body.nonce);
+    } else if (type === 'early-refund-share' && s.direction === 'L2S') {
+      await this.onEarlyRefundShare(s, body);
+    } else if (type === 'rfq-reject' && s.state === 'early_asked') {
+      this.earlyRefunds.delete(s.id);
+      this.set(s, { state: 'await_maker', status: 'The maker can’t refund early now. Nothing has changed, and the timed refund still protects you.' });
     } else if (type === 'maker-share' && s.direction === 'S2L') {
       await this.onMakerShare(s, body.share);
     }

@@ -4,7 +4,7 @@
 //! The taker holds the secret, so its signature share is what's at risk. It signs only a transaction it checked.
 
 use liq2sol_swapkey::{
-    combine, complete, key_spend_sighash, set_key_spend_witness, verify_share, Nonce, Session, Share, SwapOutput,
+    combine, combine_plain, complete, key_spend_sighash, set_key_spend_witness, verify_share, Nonce, Session, Share, SwapOutput,
     SwapParams,
 };
 use simplicityhl::elements::secp256k1_zkp::{Keypair, PublicKey, Secp256k1, SecretKey, XOnlyPublicKey};
@@ -107,6 +107,54 @@ pub fn answer_claim_with(
     let nonce = session.public.clone();
     let (share, _) = session.sign(&seckey(key), ctx, maker_nonce, lock_point, &message).map_err(|e| e.to_string())?;
     Ok((nonce, share))
+}
+
+/// L→S: getting our coin back early, with the maker's agreement. Spent by the key path, it looks like any claim on-chain.
+pub struct EarlyRefund {
+    tx: Transaction,
+    utxos: Vec<TxOut>,
+    message: [u8; 32],
+    session: Session,
+}
+
+impl EarlyRefund {
+    pub fn start_with(key: &Keypair, output: &SwapOutput, tx: Transaction, utxos: Vec<TxOut>, genesis: BlockHash) -> Res<Self> {
+        if utxos.first().map(|u| &u.script_pubkey) != Some(&output.script_pubkey()) {
+            return Err("input 0 doesn't spend this swap's output".into());
+        }
+        let message = key_spend_sighash(&tx, &utxos, 0, genesis).map_err(|e| e.to_string())?;
+        let session = Session::start(&seckey(key), output.key_ctx(), &message).map_err(|e| e.to_string())?;
+        Ok(Self { tx, utxos, message, session })
+    }
+
+    pub fn nonce(&self) -> Nonce {
+        self.session.public.clone()
+    }
+
+    pub fn tx(&self) -> &Transaction {
+        &self.tx
+    }
+
+    /// The refund with input 0 signed, or an error if the maker's share is no good. The fee coin's input is still to sign.
+    pub fn finish(
+        self,
+        key: &Keypair,
+        output: &SwapOutput,
+        maker_key: &[u8; 33],
+        maker_nonce: &Nonce,
+        maker_share: Share,
+    ) -> Res<(Transaction, Vec<TxOut>)> {
+        let (ours, aggregate) = self
+            .session
+            .sign_plain(&seckey(key), output.key_ctx(), maker_nonce, &self.message)
+            .map_err(|e| e.to_string())?;
+        let signature =
+            combine_plain(output.key_ctx(), &aggregate, ours, maker_share, maker_key, maker_nonce, &self.message)
+                .map_err(|e| e.to_string())?;
+        let mut tx = self.tx;
+        set_key_spend_witness(&mut tx, 0, &signature);
+        Ok((tx, self.utxos))
+    }
 }
 
 /// S→L: our claim of the maker's coin, part way through its signing session.

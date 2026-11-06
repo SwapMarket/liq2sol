@@ -699,6 +699,46 @@ async function phoneWallets() {
   step('a phone with no wallet gets links to open the page in a wallet\'s browser');
 }
 
+// The maker locks as soon as it has the page's signature, so the page's messages are held back until it asks for its refund.
+// A maker that signed never locks, and the coin goes back on the key path, looking like any claim.
+async function early() {
+  let holding = false;
+  const page = await newPage(undefined, (p) => p.routeWebSocket(/.*/, (ws) => {
+    const relay = ws.connectToServer();
+    ws.onMessage((m) => { if (!(holding && String(m).startsWith('["EVENT"'))) relay.send(m); });
+    relay.onMessage((m) => ws.send(m));
+  }));
+  await startSwap(page, false);
+  await page.locator('.pay-address').waitFor();
+  holding = true;
+  await pay(await page.locator('.pay-address').innerText(), amountSats(env.AMOUNT), env.USDT);
+  await page.locator('.early-refund').waitFor({ timeout: 120000 });
+  await page.locator('.early-refund').click();
+  const fee = await page.locator('.fee-address').innerText();
+  await pay(fee, 30, env.LBTC);
+  await walletCli('generatetoaddress', '1', await walletCli('getnewaddress'));
+  const to = await walletCli('getnewaddress');
+  await page.locator('.refund-to').fill(to);
+  holding = false;
+  // The fee coin can take a moment to show up.
+  for (let i = 0; i < 20; i++) {
+    await page.locator('.early-go').click();
+    await page.locator('.swap-card:not([data-state="early_form"])').waitFor({ timeout: 2000 }).catch(() => {});
+    if (await state(page) !== 'early_form') break;
+    await page.locator('.refund-to').fill(to);
+  }
+  step('asked for a refund before the maker locked');
+  await page.locator('.swap-card[data-state="refunded"]').waitFor({ timeout: 120000 });
+  const swap = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps')))[0]);
+  const tx = JSON.parse(await cli('getrawtransaction', swap.refund_txid, '1'));
+  if (tx.vin[0].txinwitness.length !== 1) throw new Error(`the refund's witness has ${tx.vin[0].txinwitness.length} items, so it shows it was a refund`);
+  const got = await receivedAt(to);
+  if (got !== Number(swap.terms.liquid_amount)) throw new Error(`refunded ${got} units, expected ${swap.terms.liquid_amount}`);
+  step('the maker agreed, and the refund paid it all back, as one signature, long before the lock height');
+  await checkNoErrors(page);
+  await page.context().close();
+}
+
 async function look() {
   await phoneWallets();
   await s2lBalance();
@@ -732,9 +772,9 @@ async function look() {
 
 let code = 0;
 try {
-  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,l2s,s2l,split,rescue').split(',')]) {
+  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,l2s,s2l,split,rescue,early').split(',')]) {
     console.log(`  == browser: ${name}`);
-    await { vetting, look, l2s, s2l, rescue, split }[name]();
+    await { vetting, look, l2s, s2l, rescue, split, early }[name]();
   }
   console.log('BROWSER OK');
 } catch (e) {

@@ -288,6 +288,42 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Our share of a plain signature, with no adaptor point, for a spend both sides have agreed outright.
+    pub fn sign_plain(
+        self,
+        seckey: &[u8; 32],
+        ctx: &KeyAggContext,
+        their_nonce: &PubNonce,
+        message: &[u8; 32],
+    ) -> Result<(PartialSignature, AggNonce), Error> {
+        let key = Scalar::from_slice(seckey).map_err(|e| Error::Keys(e.to_string()))?;
+        let agg: AggNonce = [self.public.clone(), their_nonce.clone()].iter().sum();
+        let partial: PartialSignature = musig2::sign_partial(ctx, key, self.secnonce, &agg, message)
+            .map_err(|e| Error::Signing(e.to_string()))?;
+        Ok((partial, agg))
+    }
+}
+
+/// Finish a plain signature from both shares, after checking theirs and the result against the output key.
+pub fn combine_plain(
+    ctx: &KeyAggContext,
+    agg: &AggNonce,
+    ours: PartialSignature,
+    theirs: PartialSignature,
+    their_key: &[u8; 33],
+    their_nonce: &PubNonce,
+    message: &[u8; 32],
+) -> Result<[u8; 64], Error> {
+    let key = Point::from_slice(their_key).map_err(|e| Error::Keys(e.to_string()))?;
+    musig2::verify_partial(ctx, theirs, agg, key, their_nonce, message).map_err(|_| Error::BadPartialSignature)?;
+    let sig: LiftedSignature = musig2::aggregate_partial_signatures(ctx, agg, [ours, theirs], message)
+        .map_err(|e| Error::Signing(e.to_string()))?;
+    let output: Point = ctx.aggregated_pubkey();
+    musig2::verify_single(output, sig, message).map_err(|_| Error::BadPartialSignature)?;
+    Ok(sig.serialize())
+}
+
 /// Check the other party's share. Without this, a bad share would only show up after we had funded.
 pub fn verify_share(
     ctx: &KeyAggContext,

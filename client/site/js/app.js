@@ -734,6 +734,18 @@ function refundLiquidView(s) {
   ];
 }
 
+function earlyRefundView(s) {
+  const input = h('input', { class: 'input refund-to', placeholder: 'tlq1… confidential address' });
+  return [
+    h('p', { class: 'note' }, 'If the maker hasn’t locked, it can agree to refund you now, instead of after the timed refund. If it says no or doesn’t answer, nothing changes.'),
+    h('p', { class: 'note' }, `This needs a fee coin. From a Liquid wallet, send at least ${NETWORK.refundFeeCoinSats} sats (${(NETWORK.refundFeeCoinSats / 1e8).toFixed(8)} L-BTC) to this address, and wait for a confirmation:`),
+    h('div', { class: 'addr fee-address' }, s.info.fee_address),
+    h('label', { class: 'field' }, h('span', {}, 'Where to send your refund'), input),
+    h('button', { class: 'btn early-go', onclick: act(s.id, (fresh) => engine.askEarlyRefund(fresh, input.value.trim())) }, 'Ask the maker'),
+    h('button', { class: 'btn quiet', onclick: act(s.id, (fresh) => engine.set(fresh, { state: 'await_maker', status: '' })) }, 'Keep waiting for the maker'),
+  ];
+}
+
 function swapBody(s) {
   const [from, to] = names[s.direction];
   switch (s.state) {
@@ -764,7 +776,13 @@ function swapBody(s) {
         h('p', { class: 'status spin' }, s.direction === 'L2S'
           ? `Your coin has ${s.coin?.confirmations ?? 0} confirmations. Waiting for the maker to sign and lock on Solana.`
           : (s.status || 'Waiting for the maker to lock on Liquid.')),
+        s.direction === 'L2S' && s.status && h('p', { class: 'note early-status' }, s.status),
+        s.direction === 'L2S' && s.coin && h('button', { class: 'btn quiet early-refund', onclick: act(s.id, (fresh) => engine.set(fresh, { state: 'early_form', status: '' })) }, 'Ask for a refund now'),
       ];
+    case 'early_form':
+      return earlyRefundView(s);
+    case 'early_asked':
+      return h('p', { class: 'status spin' }, 'Asking the maker to agree to a refund…');
     case 'ready_claim':
       return [
         h('p', { class: 'good' }, `The maker locked ${show(s.terms.solana_amount)} ${to} for you.`),

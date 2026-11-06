@@ -19,6 +19,11 @@ def e2e(s):
     return ["env", f"SCENARIO={s}", "cargo", "test", "-p", "liq2sol-maker", "--test", "e2e", "--", "--ignored", "--nocapture"]
 
 MUTATIONS = [
+    ("early refund: lock anyway", POLICY, "if record.early_refunded {\n                return Err(Refusal::EarlyRefunded);\n            }\n            if !record.adaptor_held {", "if !record.adaptor_held {", CORE),
+    ("early refund: after signing a lock", POLICY, "if record.direction.is_some() {\n                return Err(Refusal::AlreadyLocked);\n            }\n            record.early_refunded = true;", "record.early_refunded = true;", CORE),
+    ("early refund: forgets its promise", POLICY, "record.early_refunded = true;", "", CORE),
+    ("early refund: any coin signed", SIGNER, "if tx.input.first().map(|i| i.previous_output) != Some(coin.coin.outpoint) {", "if false {", e2e("early refund")),
+    ("early refund: abandoned can be undone", "maker/core/src/store.rs", "if current.as_deref() == Some(json(&State::Abandoned)?.as_str()) {", "if false {", CORE),
     ("lock without an adapter signature", POLICY, "if !record.adaptor_held {\n                return Err(Refusal::NoAdaptor);", "if false {\n                return Err(Refusal::NoAdaptor);", CORE),
     ("engine locks without a signature", ENGINE, "l2s_coin_acceptable(cfg, terms, v) && v.adaptor_held", "l2s_coin_acceptable(cfg, terms, v)", CORE),
     ("share after the escrow is gone", POLICY, "if !taker_escrow_open {", "if false {", CORE),

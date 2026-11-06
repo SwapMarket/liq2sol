@@ -37,6 +37,10 @@ pub enum Request {
         liquid_tip: u32,
         taker_coin: Option<CoinEvidence>,
     },
+    /// L→S: agree to the taker's early refund, which is only safe if we have never signed a lock for this swap.
+    EarlyRefund {
+        swap_id: [u8; 32],
+    },
     /// S→L: lock Liquid funds.
     LockLiquid {
         swap_id: [u8; 32],
@@ -112,6 +116,8 @@ pub enum Refusal {
     ExtendNotJustified,
     /// Refused: we locked on Liquid, so giving the taker its escrow back would hand it both sides.
     ReleaseAfterLock,
+    /// Refused: we agreed to refund the taker, who may already have the coin back, so we must never lock.
+    EarlyRefunded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +169,9 @@ pub struct SwapRecord {
     pub liquid_refunded: bool,
     /// L→S: a checked adapter signature is stored. S→L: and our share of it has been given out.
     pub adaptor_held: bool,
+    /// L→S: we signed the taker's early refund, so this swap is never locked. Absent in records from before this existed.
+    #[serde(default)]
+    pub early_refunded: bool,
 }
 
 /// What the check needs from the signer's ledger.
@@ -178,6 +187,7 @@ fn id_of(request: &Request) -> [u8; 32] {
         LockSolana { swap_id, .. }
         | LockLiquid { swap_id, .. }
         | HoldAdaptor { swap_id }
+        | EarlyRefund { swap_id }
         | GiveShare { swap_id, .. }
         | RefundLiquid { swap_id, .. }
         | RefundSolana { swap_id }
@@ -205,7 +215,17 @@ pub fn check(limits: &Limits, ledger: &dyn Ledger, now_secs: u64, request: &Requ
         Ok(())
     };
     match request {
+        EarlyRefund { .. } => {
+            // Any signed lock could still land, even one that seems lost, so one ever signed rules this out.
+            if record.direction.is_some() {
+                return Err(Refusal::AlreadyLocked);
+            }
+            record.early_refunded = true;
+        }
         LockSolana { amount, deadline_slot, solana_slot, liquid_lock_height, liquid_tip, taker_coin, .. } => {
+            if record.early_refunded {
+                return Err(Refusal::EarlyRefunded);
+            }
             if !record.adaptor_held {
                 return Err(Refusal::NoAdaptor);
             }
@@ -253,6 +273,9 @@ pub fn check(limits: &Limits, ledger: &dyn Ledger, now_secs: u64, request: &Requ
             record.locked_amount = amount;
         }
         HoldAdaptor { .. } => {
+            if record.early_refunded {
+                return Err(Refusal::EarlyRefunded);
+            }
             if record.direction.is_some() {
                 return Err(Refusal::AlreadyLocked);
             }

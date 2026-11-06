@@ -92,3 +92,15 @@ fn the_rollback_alarm_stays_until_cleared() {
     assert!(!s.rollback().unwrap());
     assert_eq!(s.last_tip().unwrap(), None, "the old tip is forgotten, or the alarm would return at once");
 }
+
+/// The engine works from what it read a moment ago, so it mustn't be able to undo a swap being dropped meanwhile.
+#[test]
+fn an_abandoned_swap_stays_abandoned_and_starts_nothing() {
+    let s = Store::open(&path("abandoned")).unwrap();
+    assert!(s.accept(&terms(1), &State::WatchLock).unwrap());
+    s.commit_step(&[1; 32], &State::Abandoned, &[]).unwrap();
+    let ids = s.commit_step(&[1; 32], &State::WatchLock, &[Action::LockLiquid]).unwrap();
+    assert!(ids.is_empty(), "no action starts");
+    assert_eq!(s.state(&[1; 32]).unwrap().map(|(_, state)| state), Some(State::Abandoned));
+    assert!(s.unfinished_intents().unwrap().is_empty());
+}

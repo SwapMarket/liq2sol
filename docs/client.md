@@ -124,6 +124,8 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **Restoring from a file.** The file is saved before a swap starts, so it can't say how far the swap got. A restored swap reads both chains first: payment history on Liquid, and the lock's account and history on Solana. Until that succeeds, no step that spends is offered. A browser that already knows the swap keeps its own record.
 
+**Early refund.** While waiting for the maker on L→S, the taker can ask it to refund now (`docs/protocol.md`). It needs the same fee coin as a timed refund. A refusal or silence puts the page back where it was.
+
 **Send Min and Max.** Buttons above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
 
 **Vetted makers.** `site/js/vetted.js` lists makers vetted by SwapMarket, by full key and network. Listed makers have a ✓, and "Only vetted by SwapMarket" starts on and is saved in settings. Turning it off shows everyone, with a warning. Vetting limits griefing and doesn't protect funds. Offers are signed, so a checkmark can't be copied without the maker's key. It only filters new orders: swaps in progress and Rescue never consult it.

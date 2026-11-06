@@ -123,6 +123,12 @@ impl SwapTerms {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Call {
     Identity,
+    /// L→S: sign the taker's early refund, and never lock this swap.
+    EarlyRefund {
+        terms: SwapTerms,
+        tx: String,
+        taker_nonce: String,
+    },
     SwapKey {
         swap_id: [u8; 32],
     },
@@ -224,6 +230,10 @@ pub enum Reply {
     },
     /// S→L: our nonce, for the taker's claim.
     Nonce(String),
+    EarlyRefundShare {
+        nonce: String,
+        share: String,
+    },
     /// S→L: our share. The same bytes on every repeat.
     Share(String),
     Secret([u8; 32]),
@@ -607,6 +617,37 @@ impl Signer {
         Ok(body.map(|b| serde_json::from_str(&b)).transpose().map_err(|e| e.to_string())?)
     }
 
+    /// L→S: agree to the taker's refund. We sign only input 0, with this swap's own key, so nothing else of ours can be
+    /// spent, and where the coin goes is the taker's business. The refusal to ever lock is durable before the share leaves.
+    /// A fresh nonce each time, because the taker may lose its session and ask again.
+    fn early_refund(&mut self, t: &SwapTerms, tx: &str, taker_nonce: &str) -> Outcome {
+        let id = t.swap_id();
+        if t.direction != Direction::L2S {
+            return Err(Refusal::UnknownSwap.into());
+        }
+        let request = Request::EarlyRefund { swap_id: id };
+        let record = self.check(&request)?;
+        let tx: LiquidTx = deserialize(&unhex(tx)?).map_err(|e| e.to_string())?;
+        let coin = self.swap_coin(t)?.ok_or(Refusal::NoTakerCoin)?;
+        if tx.input.first().map(|i| i.previous_output) != Some(coin.coin.outpoint) {
+            return Err("input 0 doesn't spend this swap's coin".into());
+        }
+        // From the chain, so the message is what the network will check, not what the taker says it is.
+        let utxos = spent_outputs(&self.chain, &tx)?;
+        let message = key_spend_sighash(&tx, &utxos, 0, self.genesis).map_err(|e| e.to_string())?;
+        let their_nonce = nonce_from(&unhex(taker_nonce)?).map_err(|e| e.to_string())?;
+        let key = self.swap_key(&id)?;
+        let output = t.output(&self.maker_key(&id)?)?;
+        let session = Session::start(&key.secret_bytes(), output.key_ctx(), &message).map_err(|e| e.to_string())?;
+        let nonce = hex(&nonce_bytes(&session.public));
+        let (share, _) =
+            session.sign_plain(&key.secret_bytes(), output.key_ctx(), &their_nonce, &message).map_err(|e| e.to_string())?;
+        self.commit(&id, &request, &record, None)?;
+        // A claim session still open could only ever be refused now.
+        self.sessions.remove(&id);
+        Ok(Reply::EarlyRefundShare { nonce, share: hex(&share_bytes(&share)) })
+    }
+
     fn lock_solana(&self, t: &SwapTerms, deadline_slot: u64) -> Outcome {
         let taker = parse_pubkey(&t.taker_solana)?;
         let tip = self.chain.tip()?;
@@ -862,6 +903,7 @@ impl Signer {
             Call::StoreAdaptor { terms, taker_nonce, taker_share } => {
                 self.store_adaptor(terms, taker_nonce, taker_share)
             }
+            Call::EarlyRefund { terms, tx, taker_nonce } => self.early_refund(terms, tx, taker_nonce),
             Call::LockSolana { terms, deadline_slot } => self.lock_solana(terms, *deadline_slot),
             Call::LockLiquid { terms } => self.lock_liquid(terms),
             Call::OpenSession { terms, claim_tx, taker_nonce } => self.open_session(terms, claim_tx, taker_nonce),
@@ -1026,6 +1068,7 @@ mod tests {
             | Reply::ClaimTemplate { .. }
             | Reply::Nonce(_)
             | Reply::Share(_)
+            | Reply::EarlyRefundShare { .. }
             | Reply::Secret(_)
             | Reply::Liquid(_)
             | Reply::Solana(_)

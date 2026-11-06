@@ -450,3 +450,15 @@ maker's registered Liquid address directly, with no swap lock on Liquid and no t
 - **Rollback.** A rollback like September's would invalidate a proven transaction, and the program can't know. It needs
   a depth requirement, and it inherits the federation trust the rest of this design documents.
 - **Exact sighash and header-hash details are UNVERIFIED** and need a test against real headers before any build.
+
+## Early refund (L→S)
+
+Before the maker locks on Solana, the taker can ask for its coin back without waiting for the lock height.
+
+1. The taker builds a refund of its coin to an address of its choosing, paying the fee from its own fee coin, and sends `early-refund-ask` with the unsigned transaction and a MuSig2 nonce.
+2. The signer refuses if it has ever signed a lock for this swap. Otherwise it records durably that it never will, reads the spent outputs from the chain, signs input 0 with this swap's own key and a fresh nonce, and the maker answers `early-refund-share`.
+3. The taker checks the share, finishes the signature, signs its fee coin and publishes.
+
+The spend is a key-path signature, the same shape as a claim. It doesn't show that a refund happened.
+
+A maker that refuses or stays silent changes nothing, and the timed refund remains. So this helps with an honest maker, and is no defence against griefing. S→L and a Solana lock already made would need a new program instruction, and aren't covered.

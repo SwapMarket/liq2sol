@@ -216,6 +216,7 @@ impl Handler {
             Body::RfqRequest(request) => self.on_request(&got.sender, &id, request, now),
             Body::RfqAccept(acc) => self.on_accept(&got.sender, &id, &got.rumor_id, acc, now),
             Body::ClaimAnswer(a) => self.on_claim_answer(&got.sender, &id, a),
+            Body::EarlyRefundAsk(a) => self.on_early_refund(&got.sender, &id, a, now),
             Body::SessionOpen(o) => self.on_session_open(&got.sender, &id, o, now),
             Body::TakerShare(s) => self.on_taker_share(&got.sender, &id, s, now),
             // A taker has no business sending these, and a reject has nothing to free up in this version.
@@ -224,7 +225,8 @@ impl Handler {
             | Body::RfqReject(_)
             | Body::ClaimOffer(_)
             | Body::SessionNonce(_)
-            | Body::MakerShare(_) => None,
+            | Body::MakerShare(_)
+            | Body::EarlyRefundShare(_) => None,
         }
     }
 
@@ -366,6 +368,27 @@ impl Handler {
             other => eprintln!("rfq: claim answer refused: {other:?}"),
         }
         None
+    }
+
+    /// L→S. The signer decides, and if it agrees it has already promised never to lock.
+    fn on_early_refund(&mut self, sender: &PublicKey, id: &str, a: EarlyRefundAsk, now: u64) -> Option<Event> {
+        let terms = self.swap_for(sender, id, &a.lock_point)?;
+        let swap = terms.lock_point.id();
+        let call = Call::EarlyRefund { terms, tx: a.tx, taker_nonce: a.nonce };
+        let body = match self.signer.call(&call) {
+            Ok(Reply::EarlyRefundShare { nonce, share }) => {
+                if let Err(e) = self.store.commit_step(&swap, &engine::State::Abandoned, &[]) {
+                    eprintln!("rfq: couldn't mark {} abandoned: {e}", a.lock_point);
+                }
+                println!("{} refunded early, at the taker's request", a.lock_point);
+                Body::EarlyRefundShare(EarlyRefundShare { lock_point: a.lock_point, nonce, share })
+            }
+            other => {
+                eprintln!("rfq: early refund refused: {other:?}");
+                Body::RfqReject(Reject { reason: "this maker can't refund early now".into() })
+            }
+        };
+        self.reply(sender, id, body, now).ok().map(|(e, _)| e)
     }
 
     fn on_session_open(&mut self, sender: &PublicKey, id: &str, o: SessionOpen, now: u64) -> Option<Event> {

@@ -117,6 +117,12 @@ impl Store {
     /// Commit a new state together with the actions it requires, atomically, before attempting any of them.
     pub fn commit_step(&self, swap: &[u8; 32], state: &State, actions: &[Action]) -> Result<Vec<i64>> {
         let tx = self.conn.unchecked_transaction()?;
+        // Final, because the signer has refused this swap for good. An engine pass that read it earlier can't bring it back.
+        let current: Option<String> =
+            tx.query_row("SELECT state FROM swaps WHERE swap = ?1", params![swap.as_slice()], |r| r.get(0)).optional()?;
+        if current.as_deref() == Some(json(&State::Abandoned)?.as_str()) {
+            return Ok(vec![]);
+        }
         tx.execute("UPDATE swaps SET state = ?1 WHERE swap = ?2", params![json(state)?, swap.as_slice()])?;
         let mut ids = vec![];
         for action in actions {
@@ -413,5 +419,6 @@ fn fail_closed() -> SwapRecord {
         solana_claimed: true,
         liquid_refunded: false,
         adaptor_held: true,
+        early_refunded: true,
     }
 }

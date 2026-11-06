@@ -43,7 +43,7 @@ use liq2sol_chain::liquid::{
     build_swap_spend, keypair_from, lbtc, random32, read_output, sign_keypath, usdt, use_network, Coin, NetworkConfig,
     SecretCoin, LIQUID_MAINNET_GENESIS,
 };
-use liq2sol_chain::swap::{answer_claim_with, swap_address, swap_output, taker_fee_address, SignedClaim, TakerClaim};
+use liq2sol_chain::swap::{answer_claim_with, EarlyRefund, swap_address, swap_output, taker_fee_address, SignedClaim, TakerClaim};
 use liq2sol_rfq::messages::{self as msg, Body, Envelope, MakerTerms, Offer, Quote, Request};
 use liq2sol_rfq::rules::{check_envelope, check_quote, check_terms, TakerRules};
 use liq2sol_rfq::wrap;
@@ -456,6 +456,65 @@ pub fn build_refund(args: &str) -> Result<String, String> {
     let mut t = output.finalize_refund(t, &utxos, 0, genesis, signature).map_err(|e| e.to_string())?;
     sign_keypath(&mut t, &utxos, 1, &key, genesis)?;
     Ok(serialize_hex(&t))
+}
+
+// ---- L to S: an early refund, if the maker agrees ----
+
+/// Its nonce is held here and used once. A reload abandons it, and the maker will sign a fresh one.
+#[wasm_bindgen]
+pub struct EarlyRefundSession {
+    started: Option<EarlyRefund>,
+    key: Keypair,
+    output: SwapOutput,
+    maker_key: [u8; 33],
+    genesis: BlockHash,
+    tx: String,
+    nonce: String,
+}
+
+#[wasm_bindgen]
+impl EarlyRefundSession {
+    #[wasm_bindgen(constructor)]
+    pub fn new(args: &str) -> Result<EarlyRefundSession, String> {
+        let a: RefundArgs = parse(args)?;
+        let blinding = secret(&a.swap.blinding_key)?;
+        let output = a.swap.output()?;
+        let key = keypair_from(&arr(&a.taker_sk)?)?;
+        let genesis = genesis(&a.genesis)?;
+        let coin = secret_coin(&a.coin_tx, a.coin_vout, &blinding)?;
+        let fee = secret_coin(&a.fee_tx, a.fee_vout, &blinding)?;
+        let to = Address::from_str(&a.to_address).map_err(|e| format!("bad Liquid address: {e}"))?;
+        // No lock height, because this spend doesn't wait for one. The maker's share is for exactly these outputs.
+        let (t, utxos) = build_swap_spend(&coin, &fee, &to, 0, Sequence::MAX)?;
+        let tx = serialize_hex(&t);
+        let started = EarlyRefund::start_with(&key, &output, t, utxos, genesis)?;
+        let nonce = hex(&nonce_bytes(&started.nonce()));
+        Ok(EarlyRefundSession { started: Some(started), key, output, maker_key: arr(&a.swap.maker_key)?, genesis, tx, nonce })
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn tx(&self) -> String {
+        self.tx.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn nonce(&self) -> String {
+        self.nonce.clone()
+    }
+
+    /// The finished refund, ready to send. A bad share from the maker is an error here, before anything is published.
+    pub fn finish(&mut self, maker_nonce: &str, maker_share: &str) -> Result<String, String> {
+        let started = self.started.take().ok_or("this session has already been used")?;
+        let (mut t, utxos) = started.finish(
+            &self.key,
+            &self.output,
+            &self.maker_key,
+            &nonce_from(&unhex(maker_nonce)?).map_err(|e| e.to_string())?,
+            share_from(&unhex(maker_share)?).map_err(|e| e.to_string())?,
+        )?;
+        sign_keypath(&mut t, &utxos, 1, &self.key, self.genesis)?;
+        Ok(serialize_hex(&t))
+    }
 }
 
 // ---- Nostr ----

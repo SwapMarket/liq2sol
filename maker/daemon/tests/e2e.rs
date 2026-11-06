@@ -20,11 +20,11 @@ use std::time::{Duration, Instant};
 use anchor_lang::prelude::Pubkey;
 use liq2sol_chain::esplora::{build_confidential_pay, Esplora, Rpc};
 use liq2sol_chain::liquid::{
-    build_swap_spend, exact_secret_coin, keypair_from, lbtc, random32, usdt, use_network, NetworkConfig, Payment,
-    SecretCoin, Wallet, FEE,
+    build_swap_spend, exact_secret_coin, keypair_from, lbtc, random32, sign_keypath, usdt, use_network, NetworkConfig,
+    Payment, SecretCoin, Wallet, FEE,
 };
 use liq2sol_chain::sol::{self, ata, escrow_pda, Sol, MAINNET_GENESIS};
-use liq2sol_chain::swap::{answer_claim, TakerClaim};
+use liq2sol_chain::swap::{answer_claim, taker_fee_address, EarlyRefund, TakerClaim};
 use liq2sol_maker::rfq::{load_keys, RfqConfig};
 use liq2sol_maker::{accept, Config, Details};
 use liq2sol_maker_core::engine::{Action, Config as EngineConfig, Direction, Outcome, State, Terms};
@@ -1413,6 +1413,148 @@ const QUIET: Duration = Duration::from_secs(3);
 /// Longer than a session request takes when it is answered, so silence means refused and not slow.
 const SESSION_WAIT: Duration = Duration::from_secs(10);
 
+/// One L→S swap up to the maker's claim offer, with the taker's coin confirmed and nothing signed.
+struct UpToOffer {
+    relay: Relay,
+    me: Keys,
+    negotiation: String,
+    swap: BotSwap,
+    secret: [u8; 32],
+    offer: msg::ClaimOffer,
+    initiator: Pubkey,
+}
+
+fn up_to_offer(w: &World) -> Res<UpToOffer> {
+    let me = Keys::generate();
+    let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
+    let (key, chosen, secret) = fresh_swap_terms(w, Direction::L2S, 0, 0, 0)?;
+    let side = TakerSide {
+        lock_point: chosen.lock_point.0,
+        taker_key: chosen.taker_key.0,
+        blinding_key: chosen.blinding_key,
+        taker_solana: w.taker_sol.pubkey().to_string(),
+    };
+    let chain = w.chain.clone();
+    let Negotiated { id: negotiation, terms, .. } = negotiate(
+        &mut relay,
+        &me,
+        &w.maker_nostr,
+        &taker_rules(),
+        rfq_request(msg::Direction::L2S),
+        side,
+        move || chain.tip(),
+        Duration::from_secs(15),
+    )?;
+    let (agreed, maker_key) = agreed_terms(&chosen, &terms)?;
+    taker_pays_to(w, &agreed.address(&maker_key)?, usdt(), terms.liquid_amount.0)?;
+    let got = wait_from(&mut relay, &me, &w.maker_nostr, &negotiation, NETWORK, Duration::from_secs(120))?;
+    let Body::ClaimOffer(offer) = got.envelope.body else {
+        return Err(format!("expected a claim offer, got {:?}", got.envelope.body));
+    };
+    let initiator = Pubkey::from_str(terms.maker_initiator.as_deref().ok_or("no initiator")?).map_err(|e| e.to_string())?;
+    Ok(UpToOffer { relay, me, negotiation, swap: BotSwap { terms: agreed, key, maker_key }, secret, offer, initiator })
+}
+
+/// The refund the taker would ask for, with its coins in the right order.
+fn refund_tx(w: &World, s: &BotSwap) -> Res<(EarlyRefund, LiquidTx, Vec<simplicityhl::elements::TxOut>)> {
+    let blinding = s.terms.blinding()?;
+    let coins = w.chain.secret_coins(&s.terms.address(&s.maker_key)?, &blinding)?;
+    let coin = exact_secret_coin(&coins, usdt(), s.terms.liquid_amount, w.chain.tip()?, 0).ok_or("no coin of ours")?;
+    let fee_address = taker_fee_address(&s.terms.taker_key.0, &blinding)?;
+    let fee = w.wait_for("the refund's fee coin", 60, || {
+        let found = w.chain.secret_coins(&fee_address, &blinding)?;
+        Ok(found.into_iter().find(|c| c.coin.height.is_some()))
+    })?;
+    let (tx, utxos) = build_swap_spend(&coin, &fee, &w.taker_wallet.address(), 0, Sequence::MAX)?;
+    let started = EarlyRefund::start_with(&s.key, &s.terms.output(&s.maker_key)?, tx.clone(), utxos.clone(), w.genesis)?;
+    Ok((started, tx, utxos))
+}
+
+/// A maker who agrees to a refund must never lock, and one who has locked must never agree: either order would let the
+/// taker keep both sides. Everything else here is a request it should turn down, without that costing the real taker.
+fn rfq_early_refund(w: &mut World) -> Res<()> {
+    let mut s = up_to_offer(w)?;
+    let id = s.swap.terms.swap_id();
+    let answer = answer_offer(&w.chain, &s.swap, &s.offer, w.genesis)?;
+    let fee_address = taker_fee_address(&s.swap.terms.taker_key.0, &s.swap.terms.blinding()?)?;
+    taker_pays_to(w, &fee_address, lbtc(), FEE + 1)?;
+    let (started, tx, utxos) = refund_tx(w, &s.swap)?;
+    let lock_point = s.offer.lock_point.clone();
+    let ask = |tx: &LiquidTx, nonce: &liq2sol_swapkey::Nonce| {
+        Body::EarlyRefundAsk(msg::EarlyRefundAsk {
+            lock_point: lock_point.clone(),
+            tx: serialize_hex(tx),
+            nonce: msg::hex(&nonce_bytes(nonce)),
+        })
+    };
+
+    // Someone else can't ask for it.
+    let mut stranger = RawTaker::new(w)?;
+    stranger.id = s.negotiation.clone();
+    stranger.send(ask(&tx, &started.nonce()))?;
+    check(stranger.answer(QUIET)?.is_none(), "a stranger's request gets no answer")?;
+
+    // A request that doesn't spend this swap's coin as its first input gets no signature, and spoils nothing.
+    let mut swapped = tx.clone();
+    swapped.input.swap(0, 1);
+    send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, ask(&swapped, &started.nonce()))?;
+    let got = wait_from(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, Duration::from_secs(20));
+    check(got.is_err_and(|e| e.contains("declined")), "a request spending another coin first is declined")?;
+    check(matches!(w.state(&id)?, State::WatchLock), "and the swap goes on")?;
+
+    // The real request.
+    send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, ask(&tx, &started.nonce()))?;
+    let got = wait_from(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, Duration::from_secs(20))?;
+    let Body::EarlyRefundShare(share) = got.envelope.body else {
+        return Err(format!("expected the maker's share, got {:?}", got.envelope.body));
+    };
+    let maker_nonce = nonce_from(&unhex(&share.nonce)?).map_err(|e| e.to_string())?;
+    let maker_share = share_from(&unhex(&share.share)?).map_err(|e| e.to_string())?;
+
+    // A taker can't be fooled by a bad share, which would leave it publishing something invalid.
+    let output = s.swap.terms.output(&s.swap.maker_key)?;
+    let other = EarlyRefund::start_with(&s.swap.key, &output, tx.clone(), utxos.clone(), w.genesis)?;
+    let wrong = share_from(&[7u8; 32]).map_err(|e| e.to_string())?;
+    check(other.finish(&s.swap.key, &output, &s.swap.maker_key.0, &maker_nonce, wrong).is_err(), "a bad share is caught")?;
+
+    let (mut refund, spent) = started.finish(&s.swap.key, &output, &s.swap.maker_key.0, &maker_nonce, maker_share)?;
+    sign_keypath(&mut refund, &spent, 1, &s.swap.key, w.genesis)?;
+    w.chain.broadcast(&refund)?;
+    let address = s.swap.terms.address(&s.swap.maker_key)?;
+    let blinding = s.swap.terms.blinding()?;
+    w.wait_for("the refund to confirm", 60, || Ok(w.chain.secret_coins(&address, &blinding)?.is_empty().then_some(())))?;
+    check(refund.input[0].witness.script_witness.len() == 1, "on-chain it is one signature, like a claim")?;
+    w.wait_state(&id, "the maker dropping the swap", 30, |state| matches!(state, State::Abandoned))?;
+
+    // Too late for the adapter signature, which would be the way to a lock.
+    send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, Body::ClaimAnswer(answer))?;
+    std::thread::sleep(QUIET * 3);
+    let escrow = escrow_pda(&s.initiator, &point_64(&s.swap.terms.lock_point));
+    check(w.sol.escrow(&escrow)?.is_none(), "having agreed, the maker never locks")?;
+
+    // The other order: once it has locked, it can't agree.
+    let mut s = up_to_offer(w)?;
+    let id = s.swap.terms.swap_id();
+    let fee_address = taker_fee_address(&s.swap.terms.taker_key.0, &s.swap.terms.blinding()?)?;
+    taker_pays_to(w, &fee_address, lbtc(), FEE + 1)?;
+    let (started, tx, _) = refund_tx(w, &s.swap)?;
+    let answer = answer_offer(&w.chain, &s.swap, &s.offer, w.genesis)?;
+    send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, Body::ClaimAnswer(answer))?;
+    let escrow = escrow_pda(&s.initiator, &point_64(&s.swap.terms.lock_point));
+    let e = w.wait_for("the maker to lock on Solana", 120, || w.sol.escrow(&escrow))?;
+    let late = Body::EarlyRefundAsk(msg::EarlyRefundAsk {
+        lock_point: s.offer.lock_point.clone(),
+        tx: serialize_hex(&tx),
+        nonce: msg::hex(&nonce_bytes(&started.nonce())),
+    });
+    send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, late)?;
+    let got = wait_from(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, Duration::from_secs(20));
+    check(got.is_err_and(|e| e.contains("declined")), "having locked, the maker refuses")?;
+    w.sol.claim(&w.taker_sol, &escrow, &e, solana_value(&s.secret).map_err(|e| e.to_string())?)?;
+    w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    Ok(())
+}
+
 /// E6 and E7 against the real daemon: each of these is a message the maker must not act on.
 fn rfq_attacks(w: &mut World) -> Res<()> {
     let request = || Body::RfqRequest(rfq_request(msg::Direction::L2S));
@@ -1600,6 +1742,7 @@ fn the_daemon_runs_real_swaps() {
         ("RFQ L2S swap (E1)", rfq_l2s_swap),
         ("RFQ S2L swap (E1)", rfq_s2l_swap),
         ("RFQ attacks (E6, E7)", rfq_attacks),
+        ("RFQ early refund", rfq_early_refund),
         ("browser client", browser_client),
     ];
     let filter = std::env::var("SCENARIO").unwrap_or_default();

@@ -1486,6 +1486,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e5c37193a1db1d8ed868c03ec7b152175f26160a5b740e5e484143877e0adf0"
 
 [[package]]
+name = "devnet-faucet"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2603,8 +2611,10 @@ name = "liq2sol-client-wasm"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "anchor-spl",
  "bs58",
  "curve25519-dalek",
+ "devnet-faucet",
  "getrandom 0.2.17",
  "getrandom 0.4.3",
  "js-sys",

@@ -4,7 +4,7 @@
 // Run through the daemon's suite:  CLIENT_TEST=1 SCENARIO="browser" cargo test -p liq2sol-maker --test e2e -- --ignored --nocapture
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, mkdtempSync } from 'node:fs';
-import { createPrivateKey, sign as edSign } from 'node:crypto';
+import { createPrivateKey, generateKeyPairSync, sign as edSign } from 'node:crypto';
 import { execFile, execSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir, homedir } from 'node:os';
@@ -144,7 +144,7 @@ const browser = await chromium.launch({ executablePath: executable, args: ['--no
 const shots = mkdtempSync(path.join(env.SHOTS_DIR ?? tmpdir(), 'client-'));
 console.log(`    screenshots in ${shots}`);
 
-async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = null, phone = false) {
+async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = null, phone = false, who = { address: ownerAddress, key: privateKey }) {
   const context = await browser.newContext({ acceptDownloads: true, viewport, permissions: ['clipboard-read', 'clipboard-write'], ...(phone ? { hasTouch: true, isMobile: true } : {}) });
   const page = await context.newPage();
   const errors = [];
@@ -154,7 +154,7 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
   page.errors = errors;
   await page.exposeFunction('testWalletSign', (hexTx) => {
     const tx = Buffer.from(hexTx, 'hex');
-    const signature = edSign(null, tx.subarray(65), privateKey);
+    const signature = edSign(null, tx.subarray(65), who.key);
     signature.copy(tx, 1);
     return tx.toString('hex');
   });
@@ -182,7 +182,7 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
     const register = ({ register: r }) => r(wallet);
     window.addEventListener('wallet-standard:app-ready', ({ detail }) => register(detail));
     window.dispatchEvent(new CustomEvent('wallet-standard:register-wallet', { detail: register }));
-  }, ownerAddress);
+  }, who.address);
   if (beforeLoad) await beforeLoad(page);
   await page.goto(`http://127.0.0.1:${site.port}/`, { waitUntil: 'commit' });
   return page;
@@ -332,8 +332,13 @@ async function checkHistory(page) {
   if (price !== `Price ${want}`) throw new Error(`the history says ${price}, but the terms come to ${want}`);
   if ((await row.locator('.history-maker').getAttribute('title')) !== swap.maker) throw new Error('the history has the wrong maker');
   if (!(await row.locator('.history-maker .vetted').count())) throw new Error('a vetted maker without its mark in the history');
+  const coinLink = await row.locator('.explorer-coin').getAttribute('href', { timeout: 10000 });
+  const blinded = /\/tx\/([0-9a-f]{64})#blinded=(\d+),([0-9a-f]{64}),([0-9a-f]{64}),([0-9a-f]{64})$/.exec(coinLink);
+  if (!blinded || blinded[1] !== swap.coin.txid || blinded[2] !== String(swap.terms.liquid_amount) || blinded[3] !== env.USDT) throw new Error(`the explorer link: ${coinLink}`);
+  if (!(await row.locator('.explorer-solana').getAttribute('href')).includes(swap.escrow_address)) throw new Error('the Solana link');
+  if (!(await page.evaluate(() => localStorage.getItem('liq2sol.logs'))).includes('blinded=') === false) throw new Error('blinders reached the log');
   await page.locator('.tab[data-tab="swap"]').click();
-  step('the history shows the price and the maker');
+  step('the history shows the price, the maker, and explorer links with the right amount and asset');
 }
 
 // A browser with only the file, on a swap that is over. It must never offer to pay or lock, whatever the chains are slow to say.
@@ -785,6 +790,45 @@ async function early() {
   await page.context().close();
 }
 
+async function solanaRpc(method, params) {
+  const res = await fetch(env.SOLANA_RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+  return (await res.json()).result;
+}
+
+function freshWallet() {
+  const { publicKey, privateKey: key } = generateKeyPairSync('ed25519');
+  return { key, address: base58(publicKey.export({ format: 'der', type: 'spki' }).subarray(-32)) };
+}
+
+// The real faucet program on the validator, with a wallet that has never claimed, so it works on every run.
+async function faucet() {
+  const broke = freshWallet();
+  const noSol = await newPage(undefined, null, false, broke);
+  await noSol.goto(`http://127.0.0.1:${site.port}/#faucet`);
+  await noSol.locator('#sideswap-note', { hasText: 'SideSwap' }).waitFor({ timeout: 15000 });
+  if (!(await noSol.locator('.card.faucet .addr').innerText()).includes(env.USDT)) throw new Error('the page should name the Liquid asset');
+  await noSol.locator('#faucet-connect').click();
+  await noSol.locator('#drip').click();
+  await noSol.locator('#banner:not([hidden])', { hasText: 'devnet SOL first' }).waitFor({ timeout: 10000 });
+  await noSol.context().close();
+
+  const who = freshWallet();
+  await solanaRpc('requestAirdrop', [who.address, 1000000000]);
+  for (let i = 0; i < 60 && !(await solanaRpc('getBalance', [who.address, { commitment: 'confirmed' }]))?.value; i++) await new Promise((r) => setTimeout(r, 500));
+  const page = await newPage(undefined, null, false, who);
+  await page.goto(`http://127.0.0.1:${site.port}/#faucet`);
+  await page.locator('#faucet-connect').click();
+  await page.locator('#drip').click();
+  await page.locator('#faucet-balance', { hasText: '100 SOL-USDT' }).waitFor({ timeout: 60000 });
+  step('a new wallet gets its test USDT from the faucet program');
+  await page.locator('#drip').click();
+  await page.locator('#banner:not([hidden])', { hasText: 'already had' }).waitFor({ timeout: 10000 });
+  await page.locator('#faucet-balance', { hasText: '100 SOL-USDT' }).waitFor({ timeout: 1000 });
+  await checkNoErrors(page);
+  await page.context().close();
+  step('it says so when a wallet has no SOL or has already claimed, and names the asset SideSwap uses');
+}
+
 async function look() {
   await phoneWallets();
   await connectOrder();
@@ -819,9 +863,9 @@ async function look() {
 
 let code = 0;
 try {
-  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,l2s,s2l,split,rescue,early').split(',')]) {
+  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,faucet,l2s,s2l,split,rescue,early').split(',')]) {
     console.log(`  == browser: ${name}`);
-    await { vetting, look, l2s, s2l, rescue, split, early }[name]();
+    await { vetting, look, faucet, l2s, s2l, rescue, split, early }[name]();
   }
   console.log('BROWSER OK');
 } catch (e) {

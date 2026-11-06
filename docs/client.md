@@ -118,7 +118,7 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **Reconnecting.** The page remembers which wallet was used, and reconnects it after a reload without a prompt: Wallet Standard's `silent` connect, or a stored WalletConnect session. A wallet that refuses leaves the buttons in place, and "disconnect" forgets it. Whether each real wallet honours `silent` is **UNVERIFIED**.
 
-**History.** Each swap shows its amount, its price from the agreed terms, and its maker, with the vetted mark if listed.
+**History.** Each swap shows its amount, its price from the agreed terms, and its maker, with the vetted mark if listed. It also links to the explorers. Liquid links carry the blinders in the `#blinded=` fragment, which browsers don't send to the server, so the page shows the amounts. Anyone given such a link can read them.
 
 **Before a quote.** L→S checks the wallet has SOL for each claim. S→L checks it has the SOL-USDT for the order and SOL for each lock. Both stop before asking any maker.
 
@@ -129,6 +129,8 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 **Connecting.** With no wallet, the main button says "Connect a Solana wallet" and is always clickable. It tries wallets in the browser, Phantom first. A person saying no stops there. If none is present or none works, a phone gets a list of supported wallets and WalletConnect, and a computer gets WalletConnect's code.
 
 **Splitting.** An order can split across makers, one swap per maker. A maker's limit per swap is its own to set, so an order above what the book can fill is shown as partly filled.
+
+**Faucet.** On test networks only, a tab gives each wallet 100 stand-in USDT from `programs/devnet-faucet`, a small program holding a minted balance, and links to the SOL and L-BTC faucets. No key is involved, because the wallet's own signature claims. Someone with many wallets can empty it, and it's refilled by minting to its vault. A mainnet build leaves out `NETWORK.faucet`, and with it the tab.
 
 **Send Min and Max.** Buttons above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
 

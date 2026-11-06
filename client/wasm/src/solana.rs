@@ -124,6 +124,27 @@ pub fn lock_ix(
     }
 }
 
+/// The devnet faucet's account recording that this wallet has claimed.
+pub fn faucet_claim(program: &Key, owner: &Key) -> Key {
+    find_pda(&[b"claim", owner], program)
+}
+
+/// Claim from the devnet faucet. It pays only the claimant's own token account.
+pub fn faucet_ix(program: &Key, mint: &Key, claimant: &Key) -> Ix {
+    Ix {
+        program: *program,
+        accounts: vec![
+            s(*claimant),
+            w(faucet_claim(program, claimant)),
+            w(find_pda(&[b"vault"], program)),
+            w(ata(claimant, mint)),
+            r(token_program()),
+            r(SYSTEM),
+        ],
+        data: anchor_data("drip"),
+    }
+}
+
 /// Create the recipient's token account if it doesn't exist. Idempotent.
 pub fn create_ata_ix(payer: &Key, owner: &Key, mint: &Key) -> Ix {
     Ix {

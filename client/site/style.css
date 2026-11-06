@@ -179,3 +179,8 @@ footer p { margin: 4px 0; }
 td.rate { white-space: pre-line; }
 th:nth-child(2), td.rate { width: 45%; }
 .open-wallet, .open-wc { text-align: center; text-decoration: none; box-sizing: border-box; }
+
+.faucet-steps { margin: 10px 0; padding-left: 22px; font-size: .9rem; color: var(--muted); }
+.faucet-steps li { margin: 4px 0; }
+
+.explorer-links { display: inline-flex; flex-wrap: wrap; gap: 0 10px; font-size: .84rem; }

@@ -147,3 +147,24 @@ fn anything_else_is_refused_as_an_escrow() {
     data[state_at] = 9;
     assert!(parse_escrow(&data).is_err(), "an unknown state");
 }
+
+#[test]
+fn the_faucet_claim_is_what_the_program_expects() {
+    use anchor_lang::{InstructionData, ToAccountMetas};
+    let (program, mint) = (devnet_faucet::id(), devnet_faucet::MINT);
+    let claimant = Pubkey::new_unique();
+    let expected = Instruction {
+        program_id: program,
+        accounts: devnet_faucet::accounts::Drip {
+            claimant,
+            claim: Pubkey::find_program_address(&[devnet_faucet::CLAIM_SEED, claimant.as_ref()], &program).0,
+            vault: Pubkey::find_program_address(&[devnet_faucet::VAULT_SEED], &program).0,
+            to: anchor_spl::associated_token::get_associated_token_address(&claimant, &mint),
+            token_program: anchor_spl::token::ID,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None),
+        data: devnet_faucet::instruction::Drip {}.data(),
+    };
+    assert_eq!(faucet_ix(&to_key(&program), &to_key(&mint), &to_key(&claimant)), native(&expected));
+}

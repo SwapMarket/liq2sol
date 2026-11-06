@@ -12,6 +12,7 @@ on:
       - shared/chain/**
       - shared/rfq/**
       - programs/solana-escrow/**
+      - programs/devnet-faucet/**
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -45,7 +46,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: client/wasm/.native-tests-passed
-          key: native-tests-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('client/wasm/**', 'contracts/swapkey/**', 'shared/chain/**', 'shared/rfq/**', 'programs/solana-escrow/**') }}
+          key: native-tests-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('client/wasm/**', 'contracts/swapkey/**', 'shared/chain/**', 'shared/rfq/**', 'programs/solana-escrow/**', 'programs/devnet-faucet/**') }}
       - name: Install the Rust toolchain
         if: steps.passed.outputs.cache-hit != 'true'
         run: |
@@ -71,7 +72,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: client/site/wasm
-          key: wasm-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ env.WASM_PACK_VERSION }}-${{ hashFiles('client/build.sh', 'client/wasm/**', 'contracts/swapkey/**', 'shared/chain/**', 'shared/rfq/**', 'programs/solana-escrow/**') }}
+          key: wasm-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ env.WASM_PACK_VERSION }}-${{ hashFiles('client/build.sh', 'client/wasm/**', 'contracts/swapkey/**', 'shared/chain/**', 'shared/rfq/**', 'programs/solana-escrow/**', 'programs/devnet-faucet/**') }}
       - name: Reuse wasm-pack
         id: wasm-pack
         if: steps.wasm.outputs.cache-hit != 'true'

@@ -1,7 +1,7 @@
 // The page. It shows state and takes decisions from the user. js/swap.js and the WASM do the protocol.
 import init, * as W from '../wasm/liq2sol_client_wasm.js';
 import { NETWORK, refuseMainnet } from './config.js';
-import { Esplora, Solana } from './chain.js';
+import { Esplora, Solana, hexToBytes } from './chain.js';
 import { bpsAt, effectivePrice, planOrder, sendLimits } from './plan.js';
 import { Relays } from './relay.js';
 import { Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
@@ -921,6 +921,22 @@ function swapPrice(s) {
   return effectivePrice([s.direction === 'L2S' ? { send: liquid, receive: solana } : { send: solana, receive: liquid }]).toFixed(4);
 }
 
+// Links with the swap's blinders in the part of the address a browser doesn't send, so the explorer page shows the amounts.
+// Whoever gets such a link can read them. Filled in afterwards, because the coin's transaction has to be fetched.
+function explorerLinks(s) {
+  const link = (cls, href, text) => h('a', { class: `explorer ${cls}`, href, target: '_blank', rel: 'noopener noreferrer', title: 'Opens the explorer with this swap’s amounts unblinded. Anyone you share this link with can read them.' }, text);
+  const box = h('span', { class: 'explorer-links' }, s.escrow_address && link('explorer-solana', NETWORK.solanaExplorer(s.escrow_address), 'Solana'));
+  if (s.coin?.txid) {
+    esplora[0].txHex(s.coin.txid).then((hex) => {
+      const blinded = `#blinded=${W.explorer_blinders(hex, s.coin.vout, s.secrets.blinding_key)}`;
+      const spend = s.refund_txid ?? s.claim_txid;
+      box.prepend(link('explorer-coin', `${NETWORK.explorer}/tx/${s.coin.txid}${blinded}`, 'Liquid coin'),
+        ...(spend ? [link('explorer-spend', `${NETWORK.explorer}/tx/${spend}${blinded}`, s.refund_txid ? 'Liquid refund' : 'Liquid claim')] : []));
+    }).catch((e) => console.warn('explorer link', e?.message ?? e));
+  }
+  return box;
+}
+
 function historyView() {
   const all = Object.values(loadSwaps()).sort((a, b) => b.created_at - a.created_at);
   if (!all.length) return h('div', { class: 'card' }, h('h2', {}, 'History'), h('p', { class: 'sub' }, 'Swaps from this browser appear here.'));
@@ -933,6 +949,7 @@ function historyView() {
         vettedMaker(NETWORK.name, s.maker) && h('span', { class: 'vetted', title: 'Vetted by SwapMarket', 'aria-label': 'Vetted by SwapMarket' }, ' ✓')),
       h('span', { class: 'mono' }, s.state),
       h('span', {}, new Date(s.created_at * 1000).toLocaleString()),
+      explorerLinks(s),
       h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = s.order ?? s.id; location.hash = '#swap'; render(); } }, 'Open'),
       FINISHED.includes(s.state) && h('button', { class: 'btn quiet', onclick: () => { removeSwap(s.id); render(); } }, 'Forget'));
   }));
@@ -1000,6 +1017,62 @@ function settingsDialog() {
 }
 
 // ---- Render and run ----
+// ---- The faucet, on test networks only ----
+function faucetView() {
+  const f = NETWORK.faucet;
+  const status = h('p', { class: 'note', id: 'faucet-status', role: 'status' });
+  const balance = h('p', { class: 'note', id: 'faucet-balance' });
+  const showBalance = async () => {
+    if (!wallet) return;
+    const [units, lamports] = await Promise.all([
+      solana.tokenBalance(W.token_account(wallet.address, NETWORK.mint)), solana.lamports(wallet.address),
+    ]);
+    balance.textContent = `This wallet holds ${show(units)} SOL-USDT and ${(Number(lamports) / 1e9).toFixed(3)} SOL.`;
+  };
+  showBalance().catch(() => {});
+  const claim = async (e) => {
+    const button = e.target;
+    button.disabled = true;
+    try {
+      if (await solana.lamports(wallet.address) < NETWORK.minSolLamports) throw new Error('This wallet needs a little devnet SOL first. Get some from the link above.');
+      if (await solana.lamports(W.faucet_claim_address(f.program, wallet.address)) > 0n) throw new Error('This wallet has already had its test USDT.');
+      status.textContent = `Waiting for ${wallet.name} to sign…`;
+      const account = W.token_account(wallet.address, NETWORK.mint);
+      const fee = await solana.priorityFee([account], NETWORK.priorityFloor, NETWORK.priorityCap);
+      const signed = await wallet.sign(hexToBytes(W.build_faucet_tx(f.program, NETWORK.mint, wallet.address, await solana.blockhash(), BigInt(fee))));
+      await solana.simulate(signed);
+      await solana.send(signed);
+      status.textContent = `${f.drip} SOL-USDT are on the way.`;
+      for (let i = 0; i < 20 && (await solana.tokenBalance(account)) === 0n; i++) await new Promise((r) => setTimeout(r, 1500));
+      await showBalance();
+    } catch (err) {
+      status.textContent = '';
+      const empty = /Custom"?:? ?\(?6000/.test(err?.message ?? '');
+      fail(empty ? new Error('The faucet is empty right now.') : err);
+    } finally {
+      button.disabled = false;
+    }
+  };
+  const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, text);
+  return h('div', { class: 'card faucet' },
+    h('h2', {}, 'Try a swap'),
+    h('p', { class: 'sub' }, 'Everything here is on test networks, and has no value.'),
+    h('ol', { class: 'faucet-steps' },
+      h('li', {}, 'Set your Solana wallet to devnet.'),
+      h('li', {}, 'Get a little devnet SOL for fees from ', link(f.solana, 'the Solana faucet'), '.'),
+      h('li', {}, `Get ${f.drip} SOL-USDT below, once per wallet.`),
+      h('li', {}, 'Swap SOL-USDT → L-USDt. You only need a Liquid address, because the maker provides the fee coin for your claim.'),
+      h('li', {}, 'To swap back, your Liquid wallet needs L-BTC for fees, from ', link(f.liquid, 'the Liquid testnet faucet'), '.')),
+    wallet ? walletView() : null,
+    balance,
+    wallet
+      ? h('button', { class: 'btn', id: 'drip', onclick: claim }, `Get ${f.drip} SOL-USDT`)
+      : h('button', { class: 'btn', id: 'faucet-connect', onclick: connectWallet }, 'Connect a Solana wallet'),
+    status,
+    h('p', { class: 'note', id: 'sideswap-note' }, 'The USDt on Liquid testnet here is the same asset SideSwap uses, so you can also get it there:'),
+    h('div', { class: 'addr' }, NETWORK.usdt));
+}
+
 const HERO = () => h('div', { class: 'hero' }, h('h1', {}, 'Liquid ⇄ Solana Atomic Swaps'), h('p', {}, 'Swap USDt across chains while staying in full control. Nobody can link the two sides.'));
 
 function render() {
@@ -1010,7 +1083,7 @@ function render() {
   // A file picker or a half-typed address shouldn't vanish when the chain is polled.
   const active = document.activeElement;
   if (active && (active.classList?.contains('refund-to') || active.type === 'file') && view.contains(active)) return;
-  const showForm = tab !== 'rescue' && tab !== 'history' && !(ui.openOrder && orderOf(ui.openOrder).length) && !ui.quote;
+  const showForm = tab !== 'rescue' && tab !== 'history' && tab !== 'faucet' && !(ui.openOrder && orderOf(ui.openOrder).length) && !ui.quote;
   if (showForm) {
     if (!form.el.isConnected) {
       view.replaceChildren(form.el);
@@ -1025,6 +1098,8 @@ function render() {
     view.append(rescueView());
   } else if (tab === 'history') {
     view.append(historyView());
+  } else if (tab === 'faucet' && NETWORK.faucet) {
+    view.append(faucetView());
   } else if (ui.openOrder && orderOf(ui.openOrder).length) {
     view.append(...orderView(orderOf(ui.openOrder)).flat().filter(Boolean));
   } else {
@@ -1052,6 +1127,7 @@ async function main() {
   if (NETWORK.regtest) W.use_regtest(NETWORK.usdt, NETWORK.lbtc);
   endpoints();
   $('net').textContent = NETWORK.label;
+  document.querySelector('.tab[data-tab="faucet"]').hidden = !NETWORK.faucet;
   engine = new Engine({
     esplora, solana, secondSolana, getWallet: () => wallet, relays: null,
     onChange: () => { if (ui.openOrder) render(); },

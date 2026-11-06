@@ -37,5 +37,7 @@ js-sys = "0.3"
 [dev-dependencies]
 liq2sol-chain = { path = "../../shared/chain" }
 solana-escrow = { path = "../../programs/solana-escrow", features = ["no-entrypoint"] }
+devnet-faucet = { path = "../../programs/devnet-faucet", features = ["no-entrypoint"] }
 anchor-lang = "=1.2.2"
+anchor-spl = "=1.2.2"
 solana-sdk = "3"

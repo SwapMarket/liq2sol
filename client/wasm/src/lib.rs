@@ -211,6 +211,16 @@ pub fn read_coins(tx_hex: &str, script: &str, blinding_key: &str) -> Result<Stri
     Ok(Value::Array(found).to_string())
 }
 
+/// What a block explorer needs to show one output in the clear: value, asset, value blinder and asset blinder, as Esplora's
+/// `#blinded=` link takes them (client/src/driver/blinding.js). Anyone with the link can read this output.
+#[wasm_bindgen]
+pub fn explorer_blinders(tx_hex: &str, vout: u32, blinding_key: &str) -> Result<String, String> {
+    let t = tx(tx_hex)?;
+    let out = t.output.get(vout as usize).ok_or("no such output")?;
+    let s = read_output(out, &secret(blinding_key)?).ok_or("can't read this output")?;
+    Ok(format!("{},{},{},{}", s.value, s.asset, s.value_bf, s.asset_bf))
+}
+
 /// Which parent transactions a transaction spends, in input order.
 #[wasm_bindgen]
 pub fn parents_of(tx_hex: &str) -> Result<String, String> {
@@ -655,6 +665,20 @@ pub fn parse_escrow(data_hex: &str) -> Result<String, String> {
 const LOCK_UNITS: u32 = 120_000;
 const CLAIM_UNITS: u32 = 100_000;
 const REFUND_UNITS: u32 = 60_000;
+
+#[wasm_bindgen]
+pub fn faucet_claim_address(program: &str, owner: &str) -> Result<String, String> {
+    Ok(solana::text(&solana::faucet_claim(&solana::key(program)?, &solana::key(owner)?)))
+}
+
+/// A claim from the devnet faucet, with the wallet's token account created first if it has none.
+#[wasm_bindgen]
+pub fn build_faucet_tx(program: &str, mint: &str, owner: &str, blockhash: &str, micro_lamports: u64) -> Result<String, String> {
+    let payer = solana::key(owner)?;
+    let mint = solana::key(mint)?;
+    let ixs = vec![solana::create_ata_ix(&payer, &payer, &mint), solana::faucet_ix(&solana::key(program)?, &mint, &payer)];
+    finish_tx(&payer, ixs, LOCK_UNITS, micro_lamports, blockhash)
+}
 
 fn finish_tx(payer: &solana::Key, mut ixs: Vec<solana::Ix>, units: u32, price: u64, blockhash: &str) -> Res<String> {
     let mut all = solana::budget_ixs(units, price);

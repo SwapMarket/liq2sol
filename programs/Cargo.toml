@@ -1,6 +1,6 @@
 # Separate from the root workspace: the Solana toolchain and its dependency graph are pinned independently.
 [workspace]
-members = ["solana-escrow"]
+members = ["solana-escrow", "devnet-faucet"]
 resolver = "2"
 
 [profile.release]

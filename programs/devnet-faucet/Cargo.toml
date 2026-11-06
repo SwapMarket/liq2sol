@@ -1,0 +1,34 @@
+[package]
+name = "devnet-faucet"
+version = "0.1.0"
+description = "Hands out stand-in USDT on devnet, so people can try liq2sol. Never for mainnet."
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "devnet_faucet"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = "=1.2.2"
+anchor-spl = "=1.2.2"
+
+[dev-dependencies]
+litesvm = "0.15.0"
+solana-message = "4"
+solana-transaction = "4"
+solana-signer = "3"
+solana-keypair = "3"
+solana-account = "4"

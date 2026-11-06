@@ -9,6 +9,7 @@ export const NETWORK = {
   regtest: false,
   esplora: ['https://blockstream.info/liquidtestnet/api', 'https://liquid.network/liquidtestnet/api'],
   explorer: 'https://blockstream.info/liquidtestnet',
+  solanaExplorer: (address) => `https://explorer.solana.com/address/${address}?cluster=devnet`,
   solana: 'https://api.devnet.solana.com',
   heliusTemplate: 'https://devnet.helius-rpc.com/?api-key=',
   solanaChain: 'solana:devnet',
@@ -19,6 +20,13 @@ export const NETWORK = {
   // Reown's project id is public by nature, because a static page can't hide it. It is shared with sol2base and eth2base.
   walletConnectProject: 'c001d9e3d0c6308a5ce7e5932d40064a',
   walletNetwork: 'devnet',
+  // Only on test networks, so a mainnet build has no Faucet tab.
+  faucet: {
+    program: 'GAcP2avhVggTqeHSEoKGmGXw4wpJCTasRBjbUfrC1Xpu',
+    drip: '100',
+    solana: 'https://faucet.solana.com',
+    liquid: 'https://liquidtestnet.com/faucet',
+  },
   // Trust belongs here on mainnet. Reown's registry lists only Solana mainnet for it, so a devnet build can't use it.
   openInWallets: ['Phantom', 'Solflare'],
   walletConnectHint: 'This build needs Solana devnet: Phantom and Solflare list it, and Trust Wallet lists only mainnet.',

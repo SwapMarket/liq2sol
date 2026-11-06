@@ -5,6 +5,7 @@
 //!
 //!   liq2sol-cli addresses             print the wallets to fund
 //!   liq2sol-cli faucet                ask the Liquid testnet faucet for L-BTC and TEST for both wallets
+//!   liq2sol-cli faucet-init <program> create the devnet faucet's vault
 //!   liq2sol-cli setup                 create the stand-in mint and token accounts
 //!   liq2sol-cli swap l2s|s2l          a full swap
 //!   liq2sol-cli abort l2s|s2l         the counterparty goes quiet: both sides recover through refunds
@@ -14,6 +15,7 @@
 use liq2sol_chain::{liquid, sol};
 
 use std::path::PathBuf;
+use solana_sdk::instruction::{AccountMeta, Instruction};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
@@ -570,6 +572,21 @@ fn run() -> Res<()> {
             let units: u64 = units.parse().map_err(|_| "bad amount")?;
             net.sol.top_up_token(&w.mint_authority, &owner, units)?;
             println!("minted {units} stand-in units to {owner}");
+        }
+        ["faucet-init", program] => {
+            let net = connect()?;
+            let program = Pubkey::from_str(program).map_err(|e| format!("bad program id: {e}"))?;
+            let (vault, _) = Pubkey::find_program_address(&[b"vault"], &program);
+            let accounts = vec![
+                AccountMeta::new(w.mint_authority.pubkey(), true),
+                AccountMeta::new_readonly(solana_escrow::USDT_MINT, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new_readonly(anchor_spl::token::ID, false),
+                AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+            ];
+            let data = solana_sdk::hash::hash(b"global:init").to_bytes()[..8].to_vec();
+            net.sol.send(&[Instruction { program_id: program, accounts, data }], &w.mint_authority, &[])?;
+            println!("faucet vault {vault} ready");
         }
         ["issue-usdt", role, units] => {
             let units: u64 = units.parse().map_err(|_| "bad amount")?;

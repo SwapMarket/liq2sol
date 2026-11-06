@@ -57,8 +57,9 @@ const size = (u) => {
   const v = BigInt(u);
   return `${(v / 1000000n).toLocaleString('en-US')}.${((v % 1000000n) / STEP).toString().padStart(2, '0')}`;
 };
-// What one unit sent buys, to four places. Quotes and payments stay exact: a coin must match to the last unit.
-const price = (bpsValue) => ((10000 - bpsValue) / 10000).toFixed(4);
+// What the taker pays per unit received, to four places, so a worse price is a higher number. Quotes and payments stay exact: a coin
+// must match to the last unit.
+const price = (bpsValue) => (10000 / (10000 - bpsValue)).toFixed(4);
 const liquidUnits = (u) => {
   const v = BigInt(u);
   return `${v / 100000000n}.${(v % 100000000n).toString().padStart(8, '0')}`;
@@ -164,7 +165,13 @@ function bookView(send) {
     h('h3', {}, `Makers book: ${names[ui.direction].join(' → ')}`),
     h('div', { class: 'scroll' }, rows.length
       ? h('table', {},
-        h('thead', {}, h('tr', {}, ['Maker', 'Price', 'Per swap', 'Available', 'You send here'].map((t) => h('th', {}, t)))),
+        h('thead', {}, h('tr', {}, [
+          ['Maker', 'The maker\'s Nostr key'],
+          ['Price', `${names[ui.direction][0]} you pay for each ${names[ui.direction][1]} you receive`],
+          ['Per swap', `The smallest and largest single swap, in ${names[ui.direction][0]} and ${names[ui.direction][1]} alike`],
+          ['Maker can pay', `How much ${names[ui.direction][1]} this maker can pay you right now`],
+          ['Your fill', `How much of your order goes to this maker, in ${names[ui.direction][0]}`],
+        ].map(([t, why]) => h('th', { title: why }, t)))),
         h('tbody', {}, rows))
       : h('div', { class: 'empty' }, relays?.connected() ? 'No maker is offering this direction right now.' : 'Connecting to Nostr relays…')));
 }
@@ -250,7 +257,7 @@ function formView() {
     walletView(),
     hasAmount && plan.fills.length > 0 && h('dl', { class: 'facts' },
       h('div', {}, h('dt', {}, 'Filled by'), h('dd', {}, plan.fills.length === 1 ? short(plan.fills[0].maker) : `${plan.fills.length} separate swaps`)),
-      h('div', {}, h('dt', {}, 'Average price'), h('dd', {}, (Number(plan.receive) / Number(send - plan.unfilled)).toFixed(4)))),
+      h('div', {}, h('dt', {}, 'Average price'), h('dd', {}, (Number(send - plan.unfilled) / Number(plan.receive)).toFixed(4)))),
     hasAmount && plan.unfilled > 0n && plan.fills.length > 0 && h('p', { class: 'warn', id: 'unfilled' }, `The book can fill ${show(send - plan.unfilled)} of this right now. ${show(plan.unfilled)} would stay unswapped.`),
     h('button', { class: 'btn', id: 'go', disabled: !ready, onclick: startQuote }, label));
 }

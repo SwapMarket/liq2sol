@@ -110,7 +110,7 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 
 ### The makers book and splitting an order
 
-Offers show each maker's price, per-swap limits and what it can pay now. A taker can trade any amount inside those limits, not only whole offers. Prices show to 4 places
+Offers show each maker's price, per-swap limits and what it can pay now. A taker can trade any amount inside those limits, not only whole offers. Prices show what the taker pays per unit received, so a worse price is a higher number, such as 1.0030. They show to 4 places
 and sizes to 2, with minimums rounded up and maximums and availability rounded down. Quotes and payments stay exact, because a coin must match to the last unit.
 
 When an order is larger than the best offer, `js/plan.js` fills it best price first, across makers and across several swaps with one maker, up to 5 swaps. What the book can't cover is shown before accepting.

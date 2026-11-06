@@ -108,7 +108,8 @@ tbody tr.on { background: rgb(232 203 43 / 12%); }
 tbody tr.off { opacity: .45; cursor: default; }
 .star { background: none; border: 0; padding: 0 2px; margin: 0; font-size: 1.1rem; line-height: 1; color: var(--dim); cursor: pointer; }
 .star:hover, .star.on { color: var(--primary); }
-.only-favorites { justify-content: flex-end; margin-top: 8px; }
+.vetted { color: var(--ok); font-weight: 700; }
+.book-filters { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 16px; margin-top: 8px; }
 .mono { font-family: ui-monospace, "Noto Mono", Menlo, monospace; }
 .empty { padding: 18px; text-align: center; color: var(--muted); font-size: .9rem; }
 

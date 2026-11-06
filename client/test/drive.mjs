@@ -75,6 +75,8 @@ const config = {
   // The suite's maker locks for only 150 slots, so that failures play out in minutes.
   claimCutoffSlots: 20,
 };
+// The makers this page treats as vetted. The suite's maker has a new key each run, so the list is set once it's known.
+let vetted = [];
 const site = await serve((req, res) => {
   const rel = new URL(req.url, 'http://x').pathname.replace(/^\/$/, '/index.html');
   const file = path.join(SITE, rel);
@@ -85,6 +87,7 @@ const site = await serve((req, res) => {
   }
   let data = readFileSync(file);
   if (rel === '/js/config.js') data = `${data}\nObject.assign(NETWORK, ${JSON.stringify(config)});\n`;
+  if (rel === '/js/vetted.js') data = `${data}\nVETTED_MAKERS[${JSON.stringify(env.NETWORK_NAME)}] = ${JSON.stringify(vetted.map((key) => ({ key, name: 'test' })))};\n`;
   // The real page allows https and wss only. These endpoints are local, so only this test relaxes it.
   if (rel === '/index.html') data = String(data).replace("connect-src 'self' https: wss:;", 'connect-src * ws: http:;');
   res.setHeader('content-type', TYPES[path.extname(file)] ?? 'application/octet-stream');
@@ -364,6 +367,44 @@ async function rescue() {
   await fresh.context().close();
 }
 
+// Runs first: it finds the suite's maker, and every other scenario then trades with that maker as a vetted one.
+async function vetting() {
+  const page = await newPage();
+  await page.locator('.empty', { hasText: 'hidden by the switches' }).waitFor({ timeout: 30000 });
+  if (!(await page.locator('#only-vetted').isChecked())) throw new Error('"only vetted" should start on');
+  if (await page.locator('#unvetted-warning').count()) throw new Error('a warning with the switch on');
+  await page.locator('#amount').fill(env.AMOUNT);
+  if (await page.locator('#go:not(:disabled)').count()) throw new Error('an order could go to a hidden maker');
+  step('a new visitor sees no unvetted maker, and can\'t trade with one');
+
+  await page.locator('#only-vetted').uncheck();
+  const row = page.locator('tbody tr').first();
+  await row.waitFor({ timeout: 3000 });
+  await page.locator('#unvetted-warning').waitFor({ timeout: 3000 });
+  if (await page.locator('.vetted').count()) throw new Error('a checkmark on a maker that isn\'t listed');
+  const key = await row.locator('td.mono').getAttribute('title');
+  if (!/^[0-9a-f]{64}$/.test(key)) throw new Error(`the row's key: ${key}`);
+  await page.reload();
+  await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
+  if (await page.locator('#only-vetted').isChecked()) throw new Error('turning it off did not survive a reload');
+  step('with the switch off, the maker shows with a warning and no checkmark, and that survives a reload');
+  await checkNoErrors(page);
+  await page.context().close();
+
+  // Same start and end, so the same on screen.
+  vetted = [`${key.slice(0, 30)}${key[30] === '0' ? '1' : '0'}${key.slice(31)}`];
+  const lookalike = await newPage();
+  await lookalike.locator('.empty', { hasText: 'hidden by the switches' }).waitFor({ timeout: 30000 });
+  await lookalike.context().close();
+  step('a listed key that only looks like the maker\'s doesn\'t count');
+
+  vetted = [key];
+  const listed = await newPage();
+  await listed.locator('tbody tr .vetted').first().waitFor({ timeout: 30000 });
+  await listed.context().close();
+  step('once listed, the maker has its checkmark with the switch on');
+}
+
 async function look() {
   const phone = await newPage({ width: 400, height: 800 });
   await phone.locator('tbody tr').first().waitFor({ timeout: 30000 });
@@ -391,9 +432,9 @@ async function look() {
 
 let code = 0;
 try {
-  for (const name of (env.BROWSER_SCENARIOS ?? 'look,l2s,s2l,split,rescue').split(',')) {
+  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,l2s,s2l,split,rescue').split(',')]) {
     console.log(`  == browser: ${name}`);
-    await { look, l2s, s2l, rescue, split }[name]();
+    await { vetting, look, l2s, s2l, rescue, split }[name]();
   }
   console.log('BROWSER OK');
 } catch (e) {

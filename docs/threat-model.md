@@ -28,7 +28,7 @@ Status: Phase 1 design, for review. "Protocol" below refers to [protocol.md](pro
 | Taker griefs: locks, then never claims | Rate limits, spread, caps (D2) | Capital time |
 | Taker exploits a Liquid halt (S→L) | `extend` (D1) | Halts over about 7 days, bounded by caps |
 | Taker exploits a Solana restart (L→S) | `close_on_restart` | Stalls with no hard fork, bounded by caps |
-| Maker never locks | Taker refunds | About 5–6 h of the taker's time, plus any `extend`. Reputation only. |
+| Maker never locks, or fake makers flood the book | Taker refunds. The page shows only makers vetted by SwapMarket unless the taker turns that off (`client/site/js/vetted.js`), and favorites fill before others. | Funds safe. Up to about 5–6 h of the taker's time, and 7 days more if `extend` is used. A taker who turns the switch off, or a vetted maker who misbehaves, still faces this. The list is also a point of control: it depends on the page being genuine, and on SwapMarket's judgment. |
 | Maker quotes with a short `LOCK_HEIGHT` | Client checks the height from its own view of the tip | None |
 | Maker gives wrong address | The client derives addresses itself and accepts none | None |
 | Maker's lock has a too-close deadline | Client verifies and enforces its claim cutoff before revealing | None |

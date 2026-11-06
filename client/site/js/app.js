@@ -8,6 +8,7 @@ import { Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
 import { captureConsole, clearLogs, log, logsCount, logsText } from './logs.js';
 import { makeRecovery, offerDownload, readRecovery } from './recovery.js';
+import { vettedMaker } from './vetted.js';
 import { connectExtension, connectWalletConnect, extensionWallets } from './wallet.js';
 
 const OFFER_KIND = 38401;
@@ -156,11 +157,21 @@ function setOnlyFavorites(on) {
   render();
 }
 
+// On unless the taker turned it off, because a new visitor has no favorites and fake offers cost nothing to publish.
+const onlyVetted = () => settings.onlyVetted !== false;
+
+function setOnlyVetted(on) {
+  settings.onlyVetted = on;
+  saveSettings(settings);
+  render();
+}
+
 // The makers an order can use. Hidden ones aren't offered anything.
 const shownOffers = (direction) => {
   const fav = favorites();
   const list = liveOffers(direction);
-  return (settings.onlyFavorites ? list.filter((o) => fav.has(o.maker)) : list)
+  return list
+    .filter((o) => (!settings.onlyFavorites || fav.has(o.maker)) && (!onlyVetted() || vettedMaker(NETWORK.name, o.maker)))
     .sort((a, b) => Number(fav.has(b.maker)) - Number(fav.has(a.maker)));
 };
 
@@ -194,7 +205,7 @@ function bookView(send) {
       class: mine.length ? 'on' : '',
       onclick: () => { ui.selected = ui.selected === o.maker ? null : o.maker; render(); },
     },
-    h('td', { class: 'mono' },
+    h('td', { class: 'mono', title: o.maker },
       h('button', {
         class: `star${fav.has(o.maker) ? ' on' : ''}`,
         title: fav.has(o.maker) ? 'Remove from favorites' : 'Add to favorites',
@@ -202,7 +213,10 @@ function bookView(send) {
         'aria-pressed': fav.has(o.maker) ? 'true' : 'false',
         onclick: (e) => { e.stopPropagation(); toggleFavorite(o.maker); },
       }, fav.has(o.maker) ? '★' : '☆'),
-      ` ${short(o.maker)}`),
+      ` ${short(o.maker)}`,
+      vettedMaker(NETWORK.name, o.maker)
+        ? h('span', { class: 'vetted', title: `Vetted by SwapMarket: ${vettedMaker(NETWORK.name, o.maker).name}`, 'aria-label': 'Vetted by SwapMarket' }, ' ✓')
+        : ''),
     priceCell(o, ui.direction, send, mine),
     h('td', {}, `${size(sizeUp(o.offer.min_sol_units))} – ${size(sizeDown(o.offer.max_sol_units))}`),
     h('td', {}, size(sizeDown(available(o, ui.direction)))),
@@ -220,12 +234,18 @@ function bookView(send) {
           ['Your fill', `How much of your order goes to this maker, in ${names[ui.direction][0]}`],
         ].map(([t, why]) => h('th', { title: why }, t)))),
         h('tbody', {}, rows))
-      : h('div', { class: 'empty' }, settings.onlyFavorites && liveOffers(ui.direction).length
-        ? 'None of your favorites is offering this direction right now.'
+      : h('div', { class: 'empty' }, liveOffers(ui.direction).length
+        ? `No maker you chose to see is offering this direction right now. ${liveOffers(ui.direction).length} hidden by the switches below.`
         : relays?.connected() ? 'No maker is offering this direction right now.' : 'Connecting to Nostr relays…')),
-    h('label', { class: 'check only-favorites' },
-      h('input', { type: 'checkbox', id: 'only-favorites', checked: !!settings.onlyFavorites, onchange: (e) => setOnlyFavorites(e.target.checked) }),
-      'Only my favorites'));
+    h('div', { class: 'book-filters' },
+      h('label', { class: 'check' },
+        h('input', { type: 'checkbox', id: 'only-vetted', checked: onlyVetted(), onchange: (e) => setOnlyVetted(e.target.checked) }),
+        'Only vetted by SwapMarket'),
+      h('label', { class: 'check' },
+        h('input', { type: 'checkbox', id: 'only-favorites', checked: !!settings.onlyFavorites, onchange: (e) => setOnlyFavorites(e.target.checked) }),
+        'Only my favorites')),
+    onlyVetted() ? '' : h('p', { class: 'note', id: 'unvetted-warning' },
+      'Anyone can publish an offer. A maker who never follows through can\'t take your funds, but it can hold them until the refund, for about 6 hours or more.'));
 }
 
 // ---- Wallet ----

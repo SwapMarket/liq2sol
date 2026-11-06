@@ -544,3 +544,39 @@ fn offers_expire_and_are_network_scoped() {
     assert_eq!(read_offer(&event, "mainnet", NOW), None);
     assert!(event.tags.identifier().is_some_and(|d| d.contains(NET)), "addressable per network");
 }
+
+/// The page gives a checkmark by key, so nobody may publish an offer under a key they don't hold.
+#[test]
+fn an_offer_cannot_claim_someone_elses_key() {
+    let (victim, forger) = (Keys::generate(), Keys::generate());
+    let offer = Offer {
+        v: VERSION,
+        network: NET.into(),
+        program_id: PROGRAM.into(),
+        template_version: TEMPLATE_VERSION,
+        directions: vec![Direction::L2S],
+        min_sol_units: Units(10_000),
+        max_sol_units: Units(1_000_000_000),
+        available_l2s: Units(1),
+        available_s2l: Units(1),
+        l2s_prices: tiers(&[(1_000_000_000, 30)]),
+        s2l_prices: tiers(&[(1_000_000_000, 30)]),
+        fee_coin_sats: 30,
+        confirmations: 2,
+        relays: vec![],
+    };
+    let signed = offer_event(&forger, &offer, NOW, 60).unwrap();
+    assert!(read_offer(&signed, NET, NOW).is_some(), "control: the forger's own offer is fine");
+    let mut json: serde_json::Value = serde_json::from_str(&signed.as_json()).unwrap();
+    json["pubkey"] = victim.public_key().to_hex().into();
+    let forged = Event::from_json(json.to_string()).unwrap();
+    assert_eq!(forged.pubkey, victim.public_key());
+    assert!(read_offer(&forged, NET, NOW).is_none(), "signed by another key");
+
+    let real = offer_event(&victim, &offer, NOW, 60).unwrap();
+    let mut json: serde_json::Value = serde_json::from_str(&real.as_json()).unwrap();
+    json["content"] = json["content"].as_str().unwrap().replace("\"bps\":30", "\"bps\":1").into();
+    let changed = Event::from_json(json.to_string()).unwrap();
+    assert_ne!(changed.content, real.content, "the edit took");
+    assert!(read_offer(&changed, NET, NOW).is_none(), "a real signature over other terms");
+}

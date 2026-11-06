@@ -113,6 +113,8 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 Offers show each maker's price, per-swap limits and what it can pay now. A taker can trade any amount inside those limits, not only whole offers. Prices show what the taker pays per unit received, so a worse price is a higher number, such as 1.0030. They show to 4 places
 and sizes to 2, with minimums rounded up and maximums and availability rounded down. Quotes and payments stay exact, because a coin must match to the last unit.
 
+**Vetted makers.** `site/js/vetted.js` lists makers vetted by SwapMarket, by full key and network. Listed makers have a ✓, and "Only vetted by SwapMarket" starts on and is saved in settings. Turning it off shows everyone, with a warning. Vetting limits griefing and doesn't protect funds. Offers are signed, so a checkmark can't be copied without the maker's key. It only filters new orders: swaps in progress and Rescue never consult it.
+
 **Favorites.** A star on a maker keeps it in this browser's settings. Favorites sort first and fill first, even at a worse price, and "Only my favorites" hides everyone else. A fake maker quoting a bargain can't get ahead of them.
 
 When an order is larger than the best offer, `js/plan.js` fills it best price first, across makers and across several swaps with one maker, up to 5 swaps. What the book can't cover is shown before accepting.

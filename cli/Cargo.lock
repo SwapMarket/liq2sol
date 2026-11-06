@@ -2476,6 +2476,7 @@ dependencies = [
  "anchor-spl",
  "liq2sol-chain",
  "liq2sol-swapkey",
+ "rand 0.8.8",
  "serde_json",
  "simplicityhl",
  "solana-client",

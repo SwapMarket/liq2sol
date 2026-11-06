@@ -24,13 +24,13 @@ use liq2sol_swapkey::{
     solana_value, verify_share, Session, SwapOutput, SwapParams,
 };
 use liquid::{
-    build_swap_spend, exact_secret_coin, keypair_from, lbtc, network, published_signature, random32, sign_keypath, usdt,
+    build_issuance, build_swap_spend, exact_secret_coin, keypair_from, lbtc, network, published_signature, random32, sign_keypath, usdt,
     Payment, Res, SecretCoin, Wallet, FEE,
 };
 use liq2sol_chain::esplora::{build_confidential_pay, Esplora};
 use simplicityhl::elements::encode::serialize_hex;
 use simplicityhl::elements::secp256k1_zkp::{Keypair as LiquidKey, Message, PublicKey, Secp256k1, SecretKey};
-use simplicityhl::elements::{Address, BlockHash, OutPoint, Sequence, Transaction};
+use simplicityhl::elements::{Address, AssetId, BlockHash, OutPoint, Sequence, Transaction};
 use sol::{ata, Sol};
 use solana_escrow::state::{Escrow, EscrowState};
 use solana_sdk::signature::{read_keypair_file, write_keypair_file, Keypair};
@@ -375,7 +375,7 @@ fn swap_l2s(net: &Net, w: &Wallets, abort: bool) -> Res<()> {
         Ok((liquid_balance(&net.esplora, &w.maker_liq)?.0 == start_maker.0 + LIQ_AMOUNT).then_some(()))
     })?;
     let (end_taker, end_maker) = (liquid_balance(&net.esplora, &w.taker_liq)?, liquid_balance(&net.esplora, &w.maker_liq)?);
-    println!("\nSWAP l2s OK. TEST units: taker {} -> {}, maker {} -> {}", start_taker.0, end_taker.0, start_maker.0, end_maker.0);
+    println!("\nSWAP l2s OK. USDt units: taker {} -> {}, maker {} -> {}", start_taker.0, end_taker.0, start_maker.0, end_maker.0);
     println!("Solana stand-in received by the taker: {SOL_AMOUNT}");
     Ok(())
 }
@@ -487,6 +487,28 @@ fn wait_spent(esplora: &Esplora, outpoint: &OutPoint) -> Res<()> {
     wait_for("the Liquid spend to be visible", Duration::from_secs(300), || Ok(esplora.spender(outpoint)?.map(|_| ())))
 }
 
+/// Issue a stand-in USDt on Liquid testnet, because the faucet's TEST asset is too scarce for realistic sizes. The issued coin is
+/// explicit, and joins the wallet like a faucet coin. Connecting first makes sure this is Liquid testnet.
+fn issue_usdt(net: &Net, w: &Wallet, units: u64) -> Res<()> {
+    let coins = net.esplora.secret_coins(&w.address(), &w.blinding)?;
+    let coin = coins
+        .into_iter()
+        .filter(|c| c.secrets.asset == lbtc() && c.coin.height.is_some())
+        .max_by_key(|c| c.secrets.value)
+        .ok_or("the wallet has no confirmed L-BTC")?;
+    let (tx, asset) = build_issuance(&coin, w, units, net.genesis)?;
+    println!("issued {units} units of {asset} in {}", net.esplora.broadcast(&tx)?);
+    Ok(())
+}
+
+/// Send the stand-in USDt or L-BTC from a wallet to anyone. Its change, and this payment, are blinded if the address is.
+fn send(net: &Net, w: &Wallet, asset: AssetId, amount: u64, to: &str) -> Res<()> {
+    let address = Address::from_str(to).map_err(|e| format!("bad Liquid address: {e}"))?;
+    let tx = build_confidential_pay(&net.esplora, w, vec![Payment { asset, amount, address }], net.genesis)?;
+    println!("{}", net.esplora.broadcast(&tx)?);
+    Ok(())
+}
+
 fn faucet(address: &str, action: &str) -> Res<String> {
     let url = format!("https://liquidtestnet.com/api/faucet?address={address}&action={action}");
     ureq::get(&url)
@@ -521,8 +543,8 @@ fn run() -> Res<()> {
         }
         ["balances"] => {
             let net = connect()?;
-            println!("taker Liquid (TEST, L-BTC) {:?}", liquid_balance(&net.esplora, &w.taker_liq)?);
-            println!("maker Liquid (TEST, L-BTC) {:?}", liquid_balance(&net.esplora, &w.maker_liq)?);
+            println!("taker Liquid (USDt, L-BTC) {:?}", liquid_balance(&net.esplora, &w.taker_liq)?);
+            println!("maker Liquid (USDt, L-BTC) {:?}", liquid_balance(&net.esplora, &w.maker_liq)?);
             for (name, k) in [("taker", &w.taker_sol), ("maker", &w.maker_sol)] {
                 println!("{name} Solana: {} lamports, {} stand-in units", net.sol.lamports(&k.pubkey())?, net.sol.token_balance(&ata(&k.pubkey()))?);
             }
@@ -534,11 +556,39 @@ fn run() -> Res<()> {
             net.sol.top_up_token(&w.mint_authority, &w.maker_sol.pubkey(), 100 * SOL_AMOUNT)?;
             println!("stand-in mint {} ready", solana_escrow::USDT_MINT);
         }
+        ["coins", role] => {
+            let net = connect()?;
+            let wallet = if *role == "maker" { &w.maker_liq } else { &w.taker_liq };
+            for c in net.esplora.secret_coins(&wallet.address(), &wallet.blinding)? {
+                let hidden = !c.coin.out.asset.is_explicit() && !c.coin.out.value.is_explicit();
+                println!("{} {} confirmed at {:?}, hidden {hidden}, {}:{}", c.secrets.value, c.secrets.asset, c.coin.height, c.coin.outpoint.txid, c.coin.outpoint.vout);
+            }
+        }
+        ["mint", owner, units] => {
+            let net = connect()?;
+            let owner = Pubkey::from_str(owner).map_err(|e| format!("bad Solana address: {e}"))?;
+            let units: u64 = units.parse().map_err(|_| "bad amount")?;
+            net.sol.top_up_token(&w.mint_authority, &owner, units)?;
+            println!("minted {units} stand-in units to {owner}");
+        }
+        ["issue-usdt", role, units] => {
+            let units: u64 = units.parse().map_err(|_| "bad amount")?;
+            issue_usdt(&connect()?, if *role == "maker" { &w.maker_liq } else { &w.taker_liq }, units)?
+        }
+        ["send", role, asset, amount, to] => {
+            let asset = match *asset {
+                "usdt" => usdt(),
+                "lbtc" => lbtc(),
+                other => return Err(format!("unknown asset {other}")),
+            };
+            let amount: u64 = amount.parse().map_err(|_| "bad amount")?;
+            send(&connect()?, if *role == "maker" { &w.maker_liq } else { &w.taker_liq }, asset, amount, to)?
+        }
         ["swap", "l2s"] => swap_l2s(&connect()?, &w, false)?,
         ["swap", "s2l"] => swap_s2l(&connect()?, &w, false)?,
         ["abort", "l2s"] => swap_l2s(&connect()?, &w, true)?,
         ["abort", "s2l"] => swap_s2l(&connect()?, &w, true)?,
-        _ => return Err("usage: addresses | faucet | balances | setup <mint-keypair> | swap l2s|s2l | abort l2s|s2l".into()),
+        _ => return Err("usage: addresses | faucet | balances | coins maker|taker | mint <owner> <units> | issue-usdt maker|taker <units> | send maker|taker usdt|lbtc <units> <address> | setup <mint-keypair> | swap l2s|s2l | abort l2s|s2l".into()),
     }
     Ok(())
 }

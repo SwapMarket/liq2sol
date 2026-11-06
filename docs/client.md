@@ -164,7 +164,7 @@ Per D3:
 **Wallet behaviour is UNVERIFIED and must be tested with real wallets before release:**
 
 - Can Aqua and Green pay an exact L-USDt amount to a confidential taproot address of this form?
-- Do Aqua and the Blockstream wallet pay `lq1p…` taproot addresses of this form? Both have only been seen paying other address forms so far. The Blockstream wallet was seen offering to send 30 sats to an `lq1q…` address, for a 26-sat fee at 0.10 sat/vB (seen by the user, 2026-11-06).
+- A real wallet has paid USDt to a `tlq1p…` taproot address of this form (the user, 2026-11-06). Whether every wallet does is untested. The Blockstream wallet was seen offering to send 30 sats to an `lq1q…` address, for a 26-sat fee at 0.10 sat/vB (seen by the user, 2026-11-06).
 - If the user has no L-BTC, how does Aqua pay fees, and what does that do to a payment to an arbitrary address?
 
 ## 6. Build and release

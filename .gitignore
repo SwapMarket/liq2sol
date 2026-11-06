@@ -4,3 +4,4 @@ pkg/
 .vscode/
 programs/.keys/
 client/site/wasm/
+maker/.testnet/

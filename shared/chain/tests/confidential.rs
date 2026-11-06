@@ -160,6 +160,36 @@ fn a_wallet_with_only_blinded_coins_works_on_a_real_node() {
     mine(1);
     println!("    ok: blinded change can be spent again");
 
+    // Issuing a stand-in from one coin, with its change blinded.
+    let accepts = |tx: &simplicityhl::elements::Transaction| -> Json {
+        let arg = format!("[\"{}\"]", serialize_hex(tx));
+        serde_json::from_str(&node.rpc.call(&["testmempoolaccept", &arg]).unwrap()).unwrap()
+    };
+    let issuer = wallet();
+    fund(&issuer.address().to_string(), 50_000, "bitcoin");
+    let plain_issuer = wallet();
+    fund(&plain_issuer.address().to_unconfidential().to_string(), 50_000, "bitcoin");
+    mine(1);
+    for (name, w) in [("a blinded coin", &issuer), ("an explicit coin", &plain_issuer)] {
+        let coin = chain.secret_coins(&w.address(), &w.blinding).unwrap().remove(0);
+        let (issue, _) = build_issuance(&coin, w, 1_000_000, genesis).unwrap();
+        let verdict = accepts(&issue);
+        println!("    issuing from {name}: {verdict}");
+        assert!(verdict[0]["allowed"].as_bool().unwrap(), "{name}: {verdict}");
+    }
+    println!("    ok: an asset can be issued from a blinded or an explicit coin");
+
+    // A payment using up a whole coin has only one blinded output, which has to balance by itself. A maker's wallet can hit this.
+    let exact = wallet();
+    fund(&exact.address().to_string(), 50_000, "bitcoin");
+    mine(1);
+    let spend_all = Payment { asset: lbtc(), amount: 50_000 - 56, address: theirs.address() };
+    let tx = build_confidential_pay(&chain, &exact, vec![spend_all], genesis).unwrap();
+    assert_eq!(tx.output.len(), 2, "one blinded output, and the fee");
+    let verdict = accepts(&tx);
+    assert!(verdict[0]["allowed"].as_bool().unwrap(), "{verdict}");
+    println!("    ok: a payment with no change, and so one blinded output, is accepted");
+
     // A swap spend's shape, with the fee coin spent whole.
     let tip = chain.tip().unwrap();
     let mine_now = chain.secret_coins(&theirs.address(), &theirs.blinding).unwrap();

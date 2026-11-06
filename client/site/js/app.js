@@ -182,7 +182,13 @@ function walletView() {
     }
   };
   return h('div', { class: 'wallets' },
-    extensionWallets().map((w) => h('button', { class: 'btn quiet', onclick: () => choose(() => connectExtension(w)) }, w.name)),
+    extensionWallets().map((w) => h('button', {
+      class: 'btn quiet',
+      onclick: () => choose(() => connectExtension(w).catch((e) => {
+        console.warn('wallet connect', w.name, e);
+        throw new Error(`${w.name} refused to connect: ${e?.message ?? e}. Check that it is unlocked and has a Solana account, and that no other wallet is taking over this page.`);
+      })),
+    }, w.name)),
     h('button', { class: 'btn quiet', onclick: () => choose(walletConnect) }, 'WalletConnect'));
 }
 

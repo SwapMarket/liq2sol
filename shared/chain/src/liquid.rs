@@ -3,13 +3,14 @@
 
 use std::str::FromStr;
 
-use simplicityhl::elements::confidential::{Asset, AssetBlindingFactor, Value, ValueBlindingFactor};
+use simplicityhl::elements::confidential::{Asset, AssetBlindingFactor, Nonce, Value, ValueBlindingFactor};
+use simplicityhl::elements::issuance::{AssetBlindingNonce, AssetEntropy, ContractHash};
 use simplicityhl::elements::schnorr::{TapTweak, UntweakedKeypair};
 use simplicityhl::elements::secp256k1_zkp::{Keypair, Message, PublicKey, Secp256k1, SecretKey};
 use simplicityhl::elements::sighash::{Prevouts, SighashCache};
 use simplicityhl::elements::{
     Address, AddressParams, AssetId, AssetIssuance, BlockHash, LockTime, OutPoint, SchnorrSighashType, Script,
-    Sequence, Transaction, TxIn, TxInWitness, TxOut, TxOutSecrets, Witness,
+    Sequence, Transaction, TxIn, TxInWitness, TxOut, TxOutSecrets, TxOutWitness, Witness,
 };
 
 /// The network this process works on, chosen once before any address is derived.
@@ -37,8 +38,8 @@ pub fn network() -> &'static NetworkConfig {
 pub const LIQUID_TESTNET_GENESIS: &str = "a771da8e52ee6ad581ed1e9a99825e5b3b7992225534eaa2ae23244fe26ab1c1";
 /// Liquid mainnet. Nothing in this project may run against it.
 pub const LIQUID_MAINNET_GENESIS: &str = "1466275836220db2944ca059a3a10ef6fd2ea684b0688d2c379296888a206003";
-/// The faucet's registered test asset, standing in for L-USDt.
-pub const TEST_ASSET: &str = "38fca2d939696061a8f76d4e6b5eecd54e3b4221c846f24a6b279e79952850a5";
+/// USDt on Liquid testnet, "PEGx USDt Testnet" in the registry, with 8 decimals. Not issued by Tether.
+pub const TEST_ASSET: &str = "b612eb46313a2cd6ebabd8b7a8eed5696e29898b87a43bff41c94f51acef9d73";
 /// L-BTC on Liquid testnet.
 pub const TEST_LBTC: &str = "144c654344aa716d6f3abcc1ca90e5641e4e2a7f633bc09fe3baf64585819a49";
 /// What a fee coin holds by default, all of it paid as the fee of a claim or refund. A maker can change it in its signer config.
@@ -283,6 +284,55 @@ pub fn build_swap_spend(
         output: vec![paid, TxOut::new_fee(fee_coin.secrets.value, lbtc())],
     };
     Ok((tx, vec![coin.coin.out.clone(), fee_coin.coin.out.clone()]))
+}
+
+/// A new asset, issued from one L-BTC coin, for a test network's stand-in. The issued coin is explicit, and the change goes back blinded.
+pub fn build_issuance(
+    coin: &SecretCoin,
+    wallet: &Wallet,
+    units: u64,
+    genesis: BlockHash,
+) -> Res<(Transaction, AssetId)> {
+    const ISSUE_FEE: u64 = 200;
+    let contract = ContractHash::from_byte_array([0; 32]);
+    let asset = AssetId::new_issuance(coin.coin.outpoint, contract);
+    let mut spend = input(coin.coin.outpoint, Sequence::MAX);
+    spend.asset_issuance = AssetIssuance {
+        asset_blinding_nonce: AssetBlindingNonce::from_byte_array([0; 32]),
+        asset_entropy: AssetEntropy::from_byte_array([0; 32]),
+        amount: Value::Explicit(units),
+        inflation_keys: Value::Null,
+    };
+    let change_value = coin.secrets.value.checked_sub(ISSUE_FEE).ok_or("too little L-BTC")?;
+    let address = wallet.address();
+    // The library wants what an input issues counted among the inputs, and each explicit output among the outputs.
+    let minted = TxOutSecrets::new(asset, AssetBlindingFactor::zero(), units, ValueBlindingFactor::zero());
+    let (change, _, _, _) = TxOut::new_last_confidential(
+        &mut rand::rngs::OsRng,
+        &Secp256k1::new(),
+        change_value,
+        lbtc(),
+        address.script_pubkey(),
+        wallet.blinder(),
+        &[coin.secrets, minted],
+        &[&minted],
+    )
+    .map_err(|e| e.to_string())?;
+    let issued = TxOut {
+        asset: Asset::Explicit(asset),
+        value: Value::Explicit(units),
+        nonce: Nonce::Null,
+        script_pubkey: address.script_pubkey(),
+        witness: TxOutWitness::default(),
+    };
+    let mut tx = Transaction {
+        version: 2,
+        lock_time: LockTime::ZERO,
+        input: vec![spend],
+        output: vec![issued, change, TxOut::new_fee(ISSUE_FEE, lbtc())],
+    };
+    sign_keypath(&mut tx, std::slice::from_ref(&coin.coin.out), 0, &wallet.key, genesis)?;
+    Ok((tx, asset))
 }
 
 /// How a swap coin was spent, from its witness. A key-path claim has one item, and a refund has the Simplicity leaf's four.

@@ -326,10 +326,12 @@ async function checkHistory(page) {
   const solana = Number(swap.terms.solana_amount) * 100;
   const want = (swap.direction === 'L2S' ? liquid / solana : solana / liquid).toFixed(4);
   await page.locator('.tab[data-tab="history"]').click();
-  const row = page.locator('.swap-row').first();
+  const row = page.locator('.history-row').first();
+  const titles = (await page.locator('table.history th').allInnerTexts()).map((t) => t.toLowerCase()).join();
+  if (titles !== 'swap,price,maker,status,date,explorers,') throw new Error(`the history's titles: ${titles}`);
   await row.waitFor({ timeout: 5000 });
   const price = await row.locator('.history-price').innerText();
-  if (price !== `Price ${want}`) throw new Error(`the history says ${price}, but the terms come to ${want}`);
+  if (price !== want) throw new Error(`the history says ${price}, but the terms come to ${want}`);
   if ((await row.locator('.history-maker').getAttribute('title')) !== swap.maker) throw new Error('the history has the wrong maker');
   if (!(await row.locator('.history-maker .vetted').count())) throw new Error('a vetted maker without its mark in the history');
   const coinLink = await row.locator('.explorer-coin').getAttribute('href', { timeout: 10000 });
@@ -620,7 +622,11 @@ async function liveBook() {
     if (!(await page.locator('.facts').isVisible())) throw new Error(`no maker takes ${name}`);
     if ((await headers())[2] !== 'your fill') throw new Error(`${name} did not count as an order`);
   }
-  await page.locator('#amount').fill('');
+  if (!(await page.locator('#clear-amount').isVisible())) throw new Error('nothing to clear the amount with');
+  await page.locator('#clear-amount').click();
+  if ((await page.locator('#amount').inputValue()) !== '') throw new Error('the amount was not cleared');
+  if ((await headers())[2] !== 'per swap') throw new Error('clearing the amount did not count as no order');
+  if (await page.locator('#clear-amount').isVisible()) throw new Error('a clear button with nothing to clear');
   lost = await marked();
   if (lost.length) throw new Error(`rebuilt: ${lost}`);
   await checkNoErrors(page);

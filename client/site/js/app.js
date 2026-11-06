@@ -463,6 +463,16 @@ const amountInput = h('input', {
   class: 'amount', inputMode: 'decimal', placeholder: '0', id: 'amount',
   oninput: (e) => { ui.amount = e.target.value; updateForm(); },
 });
+// Empties the amount, and shows only when there's something to empty.
+const clearAmount = h('button', {
+  class: 'clear-amount', id: 'clear-amount', type: 'button', title: 'Clear the amount', 'aria-label': 'Clear the amount', hidden: true,
+  onclick: () => {
+    ui.amount = '';
+    amountInput.value = '';
+    updateForm();
+    amountInput.focus();
+  },
+}, '×');
 const toInput = h('input', {
   class: 'input', id: 'to', placeholder: 'tlq1…',
   oninput: (e) => { ui.to = e.target.value; updateForm(); },
@@ -490,7 +500,7 @@ form.el = h('div', { class: 'card' },
   h('h2', {}, 'Create Atomic Swap'),
   h('p', { class: 'sub' }, 'Trustless and confidential. No server holds anything.'),
   form.links,
-  h('div', { class: 'row' }, form.fromCoin, amountInput),
+  h('div', { class: 'row' }, form.fromCoin, amountInput, clearAmount),
   h('button', { class: 'flip', title: 'Swap direction', 'aria-label': 'Swap direction', onclick: () => { ui.direction = ui.direction === 'L2S' ? 'S2L' : 'L2S'; ui.selected = null; updateForm(); } }, '⇅'),
   h('div', { class: 'row to' }, form.toCoin, form.receive),
   form.address, form.wallet, form.facts, form.unfilled, form.go);
@@ -506,6 +516,7 @@ function updateForm() {
   const ready = !wallet || (filled && (!needsAddress || ui.to.trim()));
   const label = !wallet ? 'Connect a Solana wallet' : !hasAmount ? 'Enter an amount' : !plan.fills.length ? 'No maker fits this amount' : needsAddress && !ui.to.trim() ? 'Enter a Liquid address' : plan.fills.length > 1 ? `Get ${plan.fills.length} firm quotes` : 'Get a firm quote';
 
+  clearAmount.hidden = !ui.amount;
   amountInput.setAttribute('aria-label', `You send, in ${from}`);
   form.receive.setAttribute('aria-label', `You receive, in ${to}`);
   const received = filled ? show(plan.receive) : '';
@@ -942,19 +953,23 @@ function explorerLinks(s) {
 function historyView() {
   const all = Object.values(loadSwaps()).sort((a, b) => b.created_at - a.created_at);
   if (!all.length) return h('div', { class: 'card' }, h('h2', {}, 'History'), h('p', { class: 'sub' }, 'Swaps from this browser appear here.'));
-  return h('div', { class: 'list' }, all.map((s) => {
+  const rows = all.map((s) => {
     const [from, to] = names[s.direction];
-    return h('div', { class: 'swap-row' },
-      h('span', {}, `${show(s.direction === 'L2S' ? BigInt(s.terms.liquid_amount) / 100n : s.terms.solana_amount)} ${from} → ${to}`),
-      h('span', { class: 'history-price', title: `${from} paid for each ${to} received` }, `Price ${swapPrice(s)}`),
-      h('span', { class: 'mono history-maker', title: s.maker }, short(s.maker),
+    return h('tr', { class: 'history-row' },
+      h('td', {}, `${show(s.direction === 'L2S' ? BigInt(s.terms.liquid_amount) / 100n : s.terms.solana_amount)} ${from} → ${to}`),
+      h('td', { class: 'history-price', title: `${from} paid for each ${to} received` }, swapPrice(s)),
+      h('td', { class: 'mono history-maker', title: s.maker }, short(s.maker),
         vettedMaker(NETWORK.name, s.maker) && h('span', { class: 'vetted', title: 'Vetted by SwapMarket', 'aria-label': 'Vetted by SwapMarket' }, ' ✓')),
-      h('span', { class: 'mono' }, s.state),
-      h('span', {}, new Date(s.created_at * 1000).toLocaleString()),
-      explorerLinks(s),
-      h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = s.order ?? s.id; location.hash = '#swap'; render(); } }, 'Open'),
-      FINISHED.includes(s.state) && h('button', { class: 'btn quiet', onclick: () => { removeSwap(s.id); render(); } }, 'Forget'));
-  }));
+      h('td', { class: 'mono' }, s.state),
+      h('td', {}, new Date(s.created_at * 1000).toLocaleString()),
+      h('td', {}, explorerLinks(s)),
+      h('td', { class: 'history-actions' },
+        h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = s.order ?? s.id; location.hash = '#swap'; render(); } }, 'Open'),
+        FINISHED.includes(s.state) && h('button', { class: 'btn quiet', onclick: () => { removeSwap(s.id); render(); } }, 'Forget')));
+  });
+  return h('div', { class: 'list scroll' }, h('table', { class: 'history' },
+    h('thead', {}, h('tr', {}, ['Swap', 'Price', 'Maker', 'Status', 'Date', 'Explorers', ''].map((t) => h('th', {}, t)))),
+    h('tbody', {}, rows)));
 }
 
 // Support material, Boltz-style: copy it, save it, or clear it. It only leaves this browser if the user sends it.

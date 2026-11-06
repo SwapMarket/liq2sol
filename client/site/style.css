@@ -127,9 +127,7 @@ tbody tr.off { opacity: .45; cursor: default; }
 .hero h1 { margin: 0; font-size: clamp(1.9rem, 6vw, 3.2rem); line-height: 1.12; font-weight: 800; background: linear-gradient(90deg, #eac806, #2084f6); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .hero p { margin: 10px 0 0; color: #e8edf1; }
 
-.list { max-width: 720px; margin: 0 auto; }
-.swap-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--card); border: 1px solid rgb(255 255 255 / 10%); border-radius: 12px; padding: 10px 14px; margin-bottom: 8px; font-size: .9rem; }
-.swap-row .btn { width: auto; margin: 0; padding: 6px 14px; font-size: .78rem; }
+.list { max-width: 960px; margin: 0 auto; }
 
 dialog { background: var(--card); color: var(--text); border: 1px solid rgb(255 255 255 / 15%); border-radius: var(--radius); width: min(460px, calc(100vw - 32px)); padding: 16px; }
 dialog::backdrop { background: rgb(0 0 0 / 55%); }
@@ -184,3 +182,9 @@ th:nth-child(2), td.rate { width: 45%; }
 .faucet-steps li { margin: 4px 0; }
 
 .explorer-links { display: inline-flex; flex-wrap: wrap; gap: 0 10px; font-size: .84rem; }
+
+.clear-amount { flex: none; width: 26px; height: 26px; margin-left: 6px; padding: 0; border: 0; border-radius: 50%; background: var(--edge); color: var(--muted); font-size: 1rem; line-height: 1; cursor: pointer; }
+.clear-amount:hover, .clear-amount:focus-visible { color: var(--text); }
+table.history th, table.history td { text-align: left; }
+.history-actions { display: flex; gap: 6px; }
+.history-actions .btn { width: auto; margin: 0; padding: 4px 12px; font-size: .76rem; }

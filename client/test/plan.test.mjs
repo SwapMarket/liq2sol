@@ -1,9 +1,10 @@
 // node --test client/test/plan.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_FILLS, planOrder, receiveFor } from '../site/js/plan.js';
+import { MAX_FILLS, bpsAt, planOrder, receiveFor } from '../site/js/plan.js';
 
-const maker = (name, bps, max, available, min = 10n) => ({ maker: name, bps, min, max, available });
+const flat = (bps, up_to = 1n << 60n) => [{ up_to, bps }];
+const maker = (name, bps, max, available, min = 10n) => ({ maker: name, tiers: flat(bps), min, max, available });
 
 test('one maker that can take it all, at the best price', () => {
   const p = planOrder(1000n, [maker('dear', 100, 5000n, 5000n), maker('cheap', 30, 5000n, 5000n)]);
@@ -34,7 +35,7 @@ test('the fills add up exactly, and nobody is asked for more than they can pay',
     for (const f of p.fills) {
       const m = makers.find((x) => x.maker === f.maker);
       assert.ok(f.send <= m.max && f.send >= m.min && f.receive >= m.min, `${f.maker} ${f.send}`);
-      assert.equal(f.receive, receiveFor(f.send, m.bps));
+      assert.equal(f.receive, receiveFor(f.send, m.tiers[0].bps));
     }
   }
 });
@@ -71,4 +72,29 @@ test('what a maker can pay may be more than one swap’s limit', () => {
   const p = planOrder(170n, [maker('a', 100, 120n, 401n, 1n)], null, 200);
   assert.deepEqual(p.fills.map((f) => f.send), [120n, 50n]);
   assert.equal(p.unfilled, 0n);
+});
+
+test('the price comes from the step covering the fill’s size', () => {
+  const tiers = [{ up_to: 100n, bps: 20 }, { up_to: 1000n, bps: 40 }];
+  assert.equal(bpsAt(tiers, 100n), 20);
+  assert.equal(bpsAt(tiers, 101n), 40);
+  assert.equal(bpsAt(tiers, 1001n), null);
+  const m = { maker: 'a', tiers, min: 10n, max: 1000n, available: 100000n };
+  assert.deepEqual(planOrder(50n, [m]).fills.map((f) => f.bps), [20]);
+  assert.deepEqual(planOrder(500n, [m]).fills.map((f) => f.bps), [40]);
+});
+
+test('makers are compared at the size being filled, not by their best step', () => {
+  const stepped = { maker: 'stepped', tiers: [{ up_to: 100n, bps: 10 }, { up_to: 10000n, bps: 90 }], min: 10n, max: 10000n, available: 100000n };
+  const level = { maker: 'level', tiers: flat(50), min: 10n, max: 10000n, available: 100000n };
+  assert.equal(planOrder(100n, [level, stepped]).fills[0].maker, 'stepped', 'small: its cheap step wins');
+  assert.equal(planOrder(5000n, [stepped, level]).fills[0].maker, 'level', 'large: the level price wins');
+});
+
+test('short of funds, a fill can drop into a cheaper step, and still never pays more than the maker has', () => {
+  const m = { maker: 'a', tiers: [{ up_to: 100n, bps: 10 }, { up_to: 1000n, bps: 90 }], min: 10n, max: 1000n, available: 95n };
+  const p = planOrder(500n, [m]);
+  assert.ok(p.receive <= 95n, `${p.receive}`);
+  for (const f of p.fills) assert.equal(f.bps, bpsAt(m.tiers, f.send));
+  assert.equal(p.fills.reduce((s, f) => s + f.send, 0n) + p.unfilled, 500n);
 });

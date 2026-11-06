@@ -30,6 +30,10 @@ fn envelope(body: Body) -> Envelope {
     Envelope { v: VERSION, id: id(), network: NET.into(), sent_at: NOW, body }
 }
 
+fn flat(bps: u32) -> Vec<PriceTier> {
+    vec![PriceTier { up_to: Units(1_000_000_000), bps }]
+}
+
 fn maker_rules() -> MakerRules {
     MakerRules {
         network: NET.into(),
@@ -37,8 +41,8 @@ fn maker_rules() -> MakerRules {
         max_sol_units: 1_000_000_000,
         available_l2s: 1_000_000_000,
         available_s2l: 1_000_000_000,
-        l2s_bps: 30,
-        s2l_bps: 30,
+        l2s_prices: flat(30),
+        s2l_prices: flat(30),
         quote_secs: 60,
         taker_lock_window: 30,
         l2s_lock_blocks: 300,
@@ -171,6 +175,58 @@ fn a_blinded_claim_fits_in_one_event() {
 }
 
 // ---- Pricing ----
+
+fn tiers(list: &[(u64, u32)]) -> Vec<PriceTier> {
+    list.iter().map(|(up_to, bps)| PriceTier { up_to: Units(*up_to), bps: *bps }).collect()
+}
+
+#[test]
+fn prices_differ_by_size_and_direction() {
+    let rules = MakerRules {
+        l2s_prices: tiers(&[(100_000, 20), (1_000_000, 30), (1_000_000_000, 50)]),
+        s2l_prices: tiers(&[(1_000_000, 40), (1_000_000_000, 70)]),
+        ..maker_rules()
+    };
+    let quote = |direction, amount| {
+        let r = Request { direction, amount_side: AmountSide::Send, amount: Units(amount) };
+        make_quote(&rules, &r, NOW).unwrap().receive.0
+    };
+    assert_eq!(quote(Direction::L2S, 100_000), 99_800, "the top of the first tier");
+    assert_eq!(quote(Direction::L2S, 100_001), 99_700, "one unit over takes the next rate, on the whole swap");
+    assert_eq!(quote(Direction::L2S, 1_000_000), 997_000);
+    assert_eq!(quote(Direction::L2S, 2_000_000), 1_990_000);
+    assert_eq!(quote(Direction::S2L, 100_000), 99_600, "the other direction has its own prices");
+    assert_eq!(quote(Direction::S2L, 2_000_000), 1_986_000);
+}
+
+/// Asking for what to receive lands in the tier for what that costs, so both ways of asking give one price.
+#[test]
+fn a_tier_is_chosen_by_what_the_taker_sends() {
+    let t = tiers(&[(100_000, 20), (1_000_000, 30)]);
+    let recv = |a| Request { direction: Direction::L2S, amount_side: AmountSide::Receive, amount: Units(a) };
+    assert_eq!(bps_for(&t, &recv(99_800)), Some(20));
+    assert_eq!(bps_for(&t, &recv(99_801)), Some(30), "costs more than 100,000 to send");
+    assert_eq!(bps_for(&t, &recv(2_000_000)), None, "above every tier");
+}
+
+#[test]
+fn a_size_above_every_tier_gets_no_quote() {
+    let rules = MakerRules { l2s_prices: tiers(&[(100_000, 20)]), ..maker_rules() };
+    let r = Request { direction: Direction::L2S, amount_side: AmountSide::Send, amount: Units(100_001) };
+    assert_eq!(make_quote(&rules, &r, NOW), Err(Refused::OutOfLimits));
+}
+
+#[test]
+fn unusable_price_lists_are_refused() {
+    assert!(prices_ok(&tiers(&[(10, 30), (20, 40)]), 20));
+    assert!(!prices_ok(&[], 20), "no prices");
+    assert!(!prices_ok(&tiers(&[(10, 30)]), 20), "doesn't reach the maximum");
+    assert!(!prices_ok(&tiers(&[(20, 30), (10, 40), (30, 50)]), 20), "out of order");
+    assert!(!prices_ok(&tiers(&[(20, 30), (20, 40)]), 20), "the same step twice");
+    assert!(!prices_ok(&tiers(&[(20, 10_000)]), 20), "pays nothing");
+    let many: Vec<(u64, u32)> = (1..=17).map(|i| (i, 10)).collect();
+    assert!(!prices_ok(&tiers(&many), 1), "too many steps");
+}
 
 #[test]
 fn prices_round_in_the_makers_favour() {
@@ -439,6 +495,30 @@ fn oversized_events_are_refused_before_any_crypto() {
 }
 
 #[test]
+fn an_offer_with_unusable_prices_is_ignored() {
+    let maker = Keys::generate();
+    let good = Offer {
+        v: VERSION,
+        network: NET.into(),
+        program_id: PROGRAM.into(),
+        template_version: TEMPLATE_VERSION,
+        directions: vec![Direction::L2S],
+        min_sol_units: Units(10_000),
+        max_sol_units: Units(1_000_000_000),
+        available_l2s: Units(1),
+        available_s2l: Units(1),
+        l2s_prices: flat(30),
+        s2l_prices: flat(30),
+        fee_coin_sats: 30,
+        confirmations: 2,
+        relays: vec![],
+    };
+    assert!(read_offer(&offer_event(&maker, &good, NOW, 60).unwrap(), NET, NOW).is_some());
+    let short = Offer { s2l_prices: tiers(&[(5, 30)]), ..good };
+    assert!(read_offer(&offer_event(&maker, &short, NOW, 60).unwrap(), NET, NOW).is_none());
+}
+
+#[test]
 fn offers_expire_and_are_network_scoped() {
     let maker = Keys::generate();
     let offer = Offer {
@@ -451,8 +531,8 @@ fn offers_expire_and_are_network_scoped() {
         max_sol_units: Units(1_000_000_000),
         available_l2s: Units(1_000_000_000),
         available_s2l: Units(1_000_000_000),
-        l2s_bps: 30,
-        s2l_bps: 30,
+        l2s_prices: flat(30),
+        s2l_prices: flat(30),
         fee_coin_sats: 300,
         confirmations: 2,
         relays: vec![],

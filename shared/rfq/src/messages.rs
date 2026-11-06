@@ -49,6 +49,16 @@ pub enum AmountSide {
     Receive,
 }
 
+/// One step of a maker's prices. A swap takes the first tier whose `up_to` covers what the taker sends, in SOL-USDT base units, and
+/// that one rate prices the whole swap. It isn't marginal, so a quote has one exact rate to check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PriceTier {
+    pub up_to: Units,
+    /// The spread, in hundredths of a percent. 30 means the taker receives 99.7% of what it sends, a price of about 1.0030.
+    pub bps: u32,
+}
+
 /// The public offer, in a kind 38401 event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -64,8 +74,9 @@ pub struct Offer {
     /// less than it holds, because this reveals its capacity. It doesn't quote above it.
     pub available_l2s: Units,
     pub available_s2l: Units,
-    pub l2s_bps: u32,
-    pub s2l_bps: u32,
+    /// What this maker charges in each direction, by swap size.
+    pub l2s_prices: Vec<PriceTier>,
+    pub s2l_prices: Vec<PriceTier>,
     pub fee_coin_sats: u64,
     pub confirmations: u32,
     pub relays: Vec<String>,

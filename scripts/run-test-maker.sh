@@ -32,7 +32,7 @@ cat > "$DIR/signer.json" <<EOF
 EOF
 cat > "$DIR/maker.json" <<EOF
 {"db":"$DIR/maker.db","signer_socket":"$DIR/run/signer.sock","pages":"$DIR/pages.log","engine":{$ENGINE},"liquid":{"Esplora":"$PRIMARY"},"second_liquid":{"Esplora":"$SECOND"},"solana_rpc":"$SOLANA","tick_millis":20000,"retry_secs":60,"regtest_assets":null,
- "rfq":{"nostr_key":"$DIR/keys/nostr.key","relays":["wss://relay.primal.net","wss://relay.coinos.pro"],"network":"testnet","min_sol_units":100000,"max_sol_units":25000000,"l2s_bps":30,"s2l_bps":30,"quote_secs":60,"l2s_lock_blocks":300,"s2l_lock_blocks":90,"min_deadline_slots":101400,"offer_every_secs":300,"offer_ttl_secs":1800,"max_requests_per_sender":60,"max_requests_per_window":2000,"window_secs":300,"max_negotiations":500}}
+ "rfq":{"nostr_key":"$DIR/keys/nostr.key","relays":["wss://relay.primal.net","wss://relay.coinos.pro"],"network":"testnet","min_sol_units":100000,"max_sol_units":25000000,"l2s_prices":[{"up_to":"5000000","bps":30},{"up_to":"25000000","bps":40}],"s2l_prices":[{"up_to":"5000000","bps":40},{"up_to":"25000000","bps":50}],"quote_secs":60,"l2s_lock_blocks":300,"s2l_lock_blocks":90,"min_deadline_slots":101400,"offer_every_secs":300,"offer_ttl_secs":1800,"max_requests_per_sender":60,"max_requests_per_window":2000,"window_secs":300,"max_negotiations":500}}
 EOF
 setsid nohup "$DIR/bin/liq2sol-signer" "$DIR/signer.json" >> "$DIR/signer.log" 2>&1 < /dev/null &
 echo $! > "$DIR/signer.pid"

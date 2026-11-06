@@ -56,8 +56,8 @@ pub struct MakerRules {
     /// What the maker can pay right now, less what open swaps are counting on.
     pub available_l2s: u64,
     pub available_s2l: u64,
-    pub l2s_bps: u32,
-    pub s2l_bps: u32,
+    pub l2s_prices: Vec<PriceTier>,
+    pub s2l_prices: Vec<PriceTier>,
     pub quote_secs: u64,
     pub taker_lock_window: u32,
     pub l2s_lock_blocks: u32,
@@ -81,12 +81,29 @@ pub fn price(request: &Request, bps: u32) -> Option<(u64, u64)> {
     Some((u64::try_from(send).ok()?, u64::try_from(receive).ok()?))
 }
 
+pub const MAX_PRICE_TIERS: usize = 16;
+
+/// Whether a list of prices can be used: steps in rising order, each a possible spread, and covering every size up to `max`.
+pub fn prices_ok(tiers: &[PriceTier], max: u64) -> bool {
+    !tiers.is_empty()
+        && tiers.len() <= MAX_PRICE_TIERS
+        && tiers.iter().all(|t| t.bps < 10_000)
+        && tiers.windows(2).all(|w| w[0].up_to < w[1].up_to)
+        && tiers.last().is_some_and(|t| t.up_to.0 >= max)
+}
+
+/// The spread for this request: the first tier covering what the taker would send.
+pub fn bps_for(tiers: &[PriceTier], request: &Request) -> Option<u32> {
+    tiers.iter().find(|t| price(request, t.bps).is_some_and(|(send, _)| send <= t.up_to.0)).map(|t| t.bps)
+}
+
 /// The maker's answer to a request.
 pub fn make_quote(r: &MakerRules, request: &Request, now: u64) -> Result<Quote, Refused> {
-    let bps = match request.direction {
-        Direction::L2S => r.l2s_bps,
-        Direction::S2L => r.s2l_bps,
+    let tiers = match request.direction {
+        Direction::L2S => &r.l2s_prices,
+        Direction::S2L => &r.s2l_prices,
     };
+    let bps = bps_for(tiers, request).ok_or(Refused::OutOfLimits)?;
     let (send, receive) = price(request, bps).ok_or(Refused::OutOfLimits)?;
     if send.max(receive) > r.max_sol_units || send.min(receive) < r.min_sol_units {
         return Err(Refused::OutOfLimits);

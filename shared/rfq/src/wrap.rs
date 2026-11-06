@@ -125,5 +125,7 @@ pub fn read_offer(event: &Event, network: &str, now: u64) -> Option<Offer> {
         return None;
     }
     let offer: Offer = serde_json::from_str(&event.content).ok()?;
-    (offer.v == VERSION && offer.network == network).then_some(offer)
+    let usable = crate::rules::prices_ok(&offer.l2s_prices, offer.max_sol_units.0)
+        && crate::rules::prices_ok(&offer.s2l_prices, offer.max_sol_units.0);
+    (offer.v == VERSION && offer.network == network && usable).then_some(offer)
 }

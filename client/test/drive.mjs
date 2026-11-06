@@ -240,6 +240,10 @@ async function split() {
   await page.locator('#go:not(:disabled)').click();
   await page.locator('#not-atomic').waitFor({ timeout: 30000 });
   await page.screenshot({ path: path.join(shots, 'split-quote.png') });
+  const review = await page.locator('.card .facts').innerText();
+  // 120 units crosses into the maker's dearer step at 150 bps, and 50 stays at 100 bps.
+  if (!review.includes('0.00012 → 0.000118') || !review.includes('0.00005 → 0.000049')) throw new Error(`wrong prices in the review: ${review}`);
+  step('each fill has the price for its size');
   step('the review says these are separate swaps, and that some may refund');
   await page.locator('#accept').click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download').click()]);

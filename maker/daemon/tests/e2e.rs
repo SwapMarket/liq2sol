@@ -1076,8 +1076,12 @@ fn build_world(root: &Path) -> World {
             min_sol_units: 1,
             max_sol_units: RFQ_MAX,
             show_available_up_to: None,
-            l2s_bps: 100,
-            s2l_bps: 100,
+            // Two steps, so the split order below crosses them.
+            l2s_prices: vec![
+                msg::PriceTier { up_to: Units(110), bps: 100 },
+                msg::PriceTier { up_to: Units(RFQ_MAX), bps: 150 },
+            ],
+            s2l_prices: vec![msg::PriceTier { up_to: Units(RFQ_MAX), bps: 100 }],
             quote_secs: QUOTE_SECS,
             l2s_lock_blocks: 300,
             s2l_lock_blocks: 80,

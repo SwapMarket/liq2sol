@@ -35,8 +35,10 @@ pub struct RfqConfig {
     /// The most to admit to in an offer, for a maker who doesn't want to show its full capacity. It also limits what is quoted.
     #[serde(default)]
     pub show_available_up_to: Option<u64>,
-    pub l2s_bps: u32,
-    pub s2l_bps: u32,
+    /// What we charge in each direction, by size. `[{"up_to":"5000000","bps":30},{"up_to":"25000000","bps":40}]`
+    /// charges 30 bps on swaps up to 5 USDT, and 40 above. The last step must reach `max_sol_units`.
+    pub l2s_prices: Vec<PriceTier>,
+    pub s2l_prices: Vec<PriceTier>,
     pub quote_secs: u64,
     pub l2s_lock_blocks: u32,
     pub s2l_lock_blocks: u32,
@@ -96,6 +98,11 @@ pub fn load_keys(path: &std::path::Path) -> Result<Keys, String> {
 
 impl Handler {
     pub fn new(cfg: RfqConfig, maker: &crate::Config) -> Result<Self, String> {
+        if !rules::prices_ok(&cfg.l2s_prices, cfg.max_sol_units)
+            || !rules::prices_ok(&cfg.s2l_prices, cfg.max_sol_units)
+        {
+            return Err("refusing to start: the prices must rise in steps and reach max_sol_units".into());
+        }
         let keys = load_keys(&cfg.nostr_key)?;
         let store = Store::open(&maker.db).map_err(|e| e.to_string())?;
         let chain = crate::source(&maker.liquid);
@@ -147,8 +154,8 @@ impl Handler {
             network: self.cfg.network.clone(),
             min_sol_units: self.cfg.min_sol_units,
             max_sol_units: self.cfg.max_sol_units,
-            l2s_bps: self.cfg.l2s_bps,
-            s2l_bps: self.cfg.s2l_bps,
+            l2s_prices: self.cfg.l2s_prices.clone(),
+            s2l_prices: self.cfg.s2l_prices.clone(),
             quote_secs: self.cfg.quote_secs,
             taker_lock_window: self.engine.l2s_fund_window_blocks,
             l2s_lock_blocks: self.cfg.l2s_lock_blocks,
@@ -169,8 +176,8 @@ impl Handler {
             directions: vec![Direction::L2S, Direction::S2L],
             min_sol_units: Units(self.cfg.min_sol_units),
             max_sol_units: Units(self.cfg.max_sol_units),
-            l2s_bps: self.cfg.l2s_bps,
-            s2l_bps: self.cfg.s2l_bps,
+            l2s_prices: self.cfg.l2s_prices.clone(),
+            s2l_prices: self.cfg.s2l_prices.clone(),
             fee_coin_sats: self.fee_coin_sats,
             confirmations: self.engine.confirmations,
             relays: self.cfg.relays.clone(),

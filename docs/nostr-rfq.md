@@ -55,13 +55,15 @@ Tags: `["d","liq2sol-v2-<network>"]`, `["expiration","<unix>"]`, `["t","liq2sol"
   "max_sol_units": "1000000000",
   "available_l2s": "500000000",
   "available_s2l": "750000000",
-  "l2s_bps": 30,
-  "s2l_bps": 30,
+  "l2s_prices": [{ "up_to": "5000000", "bps": 30 }, { "up_to": "1000000000", "bps": 40 }],
+  "s2l_prices": [{ "up_to": "5000000", "bps": 40 }, { "up_to": "1000000000", "bps": 50 }],
   "fee_coin_sats": 30,
   "confirmations": 2,
   "relays": ["wss://relay.primal.net", "wss://relay.coinos.pro"]
 }
 ```
+
+A maker sets prices per direction and per size. A swap takes the first step whose `up_to` covers what the taker sends, in SOL-USDT base units, and that one rate prices the whole swap. Steps must rise, and the last must reach `max_sol_units`, or the maker won't start and takers ignore the offer. Because a rate applies to a whole swap, a taker could split an order to stay in a cheaper step, up to the client's 5 swaps per order, so a maker should price small steps knowing that.
 
 `available_*` is what the maker can pay now in that direction, in SOL-USDT base units, less what open swaps are counting on. It can exceed `max_sol_units`, which limits each swap, so an order can take several swaps from one maker. A maker doesn't quote above it, so a quote it can't fill never ties up a taker's funds. Publishing it reveals capacity, and `show_available_up_to` in the maker's config shows less.
 

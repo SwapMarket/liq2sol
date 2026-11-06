@@ -2,7 +2,7 @@
 import init, * as W from '../wasm/liq2sol_client_wasm.js';
 import { NETWORK, refuseMainnet } from './config.js';
 import { Esplora, Solana } from './chain.js';
-import { planOrder } from './plan.js';
+import { bpsAt, planOrder } from './plan.js';
 import { Relays } from './relay.js';
 import { Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
@@ -135,15 +135,28 @@ function onEvent(event) {
 // ---- The makers book ----
 const liveOffers = (direction) => [...offers.values()]
   .filter((o) => o.offer.directions.includes(direction))
-  .sort((a, b) => bps(a, direction) - bps(b, direction));
-const bps = (o, direction) => (direction === 'L2S' ? o.offer.l2s_bps : o.offer.s2l_bps);
+  .sort((a, b) => tiersOf(a, direction)[0].bps - tiersOf(b, direction)[0].bps);
+const tiersOf = (o, direction) => (direction === 'L2S' ? o.offer.l2s_prices : o.offer.s2l_prices).map((t) => ({ up_to: BigInt(t.up_to), bps: t.bps }));
 const available = (o, direction) => BigInt(direction === 'L2S' ? o.offer.available_l2s : o.offer.available_s2l);
 
 function currentPlan(send) {
   const makers = liveOffers(ui.direction).map((o) => ({
-    maker: o.maker, bps: bps(o, ui.direction), min: BigInt(o.offer.min_sol_units), max: BigInt(o.offer.max_sol_units), available: available(o, ui.direction),
+    maker: o.maker, tiers: tiersOf(o, ui.direction), min: BigInt(o.offer.min_sol_units), max: BigInt(o.offer.max_sol_units), available: available(o, ui.direction),
   }));
   return planOrder(send ?? 0n, makers, ui.selected, settings.maxSpreadBps ?? NETWORK.maxSpreadBps);
+}
+
+// The price at this order's size, or the best step if there is no order yet. Hovering shows the whole ladder.
+function priceCell(o, direction, send, fills) {
+  const tiers = tiersOf(o, direction);
+  const ladder = tiers.map((t) => `up to ${size(sizeDown(t.up_to))}: ${price(t.bps)}`).join('\n');
+  if (fills.length) {
+    const rates = [...new Set(fills.map((f) => price(f.bps)))];
+    return h('td', { title: ladder }, rates.join(' / '));
+  }
+  const at = send && send > 0n ? bpsAt(tiers, send) : null;
+  if (at !== null) return h('td', { title: ladder }, price(at));
+  return h('td', { title: ladder }, `${tiers.length > 1 ? 'from ' : ''}${price(tiers[0].bps)}`);
 }
 
 function bookView(send) {
@@ -156,7 +169,7 @@ function bookView(send) {
       onclick: () => { ui.selected = ui.selected === o.maker ? null : o.maker; render(); },
     },
     h('td', { class: 'mono' }, short(o.maker)),
-    h('td', {}, price(bps(o, ui.direction))),
+    priceCell(o, ui.direction, send, mine),
     h('td', {}, `${size(sizeUp(o.offer.min_sol_units))} – ${size(sizeDown(o.offer.max_sol_units))}`),
     h('td', {}, size(sizeDown(available(o, ui.direction)))),
     h('td', {}, mine.length ? size(sizeUp(mine.reduce((sum, f) => sum + f.send, 0n) - 1n)) : '–'));

@@ -55,12 +55,20 @@ function serve(handler) {
   });
 }
 
+let loseBroadcastReply = false;
 const shim = await serve(async (req, res) => {
   let body = '';
   for await (const chunk of req) body += chunk;
   res.setHeader('access-control-allow-origin', '*');
   try {
-    res.end(await esplora(new URL(req.url, 'http://x').pathname.replace(/^\/[ab]/, ''), req.method, body));
+    const reply = await esplora(new URL(req.url, 'http://x').pathname.replace(/^\/[ab]/, ''), req.method, body);
+    // The transaction went out, and the page never hears so.
+    if (req.method === 'POST' && loseBroadcastReply) {
+      loseBroadcastReply = false;
+      req.socket.destroy();
+      return;
+    }
+    res.end(reply);
   } catch (e) {
     res.statusCode = 400;
     res.end(String(e.stderr ?? e.message));
@@ -122,7 +130,7 @@ const shots = mkdtempSync(path.join(env.SHOTS_DIR ?? tmpdir(), 'client-'));
 console.log(`    screenshots in ${shots}`);
 
 async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = null) {
-  const context = await browser.newContext({ acceptDownloads: true, viewport });
+  const context = await browser.newContext({ acceptDownloads: true, viewport, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -286,12 +294,37 @@ async function split() {
   await page.context().close();
 }
 
+// The history shows what the swap really cost and who it was with, from the agreed terms.
+async function checkHistory(page) {
+  const swap = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps')))[0]);
+  const liquid = Number(swap.terms.liquid_amount);
+  const solana = Number(swap.terms.solana_amount) * 100;
+  const want = (swap.direction === 'L2S' ? liquid / solana : solana / liquid).toFixed(4);
+  await page.locator('.tab[data-tab="history"]').click();
+  const row = page.locator('.swap-row').first();
+  await row.waitFor({ timeout: 5000 });
+  const price = await row.locator('.history-price').innerText();
+  if (price !== `Price ${want}`) throw new Error(`the history says ${price}, but the terms come to ${want}`);
+  if ((await row.locator('.history-maker').getAttribute('title')) !== swap.maker) throw new Error('the history has the wrong maker');
+  if (!(await row.locator('.history-maker .vetted').count())) throw new Error('a vetted maker without its mark in the history');
+  await page.locator('.tab[data-tab="swap"]').click();
+  step('the history shows the price and the maker');
+}
+
 async function l2s() {
   const page = await newPage();
   await startSwap(page, false);
   await page.locator('.pay-address').waitFor();
   await page.screenshot({ path: path.join(shots, 'pay.png') });
   const address = await page.locator('.pay-address').innerText();
+  for (const [cls, name] of [['.pay-amount', 'Amount'], ['.pay-address', 'Address']]) {
+    await page.locator(cls).click();
+    await page.locator('#toast', { hasText: `${name} copied` }).waitFor({ timeout: 2000 });
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    const shown = await page.locator(cls).innerText();
+    if (cls === '.pay-address' ? copied !== shown : !(shown.startsWith(`${copied} `) && /^\d+\.\d{8}$/.test(copied))) throw new Error(`${shown} copied ${copied}`);
+  }
+  step('clicking the amount or the address copies it, with a notification');
   await pay(address, amountSats(env.AMOUNT), env.USDT);
   step(`paid ${env.AMOUNT} from the node's wallet to the address the page derived`);
   await waitState(page, 'ready_claim');
@@ -319,6 +352,7 @@ async function l2s() {
   await checkLogs(page);
   step('the log has the swap’s steps, and none of its secrets');
   await reportSwaps(page);
+  await checkHistory(page);
   await checkNoErrors(page);
   await page.context().close();
 }
@@ -331,9 +365,11 @@ async function s2l() {
   await page.screenshot({ path: path.join(shots, 'lock.png') });
   await page.locator('.lock').click();
   step('locked on Solana');
+  loseBroadcastReply = true;
   await waitState(page, 'done');
+  if (loseBroadcastReply) throw new Error('the claim was never published through the page');
   await page.screenshot({ path: path.join(shots, 's2l-done.png') });
-  step('the page signed with the maker, and its claim confirmed on Liquid');
+  step('the page signed with the maker, and its claim confirmed on Liquid, even with the reply to its broadcast lost');
   const swap = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps')))[0]);
   const tx = JSON.parse(await cli('getrawtransaction', swap.claim_txid, '1'));
   const coinInput = tx.vin[0].txinwitness;
@@ -376,7 +412,11 @@ async function rescue() {
   await new Promise((r) => setTimeout(r, 3000));
   const back = await walletCli('getnewaddress');
   await fresh.locator('.refund-to').fill(back);
+  loseBroadcastReply = true;
   await fresh.locator('.refund').click();
+  await fresh.locator('.swap-card[data-state="refunding"], .swap-card[data-state="refunded"]').waitFor({ timeout: 30000 });
+  if (loseBroadcastReply) throw new Error('the refund was never published through the page');
+  step('a refund still goes through with the reply to its broadcast lost');
   await waitState(fresh, 'refunded');
   const got = await receivedAt(back);
   if (got !== Number(swap.terms.liquid_amount)) throw new Error(`the refund paid ${got} units`);
@@ -548,7 +588,34 @@ async function walletStays() {
   step('the wallet reconnects silently after a reload, unless refused or disconnected');
 }
 
+// The wallet comes up short, as the Solana endpoint reports it, so no quote should even be asked for.
+async function s2lBalance() {
+  for (const [method, empty, want] of [
+    ['getAccountInfo', { value: null }, /holds 0 SOL-USDT, and this order needs/],
+    ['getBalance', { value: 0 }, /needs a little SOL to pay for each lock/],
+  ]) {
+    const page = await newPage();
+    await page.route((url) => url.href.startsWith(env.SOLANA_RPC), async (route) => {
+      const body = route.request().postDataJSON();
+      if (body?.method !== method) return route.fallback();
+      return route.fulfill({ json: { jsonrpc: '2.0', id: body.id, result: { context: { slot: 1 }, ...empty } } });
+    });
+    await page.getByRole('button', { name: 'Test Wallet' }).click();
+    await page.locator('.flip').click();
+    await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
+    await page.locator('#amount').fill(env.AMOUNT);
+    await page.locator('#to').fill('tlq1x');
+    await page.locator('#go:not(:disabled)').click();
+    await page.locator('#banner:not([hidden])', { hasText: want }).waitFor({ timeout: 10000 });
+    await page.locator('#go').waitFor({ timeout: 3000 });
+    if (await page.locator('#accept').count()) throw new Error('quoted an order the wallet can\'t pay');
+    await page.context().close();
+  }
+  step('S to L stops before a quote when the wallet is short of SOL-USDT or SOL');
+}
+
 async function look() {
+  await s2lBalance();
   await walletStays();
   await pageLoading();
   await walletConnectWait();

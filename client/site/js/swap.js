@@ -27,6 +27,9 @@ export function deriveSwap(s) {
   return s;
 }
 
+// Elements' refusals of a transaction it already has, in a block or in its mempool.
+const ALREADY_SENT = /already in block chain|already.*mempool|txn-already/i;
+
 export class Engine {
   constructor({ esplora, solana, secondSolana, getWallet, relays, onChange, allowOneEndpoint, feeCoinSats }) {
     Object.assign(this, { esplora, solana, secondSolana, getWallet, relays, onChange, allowOneEndpoint, feeCoinSats });
@@ -286,20 +289,19 @@ export class Engine {
 
   // Published means the maker can read the secret, so keep sending until it confirms, or the maker could take both.
   async tickClaimed(s) {
-    if (!s.claim_txid) {
-      try {
-        s.claim_txid = await this.esplora[0].broadcast(s.claim_tx);
-      } catch (e) {
-        s.status = `Still trying to publish the claim: ${e.message.slice(0, 120)}`;
-        return;
-      }
-    }
+    // From the transaction, not the reply: a lost reply would otherwise leave this waiting on a claim that has already confirmed.
+    s.claim_txid ??= W.tx_id(s.claim_tx);
     const status = await this.esplora[0].status(s.claim_txid).catch(() => null);
     if (status?.confirmed) {
       s.state = 'done';
       s.status = 'You were paid on Liquid.';
-    } else {
-      await this.esplora[0].broadcast(s.claim_tx).catch(() => {});
+      return;
+    }
+    try {
+      await this.esplora[0].broadcast(s.claim_tx);
+      s.status = 'Claim published, waiting for a confirmation.';
+    } catch (e) {
+      if (!ALREADY_SENT.test(e.message)) s.status = `Still trying to publish the claim: ${e.message.slice(0, 120)}`;
     }
   }
 
@@ -338,7 +340,9 @@ export class Engine {
       swap: swapArgs(s), taker_sk: s.secrets.taker_sk, coin_tx: coin.hex, coin_vout: coin.vout,
       fee_tx: await this.esplora[0].txHex(fee.txid), fee_vout: fee.vout, to_address: toAddress, genesis: NETWORK.genesis,
     }));
-    const txid = await this.esplora[0].broadcast(hex);
+    const txid = W.tx_id(hex);
+    // Sent earlier with the reply lost: the transaction is out there, so carry on and watch it.
+    await this.esplora[0].broadcast(hex).catch((e) => { if (!ALREADY_SENT.test(e.message)) throw e; });
     this.set(s, { refund_tx: hex, refund_txid: txid, state: 'refunding', status: 'Refund sent, waiting for a confirmation.' });
   }
 

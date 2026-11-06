@@ -117,6 +117,10 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **Reconnecting.** The page remembers which wallet was used, and reconnects it after a reload without a prompt: Wallet Standard's `silent` connect, or a stored WalletConnect session. A wallet that refuses leaves the buttons in place, and "disconnect" forgets it. Whether each real wallet honours `silent` is **UNVERIFIED**.
 
+**History.** Each swap shows its amount, its price from the agreed terms, and its maker, with the vetted mark if listed.
+
+**Before a quote.** L→S checks the wallet has SOL for each claim. S→L checks it has the SOL-USDT for the order and SOL for each lock. Both stop before asking any maker.
+
 **Send Min and Max.** Buttons above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
 
 **Vetted makers.** `site/js/vetted.js` lists makers vetted by SwapMarket, by full key and network. Listed makers have a ✓, and "Only vetted by SwapMarket" starts on and is saved in settings. Turning it off shows everyone, with a warning. Vetting limits griefing and doesn't protect funds. Offers are signed, so a checkmark can't be copied without the maker's key. It only filters new orders: swaps in progress and Rescue never consult it.

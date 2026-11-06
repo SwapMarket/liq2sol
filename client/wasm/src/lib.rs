@@ -502,6 +502,12 @@ pub fn unwrap_message(sk: &str, event: &str, network: &str, now: u64) -> Result<
     .to_string())
 }
 
+/// A Liquid transaction's id, which doesn't depend on hearing back from whoever it was sent to.
+#[wasm_bindgen]
+pub fn tx_id(hex: &str) -> Result<String, String> {
+    Ok(tx(hex)?.txid().to_string())
+}
+
 /// A maker's offer, with its author, or `null` if it is unsigned, expired or for another network.
 #[wasm_bindgen]
 pub fn read_offer(event: &str, network: &str, now: u64) -> Result<String, String> {

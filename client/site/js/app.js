@@ -537,6 +537,14 @@ async function startQuote() {
     if (direction === 'L2S' && await solana.lamports(wallet.address) < NETWORK.minSolLamports * BigInt(plan.fills.length)) {
       throw new Error('This wallet needs a little SOL to pay for each claim, or a swap could not finish. Nothing has been sent.');
     }
+    if (direction === 'S2L') {
+      const needed = send - plan.unfilled;
+      const holds = await solana.tokenBalance(W.token_account(wallet.address, NETWORK.mint));
+      if (holds < needed) throw new Error(`This wallet holds ${show(holds)} SOL-USDT, and this order needs ${show(needed)}. Nothing has been sent.`);
+      if (await solana.lamports(wallet.address) < NETWORK.minSolLamports * BigInt(plan.fills.length)) {
+        throw new Error('This wallet needs a little SOL to pay for each lock, or a swap could not start. Nothing has been sent.');
+      }
+    }
     ui.quote = { status: plan.fills.length > 1 ? `Asking ${plan.fills.length} times for a firm price…` : 'Asking the maker for a firm price…' };
     render();
     const settled = await Promise.allSettled(plan.fills.map((f) => quoteFill(f, direction)));
@@ -658,6 +666,35 @@ function recoveryView(swaps) {
     h('label', { class: 'field' }, h('span', {}, 'Then choose the file you saved, to confirm it is intact. The next step stays hidden until you do.'), pick));
 }
 
+function toast(text) {
+  let el = $('toast');
+  if (!el) {
+    el = h('div', { id: 'toast', role: 'status', 'aria-live': 'polite' });
+    document.body.append(el);
+  }
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { el.hidden = true; }, 2500);
+}
+
+// A value to pay. It copies just the value, without the asset's name.
+function copyable(cls, shown, value, name) {
+  return h('button', {
+    class: `addr copy ${cls}`,
+    type: 'button',
+    title: `Copy the ${name.toLowerCase()}`,
+    onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(value);
+        toast(`${name} copied`);
+      } catch (e) {
+        fail(new Error(`Could not copy the ${name.toLowerCase()}, so please copy it by hand.`));
+      }
+    },
+  }, shown);
+}
+
 async function qrView(text) {
   const { qrcode } = await import('../vendor/qrcode.js');
   const qr = qrcode(0, 'M');
@@ -698,8 +735,8 @@ function swapBody(s) {
       qrView(s.info.address).then((qr) => box.append(qr)).catch(() => {});
       return [
         h('p', { class: 'note' }, `Send exactly this amount of ${from}, once, from any Liquid wallet:`),
-        h('div', { class: 'addr pay-amount' }, `${liquidUnits(s.terms.liquid_amount)} ${from}`),
-        h('div', { class: 'addr pay-address' }, s.info.address),
+        copyable('pay-amount', `${liquidUnits(s.terms.liquid_amount)} ${from}`, liquidUnits(s.terms.liquid_amount), 'Amount'),
+        copyable('pay-address', s.info.address, s.info.address, 'Address'),
         box,
         s.wrong_coin && h('p', { class: 'warn' }, 'A coin of the wrong asset or amount reached this address. Nobody will act on it, and you can get it back with a refund after the lock height.'),
         h('p', { class: 'note' }, 'The amount stays hidden on-chain only if your wallet pays from blinded coins.'),
@@ -808,6 +845,13 @@ function rescueView() {
     h('label', { class: 'field' }, h('span', {}, 'Your recovery file'), pick));
 }
 
+// What this swap's agreed amounts come to per unit received. Liquid amounts have two more decimals than Solana's.
+function swapPrice(s) {
+  const liquid = BigInt(s.terms.liquid_amount);
+  const solana = BigInt(s.terms.solana_amount) * 100n;
+  return effectivePrice([s.direction === 'L2S' ? { send: liquid, receive: solana } : { send: solana, receive: liquid }]).toFixed(4);
+}
+
 function historyView() {
   const all = Object.values(loadSwaps()).sort((a, b) => b.created_at - a.created_at);
   if (!all.length) return h('div', { class: 'card' }, h('h2', {}, 'History'), h('p', { class: 'sub' }, 'Swaps from this browser appear here.'));
@@ -815,6 +859,9 @@ function historyView() {
     const [from, to] = names[s.direction];
     return h('div', { class: 'swap-row' },
       h('span', {}, `${show(s.direction === 'L2S' ? BigInt(s.terms.liquid_amount) / 100n : s.terms.solana_amount)} ${from} → ${to}`),
+      h('span', { class: 'history-price', title: `${from} paid for each ${to} received` }, `Price ${swapPrice(s)}`),
+      h('span', { class: 'mono history-maker', title: s.maker }, short(s.maker),
+        vettedMaker(NETWORK.name, s.maker) && h('span', { class: 'vetted', title: 'Vetted by SwapMarket', 'aria-label': 'Vetted by SwapMarket' }, ' ✓')),
       h('span', { class: 'mono' }, s.state),
       h('span', {}, new Date(s.created_at * 1000).toLocaleString()),
       h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = s.order ?? s.id; location.hash = '#swap'; render(); } }, 'Open'),

@@ -5,6 +5,7 @@
 export const VETTED_MAKERS = {
   testnet: [
     { key: 'de5ca52f51bc239c35d4e51344e5b9f0d375349b81bad250ffb8c4079a2cd4c7', name: 'SwapMarket test maker' },
+    { key: 'fb14836a5f084c36c2ec88f07c6016400ed23422b1fc5b77c0973df2e0207c84', name: 'SwapMarket VPS maker' },
   ],
 };
 

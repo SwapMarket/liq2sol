@@ -235,7 +235,7 @@ function bookCells(o, direction, send, fills) {
 const book = {
   rows: new Map(),
   title: h('h3'),
-  headers: ['Maker', 'Price', 'Per swap', 'Max'].map((t) => h('th', {}, t)),
+  headers: ['Maker', 'Price', 'Per swap'].map((t) => h('th', {}, t)),
   body: h('tbody'),
   empty: h('div', { class: 'empty' }),
   onlyVetted: h('input', { type: 'checkbox', id: 'only-vetted', onchange: (e) => setOnlyVetted(e.target.checked) }),
@@ -254,12 +254,12 @@ book.el = h('div', { class: 'book' }, book.title,
 function newBookRow(maker) {
   const star = h('button', { class: 'star', onclick: (e) => { e.stopPropagation(); toggleFavorite(maker); } });
   const vetted = vettedMaker(NETWORK.name, maker);
-  const row = { star, rate: h('td', { class: 'rate' }), size: h('td'), pays: h('td') };
+  const row = { star, rate: h('td', { class: 'rate' }), size: h('td') };
   row.el = h('tr', { onclick: () => { ui.selected = ui.selected === maker ? null : maker; updateForm(); } },
     h('td', { class: 'mono', title: maker },
       h('div', { class: 'maker-cell' }, star, h('span', {}, short(maker)),
         vetted && h('span', { class: 'vetted', title: `Vetted by SwapMarket: ${vetted.name}`, 'aria-label': 'Vetted by SwapMarket' }, '✓'))),
-    row.rate, row.size, row.pays);
+    row.rate, row.size);
   return row;
 }
 
@@ -282,7 +282,6 @@ function updateBook(send) {
   setText(book.headers[2], ordered ? 'Your fill' : 'Per swap', ordered
     ? `How much of your order goes to this maker, in ${from}`
     : `The smallest and largest single swap, in ${from} and ${to} alike`);
-  setText(book.headers[3], 'Max', `How much ${to} this maker can pay you right now`);
 
   const seen = new Set();
   list.forEach((o, at) => {
@@ -293,7 +292,6 @@ function updateBook(send) {
     const cells = bookCells(o, direction, send, mine);
     setText(row.rate, cells.rate, cells.ladder);
     setText(row.size, cells.size);
-    setText(row.pays, size(sizeDown(available(o, direction))));
     row.el.classList.toggle('on', mine.length > 0);
     const on = fav.has(o.maker);
     setText(row.star, on ? '★' : '☆', on ? 'Remove from favorites' : 'Add to favorites');

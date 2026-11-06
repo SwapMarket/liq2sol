@@ -114,7 +114,7 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 Offers show each maker's price, per-swap limits and what it can pay now. A taker can trade any amount inside those limits, not only whole offers. Prices show what the taker pays per unit received, so a worse price is a higher number, such as 1.0030. They show to 4 places
 and sizes to 2, with minimums rounded up and maximums and availability rounded down. Quotes and payments stay exact, because a coin must match to the last unit.
 
-**The book's columns.** Maker, price with a line for each size step, per-swap range and Max, which is what the maker can pay now. Once an order is typed in, the price is what that order would really pay and "Per swap" becomes "Your fill", the part of the order going to that maker. The form and book stay on the page and change only the cells that differ.
+**The book's columns.** Maker, price with a line for each size step, and per-swap range. What a maker can pay isn't shown, but limits fills and Send Max. Once an order is typed in, the price is what that order would really pay and "Per swap" becomes "Your fill", the part of the order going to that maker. The form and book stay on the page and change only the cells that differ.
 
 **Reconnecting.** The page remembers which wallet was used, and reconnects it after a reload without a prompt: Wallet Standard's `silent` connect, or a stored WalletConnect session. A wallet that refuses leaves the buttons in place, and "disconnect" forgets it. Whether each real wallet honours `silent` is **UNVERIFIED**.
 

@@ -116,7 +116,8 @@ tbody tr.off { opacity: .45; cursor: default; }
 .send-limit:hover, .send-limit:focus-visible { color: var(--primary); }
 .send-links[hidden] { display: none; }
 .vetted { display: inline-flex; align-items: center; line-height: 1; color: var(--ok); font-weight: 700; }
-.book-filters { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 16px; margin-top: 8px; }
+.book-filters { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 16px; margin-top: 8px; }
+.book-filters .check { align-items: center; }
 .mono { font-family: ui-monospace, "Noto Mono", Menlo, monospace; }
 .empty { padding: 18px; text-align: center; color: var(--muted); font-size: .9rem; }
 
@@ -174,4 +175,5 @@ footer p { margin: 4px 0; }
 #toast[hidden] { display: none; }
 
 td.rate { white-space: pre-line; }
+th:nth-child(2), td.rate { width: 45%; }
 .open-wallet, .open-wc { text-align: center; text-decoration: none; box-sizing: border-box; }

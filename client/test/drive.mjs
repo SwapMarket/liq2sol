@@ -567,7 +567,7 @@ async function liveBook() {
   await row.waitFor({ timeout: 30000 });
   const headers = async () => (await page.locator('thead th').allInnerTexts()).map((t) => t.toLowerCase());
   const cells = async () => row.locator('td').allInnerTexts();
-  if ((await headers()).join() !== 'maker,price,per swap,max') throw new Error(`columns: ${await headers()}`);
+  if ((await headers()).join() !== 'maker,price,per swap') throw new Error(`columns: ${await headers()}`);
   const quoted = await cells();
   const steps = quoted[1].split('\n');
   if (!quoted[2].includes('–') || steps.length < 2 || !steps.every((t) => /^≤[\d,.]+: \d\.\d{4}$/.test(t))) throw new Error(`before an order: ${quoted}`);
@@ -580,7 +580,7 @@ async function liveBook() {
   await page.locator('#amount').pressSequentially(env.AMOUNT);
   if ((await page.locator('#amount').inputValue()) !== env.AMOUNT) throw new Error('typing was lost');
   if (!(await page.locator('#amount').evaluate((e) => e === document.activeElement))) throw new Error('typing lost focus');
-  if ((await headers()).join() !== 'maker,price,your fill,max') throw new Error(`columns with an order: ${await headers()}`);
+  if ((await headers()).join() !== 'maker,price,your fill') throw new Error(`columns with an order: ${await headers()}`);
   const ordered = await cells();
   const average = await page.locator('.facts dd').nth(1).innerText();
   if (ordered[1] !== average) throw new Error(`the row's price ${ordered[1]} isn't the order's ${average}`);

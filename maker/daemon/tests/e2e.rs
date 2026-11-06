@@ -1490,6 +1490,14 @@ fn rfq_attacks(w: &mut World) -> Res<()> {
     let answer = again.answer(Duration::from_secs(10))?.ok_or("no answer")?;
     check(matches!(answer.envelope.body, Body::RfqReject(_)), "a reused lock point is declined")?;
 
+    // An amount it won't quote gets a refusal, so the taker needn't wait for a timeout.
+    let mut too_big = RawTaker::new(w)?;
+    let mut over_limit = rfq_request(msg::Direction::L2S);
+    over_limit.amount = Units(RFQ_MAX * 2);
+    too_big.send(Body::RfqRequest(over_limit))?;
+    let answer = too_big.answer(Duration::from_secs(10))?.ok_or("no answer to an amount over the limit")?;
+    check(matches!(answer.envelope.body, Body::RfqReject(_)), "an amount over the limit is declined out loud")?;
+
     // A taker's message types from a taker are ignored.
     let mut odd = RawTaker::new(w)?;
     odd.send(Body::RfqQuote(msg::Quote { send: Units(1), receive: Units(1), quote_expiry: 0, taker_lock_window: 0 }))?;

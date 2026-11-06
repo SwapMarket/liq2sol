@@ -11,7 +11,8 @@ crate-type = ["cdylib", "lib"]
 name = "solana_escrow"
 
 [features]
-default = []
+# Explorers label instructions from Anchor's log line. Everything else about a swap on Solana stays public.
+default = ["no-log-ix-name"]
 # Selects the real USDT mint. Never enabled for devnet or test builds.
 mainnet = []
 cpi = ["no-entrypoint"]

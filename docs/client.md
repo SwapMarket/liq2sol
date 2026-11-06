@@ -82,6 +82,7 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 
 | Option | Reaches | Needs the relay? |
 |---|---|---|
+| **Wallet's own browser** | On a phone with no injected wallet, links open the page inside Phantom or Solflare. Trust joins them on mainnet. **UNVERIFIED** on a real device. | Yes |
 | **WalletConnect** | Phone wallets by QR code. Trust Wallet lists only Solana mainnet in [Reown's registry](https://explorer-api.walletconnect.com/v3/wallets?search=trust) (checked 2026-11-06), so a devnet build's session should be refused; it can only apply to a mainnet build. **UNVERIFIED** on a real device. `sol2base` documents that Phantom isn't reachable this way. | Yes |
 | **Extension wallets** | Phantom, Solflare, Backpack and others, through the Wallet Standard. The older injected objects need a Solana library's transaction type, so they aren't supported. | No |
 
@@ -113,13 +114,15 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 Offers show each maker's price, per-swap limits and what it can pay now. A taker can trade any amount inside those limits, not only whole offers. Prices show what the taker pays per unit received, so a worse price is a higher number, such as 1.0030. They show to 4 places
 and sizes to 2, with minimums rounded up and maximums and availability rounded down. Quotes and payments stay exact, because a coin must match to the last unit.
 
-**The book's columns.** Maker, price, per-swap range and Max, which is what the maker can pay now. Once an order is typed in, the price is what that order would really pay and "Per swap" becomes "Your fill", the part of the order going to that maker. The form and book stay on the page and change only the cells that differ.
+**The book's columns.** Maker, price with a line for each size step, per-swap range and Max, which is what the maker can pay now. Once an order is typed in, the price is what that order would really pay and "Per swap" becomes "Your fill", the part of the order going to that maker. The form and book stay on the page and change only the cells that differ.
 
 **Reconnecting.** The page remembers which wallet was used, and reconnects it after a reload without a prompt: Wallet Standard's `silent` connect, or a stored WalletConnect session. A wallet that refuses leaves the buttons in place, and "disconnect" forgets it. Whether each real wallet honours `silent` is **UNVERIFIED**.
 
 **History.** Each swap shows its amount, its price from the agreed terms, and its maker, with the vetted mark if listed.
 
 **Before a quote.** L→S checks the wallet has SOL for each claim. S→L checks it has the SOL-USDT for the order and SOL for each lock. Both stop before asking any maker.
+
+**Restoring from a file.** The file is saved before a swap starts, so it can't say how far the swap got. A restored swap reads both chains first: payment history on Liquid, and the lock's account and history on Solana. Until that succeeds, no step that spends is offered. A browser that already knows the swap keeps its own record.
 
 **Send Min and Max.** Buttons above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
 

@@ -30,6 +30,8 @@ export function deriveSwap(s) {
 // Elements' refusals of a transaction it already has, in a block or in its mempool.
 const ALREADY_SENT = /already in block chain|already.*mempool|txn-already/i;
 
+const FINISHED_EARLIER = 'This swap already finished, so there is nothing left to do here.';
+
 export class Engine {
   constructor({ esplora, solana, secondSolana, getWallet, relays, onChange, allowOneEndpoint, feeCoinSats }) {
     Object.assign(this, { esplora, solana, secondSolana, getWallet, relays, onChange, allowOneEndpoint, feeCoinSats });
@@ -84,6 +86,38 @@ export class Engine {
     }
     const second = this.secondSolana();
     return this.checkEscrow(await second.escrow(s.escrow_address), s, await second.slot());
+  }
+
+  // ---- A swap picked up from its recovery file ----
+
+  // The file is saved before anything happens, so it says nothing about how far the swap got. Only the chains can, and until
+  // they have, no step that spends is offered: paying or locking again on a finished swap could lose the money.
+  async tickRestored(s, tip) {
+    try {
+      this.set(s, { status: '', ...(await (s.direction === 'L2S' ? this.restoredL2S(s, tip) : this.restoredS2L(s, tip))) });
+    } catch (e) {
+      this.set(s, { status: `Can't read this swap's history yet, so nothing is offered: ${e.message.slice(0, 120)}` });
+    }
+  }
+
+  async restoredL2S(s, tip) {
+    const escrow = await this.solana.escrow(s.escrow_address, 'confirmed');
+    if (escrow?.state === 'Claimed') return { state: 'done', status: 'You were paid on Solana. The maker can now collect the Liquid coin.' };
+    if (!(await this.esplora[0].history(s.info.plain_address)).length) {
+      return { state: tip > s.terms.lock_height - 200 ? 'expired' : 'fund' };
+    }
+    if ((await this.esplora[0].utxos(s.info.plain_address)).length) return { state: 'await_maker' };
+    return { state: 'done', status: FINISHED_EARLIER };
+  }
+
+  async restoredS2L(s, tip) {
+    const escrow = await this.solana.escrow(s.escrow_address, 'confirmed');
+    if (escrow?.state === 'Claimed') return { state: 'done', status: FINISHED_EARLIER };
+    if (escrow?.state === 'Refunded') return { state: 'refunded' };
+    if (escrow) return { state: 'await_maker' };
+    // A settled lock can be closed, so no account doesn't mean no lock. Its history does.
+    if ((await this.solana.signatures(s.escrow_address)).length) return { state: 'done', status: FINISHED_EARLIER };
+    return { state: tip > s.terms.h_accept + 15 ? 'expired' : 'lock' };
   }
 
   // ---- L to S ----
@@ -198,6 +232,10 @@ export class Engine {
       if (escrow?.state === 'Refunded') s.state = 'refunded';
     }
     if (escrow?.state === 'Refunded' && !s.claim_tx) s.state = 'refunded';
+    if (escrow?.state === 'Claimed' && !s.claim_tx) {
+      s.state = 'done';
+      s.status = FINISHED_EARLIER;
+    }
     if (s.claim_tx) await this.tickClaimed(s);
     else if (['await_maker', 'signing'].includes(s.state)) {
       const pastClaim = tip >= s.terms.lock_height - NETWORK.claimCutoffBlocks;
@@ -365,7 +403,8 @@ export class Engine {
   async tick(s) {
     if (FINISHED.includes(s.state) || s.state === 'recovery') return;
     const tip = await this.esplora[0].tip();
-    if (s.direction === 'L2S') await this.tickL2S(s, tip);
+    if (s.state === 'restored') await this.tickRestored(s, tip);
+    else if (s.direction === 'L2S') await this.tickL2S(s, tip);
     else await this.tickS2L(s, tip);
   }
 }

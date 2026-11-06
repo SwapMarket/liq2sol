@@ -44,6 +44,19 @@ async function esplora(pathname, method, body) {
     const info = JSON.parse(await cli('getrawtransaction', x[1], '1'));
     return JSON.stringify({ confirmed: (info.confirmations ?? 0) > 0 });
   }
+  if ((x = m(/^\/address\/([^/]+)\/txs$/))) {
+    const tip = Number(await cli('getblockcount'));
+    for (; scannedTo <= tip; scannedTo++) {
+      const block = JSON.parse(await cli('getblock', await cli('getblockhash', String(scannedTo)), '2'));
+      for (const t of block.tx) {
+        for (const o of t.vout) {
+          const a = o.scriptPubKey?.address;
+          if (a) txsByAddress.set(a, [...(txsByAddress.get(a) ?? []), { txid: t.txid }]);
+        }
+      }
+    }
+    return JSON.stringify(txsByAddress.get(x[1]) ?? []);
+  }
   if (pathname === '/tx' && method === 'POST') return cli('sendrawtransaction', body);
   throw new Error(`no such path ${pathname}`);
 }
@@ -56,6 +69,8 @@ function serve(handler) {
 }
 
 let loseBroadcastReply = false;
+const txsByAddress = new Map();
+let scannedTo = 0;
 const shim = await serve(async (req, res) => {
   let body = '';
   for await (const chunk of req) body += chunk;
@@ -129,8 +144,8 @@ const browser = await chromium.launch({ executablePath: executable, args: ['--no
 const shots = mkdtempSync(path.join(env.SHOTS_DIR ?? tmpdir(), 'client-'));
 console.log(`    screenshots in ${shots}`);
 
-async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = null) {
-  const context = await browser.newContext({ acceptDownloads: true, viewport, permissions: ['clipboard-read', 'clipboard-write'] });
+async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = null, phone = false) {
+  const context = await browser.newContext({ acceptDownloads: true, viewport, permissions: ['clipboard-read', 'clipboard-write'], ...(phone ? { hasTouch: true, isMobile: true } : {}) });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -143,7 +158,7 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
     signature.copy(tx, 1);
     return tx.toString('hex');
   });
-  await page.addInitScript((address) => {
+  if (!phone) await page.addInitScript((address) => {
     const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
     const bytes = (h) => Uint8Array.from(h.match(/../g), (x) => parseInt(x, 16));
     const account = { address, publicKey: new Uint8Array(32), chains: ['solana:devnet'], features: [] };
@@ -311,9 +326,57 @@ async function checkHistory(page) {
   step('the history shows the price and the maker');
 }
 
+// A browser with only the file, on a swap that is over. It must never offer to pay or lock, whatever the chains are slow to say.
+async function restoredPage(file, beforeLoad = null) {
+  const page = await newPage(undefined, beforeLoad);
+  await page.goto(`http://127.0.0.1:${site.port}/#rescue`);
+  await page.locator('#rescue-file').focus();
+  await page.locator('#rescue-file').setInputFiles(file);
+  await page.locator('.swap-card').waitFor({ timeout: 10000 });
+  return page;
+}
+
+const noSpendStep = async (page) => {
+  if (await page.locator('.pay-address').count() || await page.locator('.lock').count()) throw new Error('a finished swap offered to pay or lock again');
+};
+
+async function checkFinishedRestore(file) {
+  const page = await restoredPage(file);
+  await page.locator('.swap-card[data-state="done"]').waitFor({ timeout: 90000 });
+  await noSpendStep(page);
+  await page.context().close();
+}
+
+// The lock's account can be closed once settled, so the page has to go by its history. Solana's answers are replaced to show that.
+async function checkClosedLock(file) {
+  const answering = (results) => (p) => p.route((url) => url.href.startsWith(env.SOLANA_RPC), async (route) => {
+    const body = route.request().postDataJSON();
+    const isEscrow = body?.method === 'getAccountInfo' && body.params[1]?.encoding === 'base64';
+    const answer = isEscrow ? { context: { slot: 1 }, value: null } : results[body?.method];
+    if (answer === undefined) return route.fallback();
+    if (answer === 'down') return route.fulfill({ status: 500, body: 'down' });
+    return route.fulfill({ json: { jsonrpc: '2.0', id: body.id, result: answer } });
+  });
+
+  const closed = await restoredPage(file, answering({ getSignaturesForAddress: [{ signature: 'x' }] }));
+  await closed.locator('.swap-card[data-state="done"]').waitFor({ timeout: 30000 });
+  await noSpendStep(closed);
+  await closed.context().close();
+
+  const blind = await restoredPage(file, answering({ getSignaturesForAddress: 'down' }));
+  await blind.locator('.swap-card[data-state="restored"] .status', { hasText: "Can't read" }).waitFor({ timeout: 30000 });
+  await noSpendStep(blind);
+  await blind.context().close();
+
+  const never = await restoredPage(file, answering({ getSignaturesForAddress: [] }));
+  await never.locator('.swap-card[data-state="lock"], .swap-card[data-state="expired"]').waitFor({ timeout: 30000 });
+  await never.context().close();
+  step('with its lock closed, the page goes by the lock\'s history, and offers nothing while it can\'t read it');
+}
+
 async function l2s() {
   const page = await newPage();
-  await startSwap(page, false);
+  const file = await startSwap(page, false);
   await page.locator('.pay-address').waitFor();
   await page.screenshot({ path: path.join(shots, 'pay.png') });
   const address = await page.locator('.pay-address').innerText();
@@ -353,6 +416,8 @@ async function l2s() {
   step('the log has the swap’s steps, and none of its secrets');
   await reportSwaps(page);
   await checkHistory(page);
+  await checkFinishedRestore(file);
+  step('restoring a finished swap from its file shows it finished, and never offers to pay again');
   await checkNoErrors(page);
   await page.context().close();
 }
@@ -360,7 +425,7 @@ async function l2s() {
 async function s2l() {
   const page = await newPage();
   const to = await walletCli('getnewaddress');
-  await startSwap(page, true, to);
+  const file = await startSwap(page, true, to);
   await page.locator('.lock').waitFor();
   await page.screenshot({ path: path.join(shots, 'lock.png') });
   await page.locator('.lock').click();
@@ -380,6 +445,9 @@ async function s2l() {
   const got = await receivedAt(to);
   if (got !== Number(swap.terms.liquid_amount)) throw new Error(`received ${got} units, expected ${swap.terms.liquid_amount}`);
   step('the wallet unblinded exactly the agreed amount at the address it gave');
+  await checkFinishedRestore(file);
+  step('restoring a finished swap from its file shows it finished, and never offers to lock again');
+  await checkClosedLock(file);
   await reportSwaps(page);
   await checkNoErrors(page);
   await page.context().close();
@@ -490,7 +558,8 @@ async function liveBook() {
   const cells = async () => row.locator('td').allInnerTexts();
   if ((await headers()).join() !== 'maker,price,per swap,max') throw new Error(`columns: ${await headers()}`);
   const quoted = await cells();
-  if (!quoted[2].includes('–') || !/^(from )?\d\.\d{4}$/.test(quoted[1])) throw new Error(`before an order: ${quoted}`);
+  const steps = quoted[1].split('\n');
+  if (!quoted[2].includes('–') || steps.length < 2 || !steps.every((t) => /^≤[\d,.]+: \d\.\d{4}$/.test(t))) throw new Error(`before an order: ${quoted}`);
   const mark = () => page.evaluate(() => {
     for (const s of ['.card', '.book', 'tbody tr', 'tbody tr td:nth-child(2)', '#amount', '#go']) document.querySelector(s).dataset.mark = '1';
   });
@@ -614,7 +683,24 @@ async function s2lBalance() {
   step('S to L stops before a quote when the wallet is short of SOL-USDT or SOL');
 }
 
+async function phoneWallets() {
+  const page = await newPage({ width: 400, height: 800 }, null, true);
+  const links = page.locator('.open-wallet');
+  await links.first().waitFor({ timeout: 15000 });
+  const hrefs = await links.evaluateAll((all) => all.map((a) => a.href));
+  const here = encodeURIComponent(page.url());
+  if (hrefs.length !== 2 || !hrefs[0].startsWith(`https://phantom.app/ul/browse/${here}`) || !hrefs[1].startsWith(`https://solflare.com/ul/v1/browse/${here}`)) throw new Error(`the links: ${hrefs}`);
+  await page.context().close();
+
+  const desktop = await newPage();
+  await desktop.getByRole('button', { name: 'Test Wallet' }).waitFor({ timeout: 15000 });
+  if (await desktop.locator('.open-wallet').count()) throw new Error('phone links on a computer');
+  await desktop.context().close();
+  step('a phone with no wallet gets links to open the page in a wallet\'s browser');
+}
+
 async function look() {
+  await phoneWallets();
   await s2lBalance();
   await walletStays();
   await pageLoading();

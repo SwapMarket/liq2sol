@@ -9,7 +9,7 @@ import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap }
 import { captureConsole, clearLogs, log, logsCount, logsText } from './logs.js';
 import { makeRecovery, offerDownload, readRecovery } from './recovery.js';
 import { vettedMaker } from './vetted.js';
-import { connectExtension, connectWalletConnect, extensionWallets, restoreWalletConnect } from './wallet.js';
+import { connectExtension, connectWalletConnect, extensionWallets, openInWallets, restoreWalletConnect } from './wallet.js';
 
 const OFFER_KIND = 38401;
 const WRAP_KIND = 21059;
@@ -225,7 +225,7 @@ function bookCells(o, direction, send, fills) {
   }
   if (send && send > 0n) return { rate: price(bpsAt(tiers, send < max ? send : max) ?? tiers[0].bps), ladder, size: '–' };
   return {
-    rate: `${tiers.length > 1 ? 'from ' : ''}${price(tiers[0].bps)}`,
+    rate: tiers.length > 1 ? tiers.map((t) => `≤${size(sizeDown(t.up_to))}: ${price(t.bps)}`).join('\n') : price(tiers[0].bps),
     ladder,
     size: `${size(sizeUp(o.offer.min_sol_units))} – ${size(sizeDown(o.offer.max_sol_units))}`,
   };
@@ -254,7 +254,7 @@ book.el = h('div', { class: 'book' }, book.title,
 function newBookRow(maker) {
   const star = h('button', { class: 'star', onclick: (e) => { e.stopPropagation(); toggleFavorite(maker); } });
   const vetted = vettedMaker(NETWORK.name, maker);
-  const row = { star, rate: h('td'), size: h('td'), pays: h('td') };
+  const row = { star, rate: h('td', { class: 'rate' }), size: h('td'), pays: h('td') };
   row.el = h('tr', { onclick: () => { ui.selected = ui.selected === maker ? null : maker; updateForm(); } },
     h('td', { class: 'mono', title: maker },
       h('div', { class: 'maker-cell' }, star, h('span', {}, short(maker)),
@@ -340,7 +340,12 @@ function walletView() {
       fail(e);
     }
   };
+  // A phone has no extensions, and can't scan its own screen. A wallet's own browser gives the page a wallet to talk to.
+  const here = encodeURIComponent(location.href);
+  const links = matchMedia('(pointer: coarse)').matches && !extensionWallets().length ? openInWallets(here, encodeURIComponent(location.origin)) : [];
   return h('div', { class: 'wallets' },
+    links.length > 0 && h('p', { class: 'note open-in' }, `On a phone, open this page in your wallet’s browser, on ${NETWORK.walletNetwork}:`),
+    links.map(({ name, href }) => h('a', { class: 'btn quiet open-wallet', href }, `Open in ${name}`)),
     extensionWallets().map((w) => h('button', {
       class: 'btn quiet',
       onclick: () => choose(() => connectExtension(w).catch((e) => {
@@ -401,6 +406,8 @@ async function walletConnect() {
       box.removeAttribute('role');
       box.removeAttribute('aria-label');
       box.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2, scalable: true });
+      // The same request for a wallet on this device, which can't scan its own screen.
+      if (matchMedia('(pointer: coarse)').matches) box.after(h('a', { class: 'btn quiet open-wc', href: uri }, 'Open in a wallet on this phone'));
     });
   } finally {
     dialog.close();
@@ -485,9 +492,9 @@ function updateForm() {
 }
 
 
-function waitFor(n, pred, ms) {
+function waitFor(n, pred, ms, what) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('The maker did not answer in time.')), ms);
+    const timer = setTimeout(() => reject(new Error(`The maker did not answer in time, while asking for ${what}. Nothing has been sent, so you can try again.`)), ms);
     n.onMessage = (got) => {
       if (got.sender !== n.maker || got.id !== n.id) return;
       if (got.body.type === 'rfq-reject') {
@@ -516,7 +523,7 @@ async function quoteFill(fill, direction) {
   relays.subscribe(`talk-${nostr.public.slice(0, 12)}`, { kinds: [WRAP_KIND], '#p': [nostr.public], since: now() - 300 });
   await new Promise((r) => setTimeout(r, 300));
   const request = { direction, amount_side: 'send', amount: fill.send.toString() };
-  const answered = waitFor(n, (g) => g.body.type === 'rfq-quote', 30000);
+  const answered = waitFor(n, (g) => g.body.type === 'rfq-quote', 30000, 'a price');
   sendTo(n, 'rfq-request', request);
   const got = await answered;
   const problem = W.quote_problem(spreadLimit(), JSON.stringify(request), JSON.stringify(got.body.body), BigInt(now()));
@@ -587,7 +594,7 @@ function quoteView() {
 async function acceptFill(f, q, order, tip) {
   const { n } = f;
   const secrets = JSON.parse(W.new_swap_secrets());
-  const answered = waitFor(n, (g) => g.body.type === 'rfq-terms', 30000);
+  const answered = waitFor(n, (g) => g.body.type === 'rfq-terms', 30000, 'the final terms');
   const rumor = sendTo(n, 'rfq-accept', {
     quote_event: f.rumor, lock_point: secrets.lock_point, taker_key: secrets.taker_key, blinding_key: secrets.blinding_key, taker_solana: q.owner,
   });
@@ -730,6 +737,8 @@ function refundLiquidView(s) {
 function swapBody(s) {
   const [from, to] = names[s.direction];
   switch (s.state) {
+    case 'restored':
+      return h('p', { class: 'status spin' }, s.status || 'Checking the chains to see how far this swap got…');
     case 'fund': {
       const box = h('div', {});
       qrView(s.info.address).then((qr) => box.append(qr)).catch(() => {});
@@ -825,11 +834,13 @@ function rescueView() {
       try {
         const swaps = await readRecovery(await e.target.files[0].text());
         for (const raw of swaps) {
+          ui.openOrder = raw.order ?? raw.id;
+          // This browser's own record knows more than the file, which was saved before the swap began.
+          if (loadSwaps()[raw.id]) continue;
           const s = deriveSwap(raw);
-          if (s.state === 'recovery') s.state = s.direction === 'L2S' ? 'fund' : 'lock';
+          s.state = 'restored';
           saveSwap(s);
           watch(s);
-          ui.openOrder = s.order ?? s.id;
         }
         location.hash = '#swap';
         e.target.blur();

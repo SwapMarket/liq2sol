@@ -18,6 +18,10 @@ export const NETWORK = {
   relays: ['wss://relay.primal.net', 'wss://relay.coinos.pro'],
   // Reown's project id is public by nature, because a static page can't hide it. It is shared with sol2base and eth2base.
   walletConnectProject: 'c001d9e3d0c6308a5ce7e5932d40064a',
+  walletNetwork: 'devnet',
+  // Trust belongs here on mainnet. Reown's registry lists only Solana mainnet for it, so a devnet build can't use it.
+  openInWallets: ['Phantom', 'Solflare'],
+  walletConnectHint: 'This build needs Solana devnet: Phantom and Solflare list it, and Trust Wallet lists only mainnet.',
   pollMs: 15000,
   liquidConfirmations: 2,
   // docs/protocol.md section 3.

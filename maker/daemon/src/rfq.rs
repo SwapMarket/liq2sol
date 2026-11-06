@@ -237,7 +237,11 @@ impl Handler {
             return None;
         }
         let rules = self.rules();
-        let quote = rules::make_quote(&rules, &request, now).ok()?;
+        // Say so, or the taker can only time out and can't tell a refusal from a maker that is gone.
+        let Ok(quote) = rules::make_quote(&rules, &request, now) else {
+            let body = Body::RfqReject(Reject { reason: "this maker can't quote that amount right now".into() });
+            return self.reply(sender, id, body, now).ok().map(|(event, _)| event);
+        };
         let (event, quote_rumor_id) = self.reply(sender, id, Body::RfqQuote(quote.clone()), now).ok()?;
         self.negotiations.insert(
             id.to_string(),

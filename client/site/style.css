@@ -172,3 +172,8 @@ footer p { margin: 4px 0; }
 .copy::after { content: "⧉"; float: right; margin-left: 8px; color: var(--dim); }
 #toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 10; padding: 8px 16px; border-radius: 12px; background: var(--ok-bg); color: #d3f5d3; font-size: .9rem; box-shadow: 0 4px 16px rgb(0 0 0 / 40%); }
 #toast[hidden] { display: none; }
+
+td.rate { white-space: pre-line; }
+.open-in { flex-basis: 100%; margin: 0 2px; }
+.open-wallet, .open-wc { text-align: center; text-decoration: none; box-sizing: border-box; }
+.wallets .open-wallet { flex: 1 1 45%; margin: 0; }

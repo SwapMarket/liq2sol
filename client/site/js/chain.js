@@ -21,6 +21,7 @@ export class Esplora {
 
   tip = async () => Number(await http(`${this.base}/blocks/tip/height`));
   genesis = () => http(`${this.base}/block-height/0`).then((h) => h.trim());
+  history = async (address) => JSON.parse(await http(`${this.base}/address/${address}/txs`));
   utxos = async (address) => JSON.parse(await http(`${this.base}/address/${address}/utxo`));
 
   // Fixed by its id, so one copy is enough, and it costs a public API only once.
@@ -67,6 +68,7 @@ export class Solana {
 
   genesis = () => this.rpc('getGenesisHash');
   slot = () => this.rpc('getSlot', [{ commitment: 'finalized' }]);
+  signatures = async (key) => this.rpc('getSignaturesForAddress', [key, { limit: 1, commitment: 'confirmed' }]);
   lamports = async (key) => BigInt((await this.rpc('getBalance', [key, { commitment: 'confirmed' }])).value);
 
   async tokenBalance(account) {

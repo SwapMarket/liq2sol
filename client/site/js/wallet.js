@@ -35,6 +35,15 @@ export async function connectExtension(w, silent = false) {
   };
 }
 
+// Links that open a page in a wallet app's own browser, from each wallet's docs by way of sol2base.
+const OPEN_IN = {
+  Phantom: (url, ref) => `https://phantom.app/ul/browse/${url}?ref=${ref}`,
+  Solflare: (url, ref) => `https://solflare.com/ul/v1/browse/${url}?ref=${ref}`,
+  Trust: (url) => `https://link.trustwallet.com/open_url?coin_id=501&url=${url}`,
+};
+
+export const openInWallets = (url, ref) => NETWORK.openInWallets.map((name) => ({ name, href: OPEN_IN[name](url, ref) }));
+
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
 function base58Decode(s) {
@@ -96,7 +105,10 @@ export async function connectWalletConnect(projectId, showUri) {
     requiredNamespaces: { solana: { chains: [NETWORK.walletConnectChain], methods: ['solana_signTransaction'], events: [] } },
   });
   if (uri) showUri(uri);
-  return walletConnectWallet(client, await approval());
+  const session = await approval().catch((e) => {
+    throw new Error(`Your wallet refused the connection. ${NETWORK.walletConnectHint} (${e?.message ?? e})`);
+  });
+  return walletConnectWallet(client, session);
 }
 
 // A session the phone approved earlier and hasn't ended, with no QR code. Null if there is none.

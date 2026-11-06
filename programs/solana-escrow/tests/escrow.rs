@@ -95,6 +95,7 @@ struct Fx {
     initiator: Keypair,
     recipient: Keypair,
     other: Keypair,
+    last_logs: Vec<String>,
 }
 
 fn token_data(mint: Pubkey, owner: Pubkey, amount: u64, frozen: bool) -> Vec<u8> {
@@ -127,6 +128,7 @@ impl Fx {
             initiator: Keypair::new(),
             recipient: Keypair::new(),
             other: Keypair::new(),
+            last_logs: Vec::new(),
         };
         fx.warp(START_SLOT);
         for k in [
@@ -200,10 +202,11 @@ impl Fx {
             &self.svm.latest_blockhash(),
         );
         let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(message), signers).unwrap();
-        self.svm
-            .send_transaction(tx)
-            .map(|m| m.compute_units_consumed)
-            .map_err(Box::new)
+        let result = self.svm.send_transaction(tx);
+        if let Ok(m) = &result {
+            self.last_logs = m.logs.clone();
+        }
+        result.map(|m| m.compute_units_consumed).map_err(Box::new)
     }
 
     /// A short-leg style lock by the default initiator.
@@ -1340,4 +1343,15 @@ fn a_garbage_point_can_only_refund() {
     fx.warp(DEADLINE);
     fx.refund(escrow).unwrap();
     assert_eq!(fx.balance(ata(&fx.initiator.pubkey())), START_BALANCE);
+}
+
+/// Explorers label a transaction from this log line, so the program shouldn't write it.
+#[test]
+fn instruction_names_stay_out_of_the_logs() {
+    let mut fx = Fx::new();
+    fx.lock(true);
+    assert!(!fx.last_logs.is_empty(), "control: the logs were captured");
+    for name in ["Lock", "Claim", "Refund", "Extend"] {
+        assert!(!fx.last_logs.iter().any(|l| l.contains(&format!("Instruction: {name}"))), "{name} in {:#?}", fx.last_logs);
+    }
 }

@@ -42,22 +42,28 @@ but it can fail a swap that would otherwise have gone through.
 Addressable by kind, pubkey and `d` tag. Republished at least every 10 minutes, with a NIP-40 `expiration` tag no more
 than 30 minutes ahead, so a dead maker disappears from clients.
 
-Tags: `["d","liq2sol-v1-<network>"]`, `["expiration","<unix>"]`, `["t","liq2sol"]`.
+Tags: `["d","liq2sol-v2-<network>"]`, `["expiration","<unix>"]`, `["t","liq2sol"]`.
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "network": "testnet",
   "program_id": "<base58, Solana escrow program>",
   "template_version": 2,
   "directions": ["L2S", "S2L"],
-  "limits": { "min_sol_units": "10000000", "max_sol_units": "1000000000" },
-  "indicative": { "L2S_bps": 30, "S2L_bps": 30 },
-  "fee_coin_sats": 300,
-  "confs": { "default": 2, "above_sol_units": "1000000000", "above": 10 },
-  "relays": ["wss://..."]
+  "min_sol_units": "10000000",
+  "max_sol_units": "1000000000",
+  "available_l2s": "500000000",
+  "available_s2l": "750000000",
+  "l2s_bps": 30,
+  "s2l_bps": 30,
+  "fee_coin_sats": 30,
+  "confirmations": 2,
+  "relays": ["wss://relay.primal.net", "wss://relay.coinos.pro"]
 }
 ```
+
+`available_*` is what the maker can pay now in that direction, in SOL-USDT base units, less what open swaps are counting on. It can exceed `max_sol_units`, which limits each swap, so an order can take several swaps from one maker. A maker doesn't quote above it, so a quote it can't fill never ties up a taker's funds. Publishing it reveals capacity, and `show_available_up_to` in the maker's config shows less.
 
 All amounts are decimal strings, in order to survive JSON parsers that lose precision on large integers. An offer isn't
 binding. It can't be, as no on-chain state backs it.
@@ -156,6 +162,8 @@ Verified: `nostr-tools` 2.25.5 opens our wrappers and checks every layer. `relay
 and `38401`, and complete swaps have run through it. Other relays are **UNVERIFIED**.
 
 **The outer timestamp of a kind `21059` wrapper is the real time.** NIP-59's randomized timestamps suit stored messages, but
+Whole swaps in both directions, with their roughly 20 KB signing messages, have run through `relay.coinos.pro` and `relay.primal.net`, the client's two defaults.
+
 `relay.coinos.pro` refuses ephemeral events older than a few seconds (5 passed, 30 was refused), and it sees when they arrive
 anyway. The seal inside keeps a randomized timestamp. So a sender whose clock is off by more than that can't get through, and a
 client should warn when its clock looks wrong. If relay support is poor, the fallback is the regular gift wrap

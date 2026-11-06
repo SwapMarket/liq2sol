@@ -1,0 +1,76 @@
+# Builds the taker client from source, tests it, and publishes it to https://swapmarket.github.io/liq2sol/.
+# Actions are pinned to exact commits, and the site's JavaScript has no build step, so what is served is what is in this repo,
+# plus WebAssembly built here from the locked dependencies.
+name: Deploy the client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - client/**
+      - contracts/swapkey/**
+      - shared/chain/**
+      - shared/rfq/**
+      - programs/solana-escrow/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: 1.99.1
+  WASM_PACK_VERSION: 0.13.1
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_VERSION"
+          cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
+          sudo apt-get update -q
+          sudo apt-get install -yq clang llvm
+      - name: Test how orders fill, and that swap records are never overwritten
+        run: node --test client/test/plan.test.mjs client/test/store.test.mjs
+      - name: Test Solana transactions against the native builders
+        working-directory: client/wasm
+        run: cargo test --locked
+      - name: Build the WebAssembly
+        run: client/build.sh
+      - name: Stamp the build
+        run: sed -i "s/__BUILD__/${GITHUB_SHA::12}/" client/site/index.html
+      - name: Record what is being published
+        working-directory: client/site
+        run: |
+          find . -type f | sort | xargs sha256sum > /tmp/SHA256SUMS
+          cp /tmp/SHA256SUMS SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: client/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

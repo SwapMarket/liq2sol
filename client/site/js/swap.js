@@ -64,7 +64,7 @@ export class Engine {
     if (e.amount !== s.terms.solana_amount) return 'the amount is wrong';
     if (e.lock_point !== s.secrets.lock_point_64) return 'it locks to another point';
     if (e.recipient !== s.solana_owner) return 'it pays someone else';
-    if (e.deadline_slot - slot < NETWORK.claimCutoffSlots) return 'it is too close to its deadline to reveal the secret';
+    if (e.deadline_slot - slot < NETWORK.claimCutoffSlots) return 'it is too close to its deadline to safely reveal the secret';
     return '';
   }
 
@@ -100,6 +100,7 @@ export class Engine {
     }
     if (s.state === 'await_maker' || s.state === 'ready_claim') {
       const problem = escrow ? this.checkEscrow(escrow, s, slot) : 'no escrow yet';
+      s.escrow_problem = escrow && problem ? problem : '';
       if (!problem) {
         s.escrow = escrow;
         s.state = 'ready_claim';
@@ -125,6 +126,8 @@ export class Engine {
   async answerPendingOffer(s) {
     const offer = this.pendingOffers.get(s.id);
     if (!offer || !s.coin || s.answered === offer.nonce) return;
+    // Marked first, because a tick and an arriving message can both get here while this waits on the network.
+    s.answered = offer.nonce;
     const claim = offer.tx;
     const args = {
       swap: swapArgs(s), taker_sk: s.secrets.taker_sk, lock_point: s.secrets.lock_point,
@@ -134,7 +137,6 @@ export class Engine {
     // A nonce is made and used inside this call, so answering twice only wastes a little work.
     const answer = JSON.parse(W.answer_claim_offer(JSON.stringify(args)));
     this.send(s, { type: 'claim-answer', body: { lock_point: s.secrets.lock_point, nonce: answer.nonce, share: answer.share } });
-    s.answered = offer.nonce;
     this.save(s);
   }
 
@@ -325,8 +327,8 @@ export class Engine {
     if (!coins.length) throw new Error('There is no coin at the swap address to refund.');
     const coin = coins[0];
     const fees = await this.esplora[0].readCoins(s.info.plain_fee_address, s.info.fee_script, s.secrets.blinding_key);
-    const fee = fees.find((c) => c.is_lbtc && c.confirmations >= 1);
-    if (!fee) throw new Error('Send a small amount of L-BTC to the fee address first, and wait for a confirmation.');
+    const fee = fees.find((c) => c.is_lbtc && c.confirmations >= 1 && BigInt(c.amount) >= BigInt(NETWORK.refundFeeCoinSats));
+    if (!fee) throw new Error(`Send at least ${NETWORK.refundFeeCoinSats} sats of L-BTC to the fee address first, and wait for a confirmation.`);
     const hex = W.build_refund(JSON.stringify({
       swap: swapArgs(s), taker_sk: s.secrets.taker_sk, coin_tx: coin.hex, coin_vout: coin.vout,
       fee_tx: await this.esplora[0].txHex(fee.txid), fee_vout: fee.vout, to_address: toAddress, genesis: NETWORK.genesis,

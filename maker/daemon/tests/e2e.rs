@@ -55,6 +55,8 @@ const FLOOD_LIMIT: usize = 12;
 /// What the RFQ taker asks to send, at the 1% spread above.
 const RFQ_SEND: u64 = 100;
 const RFQ_RECEIVE: u64 = 99;
+/// Each maker's limit per swap. Above this, the page splits an order.
+const RFQ_MAX: u64 = 120;
 type Res<T> = Result<T, String>;
 
 fn check(condition: bool, what: &str) -> Res<()> {
@@ -242,9 +244,15 @@ struct World {
 
 impl World {
     fn start_daemon(&mut self) {
+        // Kept next to the config, so a failure can be explained afterwards.
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("daemon.log"))
+            .expect("open the daemon's log");
         let child = Command::new(env!("CARGO_BIN_EXE_liq2sol-maker"))
             .arg(&self.daemon_config)
-            .stdout(Stdio::null())
+            .stdout(log)
             .spawn()
             .expect("start daemon");
         self.daemon = Some(Proc { child });
@@ -998,7 +1006,7 @@ fn build_world(root: &Path) -> World {
     sol.send(&[init], &vault_owner, &[]).unwrap();
     let vault = sol::maker_vault_pda(&vault_owner.pubkey());
     let vault_token = sol::maker_vault_token_pda(&vault);
-    let deposit = sol::vault_deposit_ix(&operator.pubkey(), &vault_owner.pubkey(), 20 * SOL_AMOUNT);
+    let deposit = sol::vault_deposit_ix(&operator.pubkey(), &vault_owner.pubkey(), 40 * SOL_AMOUNT);
     sol.send(&[deposit], &operator, &[]).unwrap();
     // Short and outside the build directory: a Unix socket path is limited to about 100 bytes.
     let private = std::env::temp_dir().join(format!("l2s-{}", std::process::id()));
@@ -1066,7 +1074,8 @@ fn build_world(root: &Path) -> World {
             relays: vec![relay_url.clone()],
             network: NETWORK.into(),
             min_sol_units: 1,
-            max_sol_units: 1_000,
+            max_sol_units: RFQ_MAX,
+            show_available_up_to: None,
             l2s_bps: 100,
             s2l_bps: 100,
             quote_secs: QUOTE_SECS,
@@ -1284,6 +1293,49 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     println!("    the claim went through the relay in pieces, and is {} bytes", serialize_hex(&claim).len() / 2);
     w.chain.broadcast(&claim)?;
     w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    Ok(())
+}
+
+/// The real page in a real browser, against this daemon and node. See client/test/drive.mjs. Only runs with `CLIENT_TEST`,
+/// because it needs `npm install` in client/ and a built client (client/build.sh).
+fn browser_client(w: &mut World) -> Res<()> {
+    if std::env::var("CLIENT_TEST").is_err() {
+        println!("    skipped: set CLIENT_TEST=1");
+        return Ok(());
+    }
+    let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../client"));
+    let keys = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cli/.keys/taker-solana.json"));
+    let wallet_args = serde_json::to_string(&w.node.rpc.args).map_err(|e| e.to_string())?;
+    let amount = RFQ_SEND as f64 / 1e6;
+    let output = Command::new("node")
+        .arg(dir.join("test/drive.mjs"))
+        .env("ELEMENTS_CLI", &w.node.rpc.cli)
+        .env("ELEMENTS_ARGS", wallet_args)
+        .env("USDT", usdt().to_string())
+        .env("LBTC", lbtc().to_string())
+        .env("NETWORK_NAME", NETWORK)
+        .env("RELAY_URL", &w.relay_url)
+        .env("TAKER_SOLANA_KEY", keys)
+        .env("AMOUNT", format!("{amount}"))
+        .env("SPLIT_AMOUNT", format!("{}", (RFQ_MAX + RFQ_SEND / 2) as f64 / 1e6))
+        .env("SHOTS_DIR", PathBuf::from(env!("CARGO_TARGET_TMPDIR")))
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    print!("{text}");
+    if !output.status.success() {
+        for (terms, state) in w.store.open_swaps().map_err(|e| e.to_string())? {
+            println!("    the maker has {} at {state:?}", terms.lock_point.to_hex());
+        }
+    }
+    check(output.status.success(), "the page ran every scenario")?;
+    // The page says it finished. The maker's own store must agree it was paid.
+    for line in text.lines().filter_map(|l| l.strip_prefix("SWAP ")) {
+        let point = LockPoint::from_hex(line).ok_or("bad swap line")?;
+        w.wait_state(&point.id(), "the maker completing the page's swap", 120, done(Outcome::Completed))?;
+    }
+    println!("    ok: the maker completed each of the page's swaps");
     Ok(())
 }
 
@@ -1536,6 +1588,7 @@ fn the_daemon_runs_real_swaps() {
         ("RFQ L2S swap (E1)", rfq_l2s_swap),
         ("RFQ S2L swap (E1)", rfq_s2l_swap),
         ("RFQ attacks (E6, E7)", rfq_attacks),
+        ("browser client", browser_client),
     ];
     let filter = std::env::var("SCENARIO").unwrap_or_default();
     let mut failures = vec![];

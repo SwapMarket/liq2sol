@@ -14,12 +14,12 @@ function sortDeep(v) {
   return v;
 }
 
-export async function makeRecovery(swap) {
-  const body = { format: 'liq2sol-recovery', version: 2, created_at: Math.floor(Date.now() / 1000), swap };
+export async function makeRecovery(swaps) {
+  const body = { format: 'liq2sol-recovery', version: 2, created_at: Math.floor(Date.now() / 1000), swaps };
   return JSON.stringify({ ...body, checksum: await checksum(body) }, null, 1);
 }
 
-// Throws unless this is an intact file. A file for another swap is the caller's check.
+// The swaps in an intact file. Throws otherwise. Whether they are the ones expected is the caller's check.
 export async function readRecovery(text) {
   let body;
   try {
@@ -27,9 +27,9 @@ export async function readRecovery(text) {
   } catch {
     throw new Error("This isn't a recovery file.");
   }
-  if (body.format !== 'liq2sol-recovery' || body.version !== 2 || !body.swap?.secrets) throw new Error("This isn't a liq2sol recovery file.");
+  if (body.format !== 'liq2sol-recovery' || body.version !== 2 || !body.swaps?.length || !body.swaps.every((s) => s.secrets)) throw new Error("This isn't a liq2sol recovery file.");
   if ((await checksum(body)) !== body.checksum) throw new Error('This recovery file is damaged: its checksum is wrong.');
-  return body.swap;
+  return body.swaps;
 }
 
 export function offerDownload(text, name) {

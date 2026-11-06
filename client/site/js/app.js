@@ -2,9 +2,10 @@
 import init, * as W from '../wasm/liq2sol_client_wasm.js';
 import { NETWORK, refuseMainnet } from './config.js';
 import { Esplora, Solana } from './chain.js';
+import { planOrder } from './plan.js';
 import { Relays } from './relay.js';
 import { Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
-import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap } from './store.js';
+import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
 import { makeRecovery, offerDownload, readRecovery } from './recovery.js';
 import { connectExtension, connectWalletConnect, extensionWallets } from './wallet.js';
 
@@ -20,8 +21,9 @@ let engine = null;
 let esplora = [];
 let solana = null;
 const offers = new Map();
-const negotiation = { current: null };
-const ui = { direction: 'L2S', amount: '', to: '', selected: null, error: '', openSwap: null, quote: null };
+// Fills being negotiated, by the throwaway Nostr key each one uses.
+const negotiations = new Map();
+const ui = { direction: 'L2S', amount: '', to: '', selected: null, openOrder: null, quote: null };
 
 // ---- Small DOM helper. Text always goes in as text, so nothing from a relay can become markup. ----
 function h(tag, props = {}, ...children) {
@@ -46,6 +48,16 @@ const show = (u) => {
   const frac = (v % 1000000n).toString().padStart(6, '0').replace(/0+$/, '');
   return `${(v / 1000000n).toLocaleString('en-US')}${frac ? `.${frac}` : ''}`;
 };
+// The book's sizes, to two places, rounded the cautious way: a minimum up, and a maximum or what's available down.
+const STEP = 10000n;
+const sizeUp = (u) => (((BigInt(u) + STEP - 1n) / STEP) * STEP);
+const sizeDown = (u) => ((BigInt(u) / STEP) * STEP);
+const size = (u) => {
+  const v = BigInt(u);
+  return `${(v / 1000000n).toLocaleString('en-US')}.${((v % 1000000n) / STEP).toString().padStart(2, '0')}`;
+};
+// What one unit sent buys, to four places. Quotes and payments stay exact: a coin must match to the last unit.
+const price = (bpsValue) => ((10000 - bpsValue) / 10000).toFixed(4);
 const liquidUnits = (u) => {
   const v = BigInt(u);
   return `${v / 100000000n}.${(v % 100000000n).toString().padStart(8, '0')}`;
@@ -100,20 +112,21 @@ function onEvent(event) {
     if (!known || known.created_at <= got.created_at) offers.set(got.maker, got);
     // Messages carry the time, so a clock far from a maker's would get them refused.
     if (Math.abs(now() - got.created_at) > 3600 * 24) return;
-    render();
+    refreshForm();
     return;
   }
   if (event.kind !== WRAP_KIND) return;
   const to = event.tags.find((t) => t[0] === 'p')?.[1];
-  if (negotiation.current?.nostr.public === to) {
-    const got = JSON.parse(W.unwrap_message(negotiation.current.nostr.secret, text, NETWORK.name, BigInt(now())));
-    if (got) negotiation.current.onMessage(got);
+  const talking = negotiations.get(to);
+  if (talking) {
+    const got = JSON.parse(W.unwrap_message(talking.nostr.secret, text, NETWORK.name, BigInt(now())));
+    if (got) talking.onMessage(got);
     return;
   }
   const s = Object.values(loadSwaps()).find((x) => x.nostr.public === to && !FINISHED.includes(x.state));
   if (!s) return;
   const got = JSON.parse(W.unwrap_message(s.nostr.secret, text, NETWORK.name, BigInt(now())));
-  if (got) engine.onMessage(s, got).catch(fail);
+  if (got) withSwap(s.id, (fresh) => engine.onMessage(fresh, got)).catch(fail);
 }
 
 // ---- The makers book ----
@@ -122,40 +135,34 @@ const liveOffers = (direction) => [...offers.values()]
   .sort((a, b) => bps(a, direction) - bps(b, direction));
 const bps = (o, direction) => (direction === 'L2S' ? o.offer.l2s_bps : o.offer.s2l_bps);
 const available = (o, direction) => BigInt(direction === 'L2S' ? o.offer.available_l2s : o.offer.available_s2l);
-const receiveAt = (o, direction, send) => (send * BigInt(10000 - bps(o, direction))) / 10000n;
 
-function fits(o, direction, send) {
-  if (send === null || send <= 0n) return true;
-  const r = receiveAt(o, direction, send);
-  return send >= BigInt(o.offer.min_sol_units) && send <= BigInt(o.offer.max_sol_units)
-    && r >= BigInt(o.offer.min_sol_units) && r <= available(o, direction);
-}
-
-function chosenOffer(send) {
-  const eligible = liveOffers(ui.direction).filter((o) => fits(o, ui.direction, send));
-  return eligible.find((o) => o.maker === ui.selected) ?? eligible[0] ?? null;
+function currentPlan(send) {
+  const makers = liveOffers(ui.direction).map((o) => ({
+    maker: o.maker, bps: bps(o, ui.direction), min: BigInt(o.offer.min_sol_units), max: BigInt(o.offer.max_sol_units), available: available(o, ui.direction),
+  }));
+  return planOrder(send ?? 0n, makers, ui.selected, settings.maxSpreadBps ?? NETWORK.maxSpreadBps);
 }
 
 function bookView(send) {
   const list = liveOffers(ui.direction);
-  const chosen = chosenOffer(send);
+  const plan = currentPlan(send);
   const rows = list.map((o) => {
-    const ok = fits(o, ui.direction, send);
+    const mine = plan.fills.filter((f) => f.maker === o.maker);
     return h('tr', {
-      class: `${!ok ? 'off' : ''} ${chosen?.maker === o.maker ? 'on' : ''}`,
-      onclick: () => { if (ok) { ui.selected = o.maker; render(); } },
+      class: mine.length ? 'on' : '',
+      onclick: () => { ui.selected = ui.selected === o.maker ? null : o.maker; render(); },
     },
     h('td', { class: 'mono' }, short(o.maker)),
-    h('td', {}, `${(bps(o, ui.direction) / 100).toFixed(2)}%`),
-    h('td', {}, `${show(o.offer.min_sol_units)} – ${show(o.offer.max_sol_units)}`),
-    h('td', {}, show(available(o, ui.direction))),
-    h('td', {}, send && send > 0n && ok ? show(receiveAt(o, ui.direction, send)) : '–'));
+    h('td', {}, price(bps(o, ui.direction))),
+    h('td', {}, `${size(sizeUp(o.offer.min_sol_units))} – ${size(sizeDown(o.offer.max_sol_units))}`),
+    h('td', {}, size(sizeDown(available(o, ui.direction)))),
+    h('td', {}, mine.length ? size(sizeUp(mine.reduce((sum, f) => sum + f.send, 0n) - 1n)) : '–'));
   });
   return h('div', { class: 'book' },
     h('h3', {}, `Makers book: ${names[ui.direction].join(' → ')}`),
     h('div', { class: 'scroll' }, rows.length
       ? h('table', {},
-        h('thead', {}, h('tr', {}, ['Maker', 'Spread', 'Per swap', 'Available', 'You receive'].map((t) => h('th', {}, t)))),
+        h('thead', {}, h('tr', {}, ['Maker', 'Price', 'Per swap', 'Available', 'You send here'].map((t) => h('th', {}, t)))),
         h('tbody', {}, rows))
       : h('div', { class: 'empty' }, relays?.connected() ? 'No maker is offering this direction right now.' : 'Connecting to Nostr relays…')));
 }
@@ -200,32 +207,43 @@ async function walletConnect() {
 }
 
 // ---- Starting a swap ----
+// These two stay the same elements across updates. New offers arrive every few seconds, and rebuilding an input could lose what
+// was being typed into it at that moment.
+const amountInput = h('input', {
+  class: 'amount', inputMode: 'decimal', placeholder: '0', id: 'amount',
+  oninput: (e) => { ui.amount = e.target.value; refreshForm(); },
+});
+const toInput = h('input', {
+  class: 'input', id: 'to', placeholder: 'tlq1…',
+  oninput: (e) => { ui.to = e.target.value; refreshForm(); },
+});
+
 function formView() {
   const send = units(ui.amount);
   const [from, to] = names[ui.direction];
-  const offer = chosenOffer(send);
-  const received = offer && send ? receiveAt(offer, ui.direction, send) : null;
+  const plan = currentPlan(send);
+  const hasAmount = send && send > 0n;
+  const received = hasAmount && plan.fills.length ? plan.receive : null;
   const needsAddress = ui.direction === 'S2L';
-  const ready = send && send > 0n && offer && wallet && (!needsAddress || ui.to.trim());
-  const label = !send || send <= 0n ? 'Enter an amount' : !offer ? 'No maker fits this amount' : !wallet ? 'Connect a Solana wallet' : needsAddress && !ui.to.trim() ? 'Enter a Liquid address' : 'Get a firm quote';
+  const ready = hasAmount && plan.fills.length && wallet && (!needsAddress || ui.to.trim());
+  const label = !hasAmount ? 'Enter an amount' : !plan.fills.length ? 'No maker fits this amount' : !wallet ? 'Connect a Solana wallet' : needsAddress && !ui.to.trim() ? 'Enter a Liquid address' : plan.fills.length > 1 ? `Get ${plan.fills.length} firm quotes` : 'Get a firm quote';
+  amountInput.setAttribute('aria-label', `You send, in ${from}`);
   const receive = h('input', { class: 'amount', readOnly: true, value: received === null ? '' : show(received), placeholder: '0', 'aria-label': `You receive, in ${to}` });
   return h('div', { class: 'card' },
     h('button', { class: 'gear', title: 'Settings', 'aria-label': 'Settings', onclick: settingsDialog }, '⚙'),
     h('h2', {}, 'Create Atomic Swap'),
     h('p', { class: 'sub' }, 'Trustless and confidential. No server holds anything.'),
     h('div', { class: 'row' }, coinPill(from),
-      h('input', {
-        class: 'amount', inputMode: 'decimal', placeholder: '0', value: ui.amount, id: 'amount', 'aria-label': `You send, in ${from}`,
-        oninput: (e) => { ui.amount = e.target.value; refreshForm(); },
-      })),
+      amountInput),
     h('button', { class: 'flip', title: 'Swap direction', 'aria-label': 'Swap direction', onclick: () => { ui.direction = ui.direction === 'L2S' ? 'S2L' : 'L2S'; ui.selected = null; render(); } }, '⇅'),
     h('div', { class: 'row to' }, coinPill(to), receive),
     needsAddress && h('label', { class: 'field' }, h('span', {}, 'Your Liquid address, confidential'),
-      h('input', { class: 'input', id: 'to', value: ui.to, placeholder: 'tlq1…', oninput: (e) => { ui.to = e.target.value; refreshForm(); } })),
+      toInput),
     walletView(),
-    offer && send && h('dl', { class: 'facts' },
-      h('div', {}, h('dt', {}, 'Maker'), h('dd', { class: 'mono' }, short(offer.maker))),
-      h('div', {}, h('dt', {}, 'Spread'), h('dd', {}, `${(bps(offer, ui.direction) / 100).toFixed(2)}%`))),
+    hasAmount && plan.fills.length > 0 && h('dl', { class: 'facts' },
+      h('div', {}, h('dt', {}, 'Filled by'), h('dd', {}, plan.fills.length === 1 ? short(plan.fills[0].maker) : `${plan.fills.length} separate swaps`)),
+      h('div', {}, h('dt', {}, 'Average price'), h('dd', {}, (Number(plan.receive) / Number(send - plan.unfilled)).toFixed(4)))),
+    hasAmount && plan.unfilled > 0n && plan.fills.length > 0 && h('p', { class: 'warn', id: 'unfilled' }, `The book can fill ${show(send - plan.unfilled)} of this right now. ${show(plan.unfilled)} would stay unswapped.`),
     h('button', { class: 'btn', id: 'go', disabled: !ready, onclick: startQuote }, label));
 }
 
@@ -240,10 +258,9 @@ function refreshForm() {
   }
 }
 
-function waitFor(pred, ms) {
+function waitFor(n, pred, ms) {
   return new Promise((resolve, reject) => {
-    const n = negotiation.current;
-    const timer = setTimeout(() => reject(new Error('The maker did not answer in time. Nothing has been committed.')), ms);
+    const timer = setTimeout(() => reject(new Error('The maker did not answer in time.')), ms);
     n.onMessage = (got) => {
       if (got.sender !== n.maker || got.id !== n.id) return;
       if (got.body.type === 'rfq-reject') {
@@ -257,33 +274,52 @@ function waitFor(pred, ms) {
   });
 }
 
+function sendTo(n, type, body) {
+  const wrapped = JSON.parse(W.wrap_message(n.nostr.secret, n.maker, n.id, NETWORK.name, JSON.stringify({ type, body }), BigInt(now())));
+  relays.publish(wrapped.event);
+  return wrapped.rumor_id;
+}
+
+const spreadLimit = () => rulesJson(settings.maxSpreadBps ?? NETWORK.maxSpreadBps);
+
+async function quoteFill(fill, direction) {
+  const nostr = JSON.parse(W.new_nostr_key());
+  const n = { id: JSON.parse(W.new_nostr_key()).secret, nostr, maker: fill.maker, offer: offers.get(fill.maker), onMessage: () => {} };
+  negotiations.set(nostr.public, n);
+  relays.subscribe(`talk-${nostr.public.slice(0, 12)}`, { kinds: [WRAP_KIND], '#p': [nostr.public], since: now() - 300 });
+  await new Promise((r) => setTimeout(r, 300));
+  const request = { direction, amount_side: 'send', amount: fill.send.toString() };
+  const answered = waitFor(n, (g) => g.body.type === 'rfq-quote', 20000);
+  sendTo(n, 'rfq-request', request);
+  const got = await answered;
+  const problem = W.quote_problem(spreadLimit(), JSON.stringify(request), JSON.stringify(got.body.body), BigInt(now()));
+  if (problem) throw new Error(`This quote isn't acceptable: ${problem}.`);
+  return { n, quote: got.body.body, rumor: got.rumor_id };
+}
+
+function clearQuote() {
+  ui.quote = null;
+  negotiations.clear();
+}
+
 async function startQuote() {
   const send = units(ui.amount);
-  const offer = chosenOffer(send);
+  const plan = currentPlan(send);
+  const direction = ui.direction;
   try {
-    if (ui.direction === 'L2S') {
-      if (await solana.lamports(wallet.address) < NETWORK.minSolLamports) throw new Error('This wallet needs a little SOL to pay for the claim, so a swap could not finish. Nothing has been sent.');
+    if (direction === 'L2S' && await solana.lamports(wallet.address) < NETWORK.minSolLamports * BigInt(plan.fills.length)) {
+      throw new Error('This wallet needs a little SOL to pay for each claim, or a swap could not finish. Nothing has been sent.');
     }
-    const nostr = JSON.parse(W.new_nostr_key());
-    const id = JSON.parse(W.new_nostr_key()).secret;
-    negotiation.current = { id, nostr, maker: offer.maker, onMessage: () => {} };
-    relays.subscribe('negotiation', { kinds: [WRAP_KIND], '#p': [nostr.public], since: now() - 300 });
-    await new Promise((r) => setTimeout(r, 300));
-    const request = { direction: ui.direction, amount_side: 'send', amount: send.toString() };
-    const answered = waitFor((g) => g.body.type === 'rfq-quote', 20000);
-    const { event } = JSON.parse(W.wrap_message(nostr.secret, offer.maker, id, NETWORK.name, JSON.stringify({ type: 'rfq-request', body: request }), BigInt(now())));
-    relays.publish(event);
-    ui.quote = { status: 'Asking the maker for a firm price…' };
+    ui.quote = { status: plan.fills.length > 1 ? `Asking ${plan.fills.length} times for a firm price…` : 'Asking the maker for a firm price…' };
     render();
-    const got = await answered;
-    const quote = got.body.body;
-    const problem = W.quote_problem(rulesJson(settings.maxSpreadBps ?? NETWORK.maxSpreadBps), JSON.stringify(request), JSON.stringify(quote), BigInt(now()));
-    if (problem) throw new Error(`This quote isn't acceptable: ${problem}.`);
-    ui.quote = { quote, rumor: got.rumor_id, request, offer, direction: ui.direction, to: ui.to.trim(), owner: wallet.address };
+    const settled = await Promise.allSettled(plan.fills.map((f) => quoteFill(f, direction)));
+    const fills = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    const refused = settled.filter((r) => r.status === 'rejected');
+    if (!fills.length) throw refused[0].reason;
+    ui.quote = { fills, refused: refused.map((r) => r.reason.message), direction, to: ui.to.trim(), owner: wallet.address, wanted: send };
     render();
   } catch (e) {
-    ui.quote = null;
-    negotiation.current = null;
+    clearQuote();
     render();
     fail(e);
   }
@@ -293,54 +329,64 @@ function quoteView() {
   const q = ui.quote;
   if (q.status) return h('div', { class: 'card' }, h('h2', {}, 'Getting a quote'), h('p', { class: 'status spin' }, q.status));
   const [from, to] = names[q.direction];
-  const left = Math.max(0, q.quote.quote_expiry - now());
+  const sum = (key) => q.fills.reduce((total, f) => total + BigInt(f.quote[key]), 0n);
+  const left = Math.max(0, Math.min(...q.fills.map((f) => f.quote.quote_expiry)) - now());
+  const many = q.fills.length > 1;
   return h('div', { class: 'card' },
-    h('h2', {}, 'Review the quote'),
+    h('h2', {}, many ? `Review ${q.fills.length} quotes` : 'Review the quote'),
     h('dl', { class: 'facts' },
-      h('div', {}, h('dt', {}, 'You send'), h('dd', {}, `${show(q.quote.send)} ${from}`)),
-      h('div', {}, h('dt', {}, 'You receive'), h('dd', {}, `${show(q.quote.receive)} ${to}`)),
-      h('div', {}, h('dt', {}, 'Maker'), h('dd', { class: 'mono' }, short(q.offer.maker))),
-      h('div', {}, h('dt', {}, 'If the maker never locks'), h('dd', {}, q.direction === 'L2S' ? 'Refund after about 5 hours' : 'Refund after about 6 hours')),
+      h('div', {}, h('dt', {}, 'You send'), h('dd', {}, `${show(sum('send'))} ${from}`)),
+      h('div', {}, h('dt', {}, 'You receive'), h('dd', {}, `${show(sum('receive'))} ${to}`)),
+      many ? q.fills.map((f) => h('div', {}, h('dt', { class: 'mono' }, short(f.n.maker)), h('dd', {}, `${show(f.quote.send)} → ${show(f.quote.receive)}`)))
+        : h('div', {}, h('dt', {}, 'Maker'), h('dd', { class: 'mono' }, short(q.fills[0].n.maker))),
+      h('div', {}, h('dt', {}, 'If a maker never locks'), h('dd', {}, q.direction === 'L2S' ? 'Refund after about 5 hours' : 'Refund after about 6 hours')),
       h('div', {}, h('dt', {}, 'Price holds for'), h('dd', {}, `${left} s`))),
+    many && h('p', { class: 'warn', id: 'not-atomic' }, `These are ${q.fills.length} separate swaps. Each one either completes or refunds by itself, so some may complete while others refund. You ${q.direction === 'L2S' ? 'make one exact payment for each' : 'approve one lock for each'}.`),
+    many && q.direction === 'S2L' && h('p', { class: 'note' }, 'All of them pay the same Liquid address, so anyone can see those payments went to one place, though not their amounts.'),
+    q.refused.length > 0 && h('p', { class: 'warn', id: 'quote-refused' }, `${q.refused.length} of the quotes didn't come through, so this fills less than you asked for: ${q.refused[0]}`),
     q.direction === 'L2S' && h('p', { class: 'note' }, 'You will need a little L-BTC only if a refund is ever needed.'),
-    h('button', { class: 'btn', id: 'accept', onclick: acceptQuote }, 'Accept'),
-    h('button', { class: 'btn quiet', onclick: () => { ui.quote = null; negotiation.current = null; render(); } }, 'Cancel'));
+    h('button', { class: 'btn', id: 'accept', onclick: acceptQuotes }, many ? 'Accept all' : 'Accept'),
+    h('button', { class: 'btn quiet', onclick: () => { clearQuote(); render(); } }, 'Cancel'));
 }
 
-async function acceptQuote() {
+async function acceptFill(f, q, order, tip) {
+  const { n } = f;
+  const secrets = JSON.parse(W.new_swap_secrets());
+  const answered = waitFor(n, (g) => g.body.type === 'rfq-terms', 20000);
+  const rumor = sendTo(n, 'rfq-accept', {
+    quote_event: f.rumor, lock_point: secrets.lock_point, taker_key: secrets.taker_key, blinding_key: secrets.blinding_key, taker_solana: q.owner,
+  });
+  const got = await answered;
+  const terms = got.body.body;
+  const problem = W.terms_problem(spreadLimit(), q.direction, JSON.stringify(f.quote), rumor, JSON.stringify(terms), tip);
+  if (problem) throw new Error(`A maker's terms aren't acceptable, so nothing was sent for that swap: ${problem}.`);
+  return deriveSwap({
+    id: n.id, order, created_at: now(), direction: q.direction, maker: n.maker, nostr: n.nostr, secrets, terms,
+    fee_coin_sats: n.offer?.offer.fee_coin_sats, solana_owner: q.owner, to_address: q.to, state: 'recovery', status: '',
+  });
+}
+
+async function acceptQuotes() {
   const q = ui.quote;
+  const order = JSON.parse(W.new_nostr_key()).secret.slice(0, 16);
   try {
-    const n = negotiation.current;
-    const secrets = JSON.parse(W.new_swap_secrets());
-    const accept = {
-      quote_event: q.rumor, lock_point: secrets.lock_point, taker_key: secrets.taker_key,
-      blinding_key: secrets.blinding_key, taker_solana: q.owner,
-    };
-    const answered = waitFor((g) => g.body.type === 'rfq-terms', 20000);
-    const { event, rumor_id: rumor } = JSON.parse(W.wrap_message(n.nostr.secret, n.maker, n.id, NETWORK.name, JSON.stringify({ type: 'rfq-accept', body: accept }), BigInt(now())));
-    relays.publish(event);
     ui.quote = { status: 'Fixing the terms with the maker…' };
     render();
-    const got = await answered;
-    const terms = got.body.body;
     const tip = await esplora[0].tip();
-    const problem = W.terms_problem(rulesJson(settings.maxSpreadBps ?? NETWORK.maxSpreadBps), q.direction, JSON.stringify(q.quote), rumor, JSON.stringify(terms), tip);
-    if (problem) throw new Error(`The maker's terms aren't acceptable, so nothing has been sent: ${problem}.`);
-    const swap = deriveSwap({
-      id: n.id, created_at: now(), direction: q.direction, maker: n.maker, nostr: n.nostr, secrets, terms: {
-        ...terms, liquid_amount: terms.liquid_amount, solana_amount: terms.solana_amount,
-      },
-      fee_coin_sats: q.offer.offer.fee_coin_sats, solana_owner: q.owner, to_address: q.to, state: 'recovery', status: '',
-    });
-    saveSwap(swap);
-    watch(swap);
-    negotiation.current = null;
-    ui.quote = null;
-    ui.openSwap = swap.id;
+    const settled = await Promise.allSettled(q.fills.map((f) => acceptFill(f, q, order, tip)));
+    const swaps = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    const refused = settled.filter((r) => r.status === 'rejected');
+    if (!swaps.length) throw refused[0].reason;
+    for (const s of swaps) {
+      saveSwap(s);
+      watch(s);
+    }
+    clearQuote();
+    ui.openOrder = order;
     render();
+    if (refused.length) fail(new Error(`${refused.length} of the swaps didn't start: ${refused[0].reason.message} The others go ahead, and nothing was sent for those.`));
   } catch (e) {
-    ui.quote = null;
-    negotiation.current = null;
+    clearQuote();
     render();
     fail(e);
   }
@@ -355,28 +401,32 @@ const FLOW = {
 function stepsView(s) {
   const flow = FLOW[s.direction];
   const at = flow.findIndex(([k]) => k === s.state);
+  // A refund leaves this path, and a list with nothing marked would only confuse.
+  if (at < 0 && s.state !== 'done') return null;
   return h('ol', { class: 'steps' }, flow.map(([k, text], i) => h('li', { class: i < at || s.state === 'done' ? 'done' : i === at ? 'now' : '' }, text)));
 }
 
-function recoveryView(s) {
+// One file for a whole order, and nothing is funded until it has been read back with every swap in it.
+function recoveryView(swaps) {
   const pick = h('input', {
     type: 'file', accept: '.json,application/json', class: 'input', id: 'recovery-file',
     onchange: async (e) => {
       try {
         const read = await readRecovery(await e.target.files[0].text());
-        if (read.id !== s.id || read.secrets.lock_secret !== s.secrets.lock_secret) throw new Error('That is a recovery file for a different swap.');
-        engine.set(s, { state: s.direction === 'L2S' ? 'fund' : 'lock', recovery_saved: true });
+        const has = (s) => read.some((r) => r.id === s.id && r.secrets.lock_secret === s.secrets.lock_secret);
+        if (!swaps.every(has)) throw new Error('That recovery file is for a different swap.');
+        await Promise.all(swaps.map((s) => withSwap(s.id, (fresh) => engine.set(fresh, { state: fresh.direction === 'L2S' ? 'fund' : 'lock', recovery_saved: true }))));
         render();
       } catch (err) {
         fail(err);
       }
     },
   });
-  return [
+  return h('div', { class: 'card', id: 'recovery-card' },
+    h('h2', {}, 'Save your recovery file'),
     h('p', { class: 'warn' }, 'This file can move your funds, so treat it like money. It is the only way back if this browser loses its data.'),
-    h('button', { class: 'btn', id: 'download', onclick: async () => offerDownload(await makeRecovery(s), `liq2sol-recovery-${s.id.slice(0, 8)}.json`) }, 'Download recovery file'),
-    h('label', { class: 'field' }, h('span', {}, 'Then choose the file you saved, to confirm it is intact. The next step stays hidden until you do.'), pick),
-  ];
+    h('button', { class: 'btn', id: 'download', onclick: async () => offerDownload(await makeRecovery(swaps), `liq2sol-recovery-${swaps[0].order ?? swaps[0].id.slice(0, 8)}.json`) }, swaps.length > 1 ? `Download recovery file for ${swaps.length} swaps` : 'Download recovery file'),
+    h('label', { class: 'field' }, h('span', {}, 'Then choose the file you saved, to confirm it is intact. The next step stays hidden until you do.'), pick));
 }
 
 async function qrView(text) {
@@ -389,10 +439,11 @@ async function qrView(text) {
   return box;
 }
 
-function act(fn) {
+// A button's action on one swap, in turn with everything else touching it.
+function act(id, fn) {
   return async () => {
     try {
-      await fn();
+      await withSwap(id, fn);
     } catch (e) {
       fail(e);
     }
@@ -401,27 +452,25 @@ function act(fn) {
 }
 
 function refundLiquidView(s) {
-  const input = h('input', { class: 'input', id: 'refund-to', placeholder: 'tlq1… confidential address' });
+  const input = h('input', { class: 'input refund-to', placeholder: 'tlq1… confidential address' });
   return [
-    h('p', { class: 'note' }, `The refund needs a fee coin. From a Liquid wallet, send ${s.fee_coin_sats ?? 30} sats of L-BTC or a little more to this address. All of it pays the network fee.`),
-    h('div', { class: 'addr', id: 'fee-address' }, s.info.fee_address),
+    h('p', { class: 'note' }, `The refund needs a fee coin. From a Liquid wallet, send at least ${NETWORK.refundFeeCoinSats} sats (${(NETWORK.refundFeeCoinSats / 1e8).toFixed(8)} L-BTC) to this address. If your wallet refuses that, send its minimum: Aqua's is 100 sats. All of it pays the network fee, so don't send more than you need to.`),
+    h('div', { class: 'addr fee-address' }, s.info.fee_address),
     h('label', { class: 'field' }, h('span', {}, 'Where to send your refund'), input),
-    h('button', { class: 'btn', id: 'refund', onclick: act(() => engine.refundOnLiquid(s, input.value.trim())) }, 'Refund'),
+    h('button', { class: 'btn refund', onclick: act(s.id, (fresh) => engine.refundOnLiquid(fresh, input.value.trim())) }, 'Refund'),
   ];
 }
 
 function swapBody(s) {
   const [from, to] = names[s.direction];
   switch (s.state) {
-    case 'recovery':
-      return recoveryView(s);
     case 'fund': {
       const box = h('div', {});
       qrView(s.info.address).then((qr) => box.append(qr)).catch(() => {});
       return [
         h('p', { class: 'note' }, `Send exactly this amount of ${from}, once, from any Liquid wallet:`),
-        h('div', { class: 'addr', id: 'pay-amount' }, `${liquidUnits(s.terms.liquid_amount)} ${from}`),
-        h('div', { class: 'addr', id: 'pay-address' }, s.info.address),
+        h('div', { class: 'addr pay-amount' }, `${liquidUnits(s.terms.liquid_amount)} ${from}`),
+        h('div', { class: 'addr pay-address' }, s.info.address),
         box,
         s.wrong_coin && h('p', { class: 'warn' }, 'A coin of the wrong asset or amount reached this address. Nobody will act on it, and you can get it back with a refund after the lock height.'),
         h('p', { class: 'note' }, 'The amount stays hidden on-chain only if your wallet pays from blinded coins.'),
@@ -432,20 +481,23 @@ function swapBody(s) {
       return [
         h('p', { class: 'note' }, `Lock ${show(s.terms.solana_amount)} ${from}. The maker then locks ${show(BigInt(s.terms.liquid_amount) / 100n)} ${to} for you.`),
         walletView(),
-        h('button', { class: 'btn', id: 'lock', disabled: !wallet, onclick: act(() => engine.lockOnSolana(s)) }, 'Lock on Solana'),
+        h('button', { class: 'btn lock', disabled: !wallet, onclick: act(s.id, (fresh) => engine.lockOnSolana(fresh)) }, 'Lock on Solana'),
       ];
     case 'await_maker':
-      return h('p', { class: 'status spin' }, s.direction === 'L2S'
-        ? `Your coin has ${s.coin?.confirmations ?? 0} confirmations. Waiting for the maker to sign and lock on Solana.`
-        : (s.status || 'Waiting for the maker to lock on Liquid.'));
+      return [
+        s.escrow_problem && h('p', { class: 'warn escrow-problem' }, `The maker locked, but the secret stays hidden: ${s.escrow_problem}. Your funds are safe, and can come back with a refund.`),
+        h('p', { class: 'status spin' }, s.direction === 'L2S'
+          ? `Your coin has ${s.coin?.confirmations ?? 0} confirmations. Waiting for the maker to sign and lock on Solana.`
+          : (s.status || 'Waiting for the maker to lock on Liquid.')),
+      ];
     case 'ready_claim':
       return [
         h('p', { class: 'good' }, `The maker locked ${show(s.terms.solana_amount)} ${to} for you.`),
         !secondSolana() && h('label', { class: 'check' },
-          h('input', { type: 'checkbox', id: 'one-endpoint', checked: !!settings.allowOneEndpoint, onchange: (e) => { settings.allowOneEndpoint = e.target.checked; saveSettings(settings); } }),
+          h('input', { type: 'checkbox', class: 'one-endpoint', checked: !!settings.allowOneEndpoint, onchange: (e) => { settings.allowOneEndpoint = e.target.checked; saveSettings(settings); } }),
           'Only one Solana endpoint is set, so a lying endpoint could fool this page into revealing the secret. Claim anyway. Add a free Helius key in Settings to check two.'),
         walletView(),
-        h('button', { class: 'btn', id: 'claim', disabled: !wallet, onclick: act(() => engine.claimOnSolana(s)) }, 'Claim on Solana'),
+        h('button', { class: 'btn claim', disabled: !wallet, onclick: act(s.id, (fresh) => engine.claimOnSolana(fresh)) }, 'Claim on Solana'),
         s.status && h('p', { class: 'status' }, s.status),
       ];
     case 'signing':
@@ -453,7 +505,7 @@ function swapBody(s) {
     case 'claiming':
       return h('p', { class: 'status spin' }, s.status || 'Publishing the claim…');
     case 'done':
-      return h('p', { class: 'good', id: 'done' }, s.status || 'Swap complete.');
+      return h('p', { class: 'good done' }, s.status || 'Swap complete.');
     case 'refund_wait':
       return h('p', { class: 'status spin' }, s.direction === 'L2S'
         ? `This swap won't finish. Your refund opens at block ${s.terms.lock_height.toLocaleString('en-US')} (now ${(s.tip ?? 0).toLocaleString('en-US')}).`
@@ -464,12 +516,12 @@ function swapBody(s) {
       return [
         h('p', { class: 'note' }, 'The deadline has passed, so your Solana funds can come back.'),
         walletView(),
-        h('button', { class: 'btn', id: 'refund', disabled: !wallet, onclick: act(() => engine.refundOnSolana(s)) }, 'Refund on Solana'),
+        h('button', { class: 'btn refund', disabled: !wallet, onclick: act(s.id, (fresh) => engine.refundOnSolana(fresh)) }, 'Refund on Solana'),
       ];
     case 'refunding':
       return h('p', { class: 'status spin' }, s.status || 'Refund sent, waiting for a confirmation.');
     case 'refunded':
-      return h('p', { class: 'good', id: 'refunded' }, 'Refunded.');
+      return h('p', { class: 'good refunded' }, 'Refunded.');
     case 'expired':
       return h('p', { class: 'note' }, 'This swap expired before anything was paid.');
     default:
@@ -479,14 +531,23 @@ function swapBody(s) {
 
 function swapView(s) {
   const [from, to] = names[s.direction];
-  return h('div', { class: 'card', id: 'swap-card', 'data-state': s.state },
+  return h('div', { class: 'card swap-card', 'data-state': s.state, 'data-id': s.id },
     h('h2', {}, `${from} → ${to}`),
     h('dl', { class: 'facts' },
       h('div', {}, h('dt', {}, 'You send'), h('dd', {}, s.direction === 'L2S' ? `${show(BigInt(s.terms.liquid_amount) / 100n)} ${from}` : `${show(s.terms.solana_amount)} ${from}`)),
       h('div', {}, h('dt', {}, 'You receive'), h('dd', {}, s.direction === 'L2S' ? `${show(s.terms.solana_amount)} ${to}` : `${show(BigInt(s.terms.liquid_amount) / 100n)} ${to}`))),
     stepsView(s),
-    swapBody(s),
-    h('button', { class: 'btn quiet', onclick: () => { ui.openSwap = null; render(); } }, 'Back'));
+    swapBody(s));
+}
+
+const orderOf = (id) => Object.values(loadSwaps()).filter((s) => (s.order ?? s.id) === id).sort((a, b) => a.id.localeCompare(b.id));
+
+function orderView(swaps) {
+  const waiting = swaps.filter((s) => s.state === 'recovery');
+  const back = h('div', { class: 'card back' }, h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = null; render(); } }, 'Back'));
+  if (waiting.length) return [recoveryView(waiting), back];
+  const header = swaps.length > 1 && h('p', { class: 'sub order-summary' }, `${swaps.filter((s) => s.state === 'done').length} of ${swaps.length} swaps complete. Each one finishes or refunds by itself.`);
+  return [header, swaps.map(swapView), back];
 }
 
 // ---- Rescue and history ----
@@ -495,11 +556,14 @@ function rescueView() {
     type: 'file', accept: '.json,application/json', class: 'input', id: 'rescue-file',
     onchange: async (e) => {
       try {
-        const s = deriveSwap(await readRecovery(await e.target.files[0].text()));
-        if (s.state === 'recovery') s.state = s.direction === 'L2S' ? 'fund' : 'lock';
-        saveSwap(s);
-        watch(s);
-        ui.openSwap = s.id;
+        const swaps = await readRecovery(await e.target.files[0].text());
+        for (const raw of swaps) {
+          const s = deriveSwap(raw);
+          if (s.state === 'recovery') s.state = s.direction === 'L2S' ? 'fund' : 'lock';
+          saveSwap(s);
+          watch(s);
+          ui.openOrder = s.order ?? s.id;
+        }
         location.hash = '#swap';
         render();
       } catch (err) {
@@ -522,7 +586,7 @@ function historyView() {
       h('span', {}, `${show(s.direction === 'L2S' ? BigInt(s.terms.liquid_amount) / 100n : s.terms.solana_amount)} ${from} → ${to}`),
       h('span', { class: 'mono' }, s.state),
       h('span', {}, new Date(s.created_at * 1000).toLocaleString()),
-      h('button', { class: 'btn quiet', onclick: () => { ui.openSwap = s.id; location.hash = '#swap'; render(); } }, 'Open'),
+      h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = s.order ?? s.id; location.hash = '#swap'; render(); } }, 'Open'),
       FINISHED.includes(s.state) && h('button', { class: 'btn quiet', onclick: () => { removeSwap(s.id); render(); } }, 'Forget'));
   }));
 }
@@ -569,15 +633,15 @@ function render() {
   const below = $('below');
   // A file picker or a half-typed address shouldn't vanish when the chain is polled.
   const active = document.activeElement;
-  if (active && active.id && (active.id === 'refund-to' || active.type === 'file') && view.contains(active)) return;
+  if (active && (active.classList?.contains('refund-to') || active.type === 'file') && view.contains(active)) return;
   view.replaceChildren();
   below.replaceChildren();
   if (tab === 'rescue') {
     view.append(rescueView());
   } else if (tab === 'history') {
     view.append(historyView());
-  } else if (ui.openSwap && loadSwaps()[ui.openSwap]) {
-    view.append(swapView(loadSwaps()[ui.openSwap]));
+  } else if (ui.openOrder && orderOf(ui.openOrder).length) {
+    view.append(...orderView(orderOf(ui.openOrder)).flat().filter(Boolean));
   } else if (ui.quote) {
     view.append(quoteView());
   } else {
@@ -587,14 +651,16 @@ function render() {
   }
 }
 
-async function tickAll() {
+// A swap waiting on a slow wallet holds up only itself, and ticks don't pile up behind it.
+const ticking = new Set();
+
+function tickAll() {
   for (const s of Object.values(loadSwaps())) {
-    if (FINISHED.includes(s.state)) continue;
-    try {
-      await engine.tick(s);
-    } catch (e) {
-      console.warn('tick', e.message);
-    }
+    if (FINISHED.includes(s.state) || ticking.has(s.id)) continue;
+    ticking.add(s.id);
+    withSwap(s.id, (fresh) => engine.tick(fresh))
+      .catch((e) => console.warn('tick', e.message))
+      .finally(() => ticking.delete(s.id));
   }
 }
 
@@ -605,12 +671,12 @@ async function main() {
   $('net').textContent = NETWORK.label;
   engine = new Engine({
     esplora, solana, secondSolana, getWallet: () => wallet, relays: null,
-    onChange: () => { if (ui.openSwap) render(); },
+    onChange: () => { if (ui.openOrder) render(); },
     allowOneEndpoint: () => !!settings.allowOneEndpoint,
   });
   startRelays();
   const open = Object.values(loadSwaps()).filter((s) => !FINISHED.includes(s.state)).sort((a, b) => b.created_at - a.created_at)[0];
-  if (open) ui.openSwap = open.id;
+  if (open) ui.openOrder = open.order ?? open.id;
   window.addEventListener('hashchange', render);
   render();
   try {
@@ -624,7 +690,7 @@ async function main() {
   setInterval(() => tickAll(), NETWORK.pollMs);
   tickAll();
   // Wallet extensions can register after load, and offers can expire.
-  setInterval(() => { if (!ui.openSwap && !ui.quote && document.activeElement?.tagName !== 'INPUT') render(); }, 5000);
+  setInterval(() => { if (!ui.openOrder && !ui.quote) refreshForm(); }, 5000);
 }
 
 main().catch(fail);

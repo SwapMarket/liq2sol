@@ -32,6 +32,9 @@ pub struct RfqConfig {
     pub network: String,
     pub min_sol_units: u64,
     pub max_sol_units: u64,
+    /// The most to admit to in an offer, for a maker who doesn't want to show its full capacity. It also limits what is quoted.
+    #[serde(default)]
+    pub show_available_up_to: Option<u64>,
     pub l2s_bps: u32,
     pub s2l_bps: u32,
     pub quote_secs: u64,
@@ -116,7 +119,7 @@ impl Handler {
         })
     }
 
-    /// What we can pay in each direction, less what open swaps are counting on, and never above `max_sol_units`. Cached briefly,
+    /// What we can pay in each direction, less what open swaps are counting on. Cached briefly,
     /// because each look is several chain reads and anyone can ask for a quote. A failed read shows nothing available.
     fn available(&mut self, now: u64) -> (u64, u64) {
         if let Some((at, l2s, s2l)) = self.capacity {
@@ -138,7 +141,7 @@ impl Handler {
                 .map(|(t, _)| t.solana_amount)
                 .sum()
         };
-        let cap = self.cfg.max_sol_units;
+        let cap = self.cfg.show_available_up_to.unwrap_or(u64::MAX);
         let l2s = solana.saturating_sub(committed(engine::Direction::L2S)).min(cap);
         let s2l = liquid.saturating_sub(committed(engine::Direction::S2L)).min(cap);
         self.capacity = Some((now, l2s, s2l));

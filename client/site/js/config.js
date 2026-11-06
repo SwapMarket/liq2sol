@@ -32,6 +32,9 @@ export const NETWORK = {
   priorityFloor: 1000,
   priorityCap: 2000000,
   minSolLamports: 5000000n,
+  // A refund's fee coin comes from the user's own wallet, and any amount from this up works, because all of it pays the fee.
+  // A refund needs 29 sats at the relay floor. Wallets have their own minimums: Aqua's is 100.
+  refundFeeCoinSats: 30,
 };
 
 const SOLANA_MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';

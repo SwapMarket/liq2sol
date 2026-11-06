@@ -34,7 +34,7 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
   directions on Liquid testnet and Solana devnet, using stand-in assets. `cli/tests/failures.rs` runs the failure scenarios on regtest plus devnet. `maker/` has the
   engine, signer process and daemon loop, tested with real processes under crashes, halts and rollbacks, with the maker vault on. `shared/rfq` and `maker/daemon/src/rfq.rs` add quotes over Nostr, tested on a mock relay and through `relay.coinos.pro`, the user's chosen relay. Next: the static client. E14 still needs a real cluster restart. E16 only runs on a local validator.
 
-**Confidential design (on `main`, 2026-11-06):** the redesign in `docs/confidential.md` replaces the Simplicity HTLC with a MuSig2 taproot output, adapter-signed claims and blinded coins. Contracts, signer, daemon, RFQ and CLI are all moved over and tested. The docs describe that design. The program is on devnet at `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU`; the key is `programs/.keys/escrow-confidential-program.json`. Next: the static client, which still has to be built on `contracts/swapkey-wasm`.
+**Confidential design (on `main`, 2026-11-06):** the redesign in `docs/confidential.md` replaces the Simplicity HTLC with a MuSig2 taproot output, adapter-signed claims and blinded coins. Contracts, signer, daemon, RFQ and CLI are all moved over and tested. The docs describe that design. The program is on devnet at `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU`; the key is `programs/.keys/escrow-confidential-program.json`. The static client is in `client/`, deployed by `.github/workflows/pages.yml` to https://swapmarket.github.io/liq2sol/. Next: real wallets, other browsers, and release hardening (`docs/client.md` section 6).
 
 ## Design points that are easy to get wrong
 
@@ -60,6 +60,8 @@ Details and sources are in the docs. These are recorded because older assumption
 - **Liquid charges confidential transactions on discount vsize,** about a tenth of vsize. `-acceptdiscountct` is on by default on `liquidv1` and `liquidtestnet`, and off on regtest, so regtest nodes must set it.
 - **Wallets must hold only blinded coins:** an explicit input bounds the blinded outputs.
 - **A fee coin is 30 sats (user's decision, 2026-11-06),** just above a refund's 29-sat floor, because Liquid has no fee spikes. It leaves no margin if the floor rises.
+- **In the page, every change to a swap goes through `withSwap`.** A slow tick saving an old copy lost a lock and the maker's one-time share. Inputs stay the same elements across renders, or typing is lost when offers arrive.
+- **A refund's fee coin can be any amount from 30 sats.** Aqua won't send under 100, and the Blockstream wallet sends 30.
 - **The signer never reuses a coin it has signed away.** A retried lock must send the same bytes, so a reused coin could never land.
 - **Kind 21059 wrappers carry the real time.** Relays drop ephemeral events more than a few seconds old.
 - **The second Solana endpoint is Helius, using an optional key the taker provides** (user's decision, 2026-11-05). Never
@@ -85,6 +87,8 @@ Details and sources are in the docs. These are recorded because older assumption
 - `solana-test-validator` aborts here without AVX, prebuilt or built from source (`reed-solomon-erasure` runs AVX2 code unchecked). It runs under WSL on the Windows host, with `--bind-address <WSL IP>` (not `0.0.0.0`, which panics) and a Windows `netsh` port proxy; use `SOLANA_RPC=http://<Windows LAN IP>:8899`.
 - `/tmp` is wiped on reboot. Keep anything worth keeping in the repo.
 - `solana-test-validator` has SIMD-0500 active, which refuses to deploy SBPF v0: build with `cargo build-sbf --arch v3`, and deploy with `--use-rpc` through the port proxy. A restarted validator is a new chain, so redeploy and rerun `liq2sol-cli setup`, after the airdrops finalize.
+- Client: build WASM with `client/build.sh`. Unit tests: `node --test client/test/plan.test.mjs client/test/store.test.mjs`. WASM parity: `cargo test` in `client/wasm`. Real browser against the real daemon: `npm install` in `client/`, then from `maker/`, `cargo build` and `CLIENT_TEST=1 SCENARIO=browser` with the daemon suite's environment. Use the local validator for that: the fast polling gets rate-limited on public devnet. Run it more than once, because timing bugs have shown up here.
+- Failed daemon runs strand stand-in tokens in throwaway vaults. `liq2sol-cli setup` tops wallets up, once airdrops have finalized.
 - Mutation checks for this design: `RUSTFLAGS="" python3 -I -u scripts/mutate-confidential.py`, on a clean tree, with the same environment as the suites.
 - Free Solana RPC (publicnode) blocks `getProgramAccounts`/token-account indexing and old history; plan clients around
   that (remember accounts locally, derive PDAs).

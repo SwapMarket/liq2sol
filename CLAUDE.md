@@ -66,7 +66,7 @@ Details and sources are in the docs. These are recorded because older assumption
 - **A recovery file is saved before a swap starts, so it says nothing about how far the swap got.** A restored swap reads both chains before offering any step that spends.
 - **An early refund and a Solana lock must exclude each other** (L→S). The signer refuses one after the other, and records its promise before its share leaves. It is no defence against griefing, since a griefing maker just says no.
 - **The program no longer logs instruction names** (`no-log-ix-name`, on by default). That only hides labels from casual viewers.
-- **The public test makers run on the user's Debian VPS** (`liq2sol-maker@first` and `@second`, from the release), with their keys there. Their Nostr keys are on the vetted list (`client/site/js/vetted.js`). `scripts/run-test-maker.sh` still runs a local one, whose key isn't listed.
+- **The public test makers run on the user's Debian VPS** (`liq2sol-maker@first` and `@second`, from the release), with their keys there. Their Nostr keys are on the vetted list (`client/site/js/vetted.js`). `scripts/run-test-maker.sh` runs a local one, whose key stays on the list too (user's decision, 2026-11-06).
 - **Nothing in the Settings logs may hold a secret.** People paste them into chats. `js/logs.js` scrubs them, and the browser test checks after a real swap.
 - **A refund's fee coin can be any amount from 30 sats.** Aqua won't send under 100, and the Blockstream wallet sends 30.
 - **The signer never reuses a coin it has signed away.** A retried lock must send the same bytes, so a reused coin could never land.

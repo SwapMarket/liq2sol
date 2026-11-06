@@ -1,7 +1,7 @@
 # Protocol
 
-Status: Phase 1 design. Facts cited here are sourced in [assumptions.md](assumptions.md). Section 9 records the
-decisions the user made.
+Status: the confidential design, from [confidential.md](confidential.md), which has the reasoning and the measurements.
+Facts cited here are sourced in [assumptions.md](assumptions.md). Section 9 records the decisions the user made.
 
 ## 1. Trust model
 
@@ -19,16 +19,17 @@ decisions the user made.
 
 ## 2. Parties and parameters
 
-The taker always creates the secret and always locks first. The secret is a uniformly random 32-byte preimage `p`, and
-`H = SHA256(p)`, hashing exactly those 32 bytes on both chains. There is no other preimage encoding. A test vector that
-both contracts must pass is defined in [test-plan.md](test-plan.md).
+The taker always creates the secret and always locks first. The secret is a uniformly random scalar `t`, with point
+`T = t·G`. Liquid sees neither. Solana locks to `T`, and a claim reveals `s = t·Gx mod n`, from which only someone already
+holding `T` and the matching adapter signature gets anything useful. Test vectors that the program, the Rust code and an independent
+calculation must agree on are in `contracts/swapkey/tests/values.rs`.
 
 | Symbol | Meaning |
 |---|---|
 | `A_sol` | Amount in SOL-USDT base units (6 dp). This is the quoted value. |
 | `A_liq` | `A_sol × 100`, in L-USDt base units (8 dp). Checked multiplication; overflow rejects the swap. |
 | `h_accept` | Liquid tip height the maker records when accepting the RFQ. |
-| `LOCK_HEIGHT` | Absolute Liquid refund height, a parameter of the HTLC, so it is fixed before anyone funds. |
+| `LOCK_HEIGHT` | Absolute Liquid refund height, a parameter of the refund leaf, so it is fixed before anyone funds. |
 | `deadline_slot` | Solana slot at which the escrow's claim closes and refund opens. |
 
 **Amounts.** Each side receives exactly the amount it agreed to, with no rounding anywhere. The quote is expressed
@@ -82,8 +83,9 @@ window at minimum. A Solana claim lands in seconds.
 
 ## 4. L-USDt → SOL-USDT
 
-Keys: the taker holds an ephemeral Liquid refund key. The maker holds a per-swap Liquid claim key and a Solana key. The
-taker's Solana wallet receives.
+Keys: the taker holds a per-swap Liquid key, which can refund alone and claim only with the maker. The maker holds a per-swap Liquid
+key and a Solana key. The taker's Solana wallet receives. The taker also generates the coin's blinding key, and shares it in the
+encrypted accept.
 
 ```mermaid
 sequenceDiagram
@@ -91,36 +93,40 @@ sequenceDiagram
     participant L as Liquid
     participant S as Solana
     participant M as Maker
-    T->>M: rfq-request, then accept with H (Nostr)
-    M->>T: terms with keys and LOCK_HEIGHT (Nostr)
-    Note over T: Derive HTLC address locally. Save recovery file.
-    T->>L: Pay exact amount to HTLC
-    M->>L: Wait for 2 confirmations and verify
-    M->>S: lock(H, taker, receive, deadline_slot)
+    T->>M: rfq-request, then accept with T, key and blinding key (Nostr)
+    M->>T: terms with maker key and LOCK_HEIGHT (Nostr)
+    Note over T: Derive the address locally. Save recovery file.
+    T->>L: Pay exact amount to the confidential address
+    M->>L: Wait for 2 confirmations, unblind, check asset and amount
+    M->>T: claim-offer: unsigned claim and nonce (Nostr)
+    T->>M: claim-answer: nonce and adapter share (Nostr)
+    Note over M: Verify, combine, check against the output key, store durably
+    M->>S: lock(T, taker, receive, deadline_slot)
     T->>S: Verify the escrow
-    T->>S: claim(p), funds go to the taker
-    M->>S: Read p from the escrow account
-    M->>L: claim(p), funds go to the maker
+    T->>S: claim(s), funds go to the taker
+    M->>S: Read s from the escrow account, compute t
+    M->>L: Complete the signature with t, and publish the claim
 ```
 
 ### Taker states
 
 | State | Do | Next |
 |---|---|---|
-| `QUOTED` | Validate terms, generate `p` and keys, derive the address | `RECOVERY_SAVED` |
+| `QUOTED` | Validate terms, generate `t` and keys, derive the address | `RECOVERY_SAVED` |
 | `RECOVERY_SAVED` | The funding address is hidden until the recovery file has been downloaded and read back | `AWAIT_FUNDING` |
-| `AWAIT_FUNDING` | Watch the address. Wrong amount or asset → `REFUND_WAIT`, and warn the user that it can only be refunded | `AWAIT_MAKER` |
-| `AWAIT_MAKER` | Read escrow PDA `(maker, H)` and verify recipient, mint, amount, deadline and bond | `CLAIMING`, or `REFUND_WAIT` once the maker can no longer lock |
-| `CLAIMING` | Preflight, then send `claim(p)`. Check the cutoff first. | `DONE`, or `REFUND_WAIT` if never revealed |
+| `AWAIT_FUNDING` | Watch the address and unblind what arrives. Wrong amount or asset → `REFUND_WAIT`, and warn the user that it can only be refunded | `SIGNING` |
+| `SIGNING` | Answer the maker's claim offer: input 0 must be this swap's coin. The share is useless to the maker until `s` is public. | `AWAIT_MAKER` |
+| `AWAIT_MAKER` | Read escrow PDA `(maker, T.x)` and verify recipient, mint, amount, point, deadline and bond | `CLAIMING`, or `REFUND_WAIT` once the maker can no longer lock |
+| `CLAIMING` | Preflight, then send `claim(s)`. Check the cutoff first. | `DONE`, or `REFUND_WAIT` if never revealed |
 | `REFUND_WAIT` | Wait for `LOCK_HEIGHT` | `REFUNDING` |
-| `REFUNDING` | Ensure the L-BTC fee coin exists, spend the HTLC to the user's address | `REFUNDED` |
+| `REFUNDING` | Ensure a blinded L-BTC fee coin exists, spend the coin through the refund leaf to the user's address. This is recognisable as a swap refund. | `REFUNDED` |
 
-Before revealing `p`, in either direction, the client must:
+Before revealing the secret, in either direction, the client must:
 
-1. **Confirm the counterparty's lock on two independent endpoints.** Sending `p` to a lying endpoint that colludes with
+1. **Confirm the counterparty's lock on two independent endpoints.** Sending `s` to a lying endpoint that colludes with
    the maker hands over the secret against a lock that doesn't exist, and the maker then takes the taker's funds. With
    only one endpoint configured, the client requires an explicit override with a warning.
-2. **Simulate the claim** (Solana). The preimage in a failed transaction is public, and it lets the maker take the
+2. **Simulate the claim** (Solana). The value in a failed transaction is public, and it lets the maker take the
    Liquid funds **while the taker receives nothing**. Skipping preflight is forbidden. See section 7.4 for frozen
    accounts.
 
@@ -128,18 +134,18 @@ Before revealing `p`, in either direction, the client must:
 
 | State | Do | Next |
 |---|---|---|
-| `ACCEPTED` | Record `H` (must never have been seen) and derive the expected address | `WATCH_LOCK` |
-| `WATCH_LOCK` | Wait for the expected address to receive one explicit output of the exact asset and amount. Abandon if past `FUND_WINDOW` | `LOCK_GATE` |
-| `LOCK_GATE` | Check confirmations, the gate in section 3, and halt detection (section 7.5) | `LOCKED`, or abandon |
+| `ACCEPTED` | Record `T.x` (must never have been seen) and derive the expected address | `WATCH_LOCK` |
+| `WATCH_LOCK` | Wait for an output at the address that unblinds to exactly the agreed asset and amount. Abandon if past `FUND_WINDOW` | `LOCK_GATE` |
+| `LOCK_GATE` | Check confirmations, the gate in section 3, and halt detection (section 7.5). Run the signing session. **No lock without a stored adapter signature.** | `LOCKED`, or abandon |
 | `LOCKED` | Poll the escrow account | `CLAIMED_SOL` on claim, `REFUND_SOL` once closed |
-| `CLAIMED_SOL` | Read `p` from the account. Claim on Liquid at once. Rebroadcast and fee-bump until confirmed. | `DONE` |
+| `CLAIMED_SOL` | Read `s`, compute `t`, complete the stored signature, and publish. Rebroadcast until confirmed. The fee can't be raised, because the signature commits to the transaction. A child spend of the output can. | `DONE` |
 | `REFUND_SOL` | Call `refund` | `DONE` |
 
 ## 5. SOL-USDT → L-USDt
 
-Keys: the taker holds an ephemeral Liquid claim key, and its wallet signs on Solana. The maker holds a per-swap Liquid
-refund key and a Solana recipient key. `LOCK_HEIGHT` is fixed at accept, so the taker knows the Liquid address in
-advance and can find the maker's lock with no message at all.
+Keys: the taker holds a per-swap Liquid key, and its wallet signs on Solana. The maker holds a per-swap Liquid key, which can refund
+alone, and a Solana recipient key. `LOCK_HEIGHT` is fixed at accept, so the taker knows the Liquid address in advance and can find
+the maker's lock with no message at all.
 
 ```mermaid
 sequenceDiagram
@@ -147,17 +153,26 @@ sequenceDiagram
     participant S as Solana
     participant L as Liquid
     participant M as Maker
-    T->>M: rfq-request, then accept with H (Nostr)
-    M->>T: terms with keys and LOCK_HEIGHT (Nostr)
-    Note over T: Derive HTLC address locally. Save recovery file.
-    T->>S: lock(H, maker, send, deadline_slot)
+    T->>M: rfq-request, then accept with T, key and blinding key (Nostr)
+    M->>T: terms with maker key and LOCK_HEIGHT (Nostr)
+    Note over T: Derive the address locally. Save recovery file.
+    T->>S: lock(T, maker, send, deadline_slot)
     M->>S: Verify at finalized
-    M->>L: Pay exact amount to HTLC, plus L-BTC fee coin
-    T->>L: Wait for 2 confirmations and verify
-    T->>L: claim(p), funds go to the taker
-    M->>L: Read p from the claim witness
-    M->>S: claim(p), funds go to the maker
+    M->>L: Pay exact amount to the address, plus a blinded L-BTC fee coin
+    T->>L: Wait for 2 confirmations, unblind, check asset and amount
+    T->>M: session-open: unsigned claim and nonce (Nostr)
+    M->>T: session-nonce (Nostr)
+    T->>M: taker-share (Nostr)
+    Note over M: Verify, combine, store durably, and only then answer
+    M->>T: maker-share (Nostr)
+    T->>L: Complete the signature with t, and publish the claim
+    M->>L: Read the signature, compute t
+    M->>S: claim(s), funds go to the maker
 ```
+
+**The order inside the session is what keeps the maker safe.** With the maker's share the taker can finish the claim, and the maker
+can only read `t` from that signature if it holds the matching adapter signature. So the maker stores it first, gives one share
+per swap, and resends the same share if the reply was lost. It also refuses once the taker's escrow is no longer open.
 
 ### Taker states
 
@@ -166,12 +181,13 @@ sequenceDiagram
 | `QUOTED` | As in section 4 | `RECOVERY_SAVED` |
 | `RECOVERY_SAVED` | As in section 4 | `LOCKING` |
 | `LOCKING` | Wallet signs `lock`. Check `FUND_WINDOW` first. | `AWAIT_MAKER` |
-| `AWAIT_MAKER` | Watch the address for an explicit output of the exact asset and amount, with enough confirmations | `CLAIMING`, or `REFUND_WAIT` once the maker can no longer lock |
-| `CLAIMING` | Check the cutoff and two-endpoint confirmation (section 4), spend the HTLC and the fee coin to the user's script. Rebroadcast until confirmed. | `DONE` |
+| `AWAIT_MAKER` | Watch the address and unblind what arrives, for the exact asset and amount with enough confirmations | `SIGNING`, or `REFUND_WAIT` once the maker can no longer lock |
+| `SIGNING` | Run the session. If the maker never answers, nothing has been revealed, and the swap ends in `REFUND_WAIT`. | `CLAIMING` |
+| `CLAIMING` | Check the cutoff and two-endpoint confirmation (section 4), complete the signature, and publish. Rebroadcast until confirmed. | `DONE` |
 | `REFUND_WAIT` | Wait for `deadline_slot`, which `extend` may have moved | `REFUNDING` |
-| `REFUNDING` | Wallet signs `refund`. **Never** call `claim` on Liquid after this. | `REFUNDED` |
+| `REFUNDING` | Wallet signs `refund`. **Never** publish the Liquid claim after this. | `REFUNDED` |
 
-After the taker broadcasts a Liquid claim the preimage is public, so the client must keep rebroadcasting until
+After the taker broadcasts a Liquid claim the maker can read the secret, so the client must keep rebroadcasting until
 confirmed. If the maker's refund beats it (only possible if the cutoff was ignored or Liquid rolled back), the taker has
 lost the funds.
 
@@ -179,11 +195,11 @@ lost the funds.
 
 | State | Do | Next |
 |---|---|---|
-| `ACCEPTED` | Record `H` | `WATCH_LOCK` |
-| `WATCH_LOCK` | Read escrow PDA `(taker, H)` at `finalized`, verify all fields including `close_on_restart = false` | `LOCK_GATE` |
+| `ACCEPTED` | Record `T.x` | `WATCH_LOCK` |
+| `WATCH_LOCK` | Read escrow PDA `(taker, T.x)` at `finalized`, verify all fields including the full point and `close_on_restart = false` | `LOCK_GATE` |
 | `LOCK_GATE` | Gate from section 3, exposure limits, halt detection | `LOCKED`, or abandon |
-| `LOCKED` | Watch the HTLC outpoint, mempool included | `CLAIMED_LIQ` on spend, `REFUND_LIQ` at `LOCK_HEIGHT` |
-| `CLAIMED_LIQ` | Extract `p` from the witness, claim on Solana at once | `DONE` |
+| `LOCKED` | Take part in the session when asked. Watch the coin's outpoint, mempool included | `CLAIMED_LIQ` on spend, `REFUND_LIQ` at `LOCK_HEIGHT` |
+| `CLAIMED_LIQ` | Read `t` from the signature, using the stored adapter signature. Claim on Solana at once | `DONE` |
 | `REFUND_LIQ` | Broadcast as soon as the tip reaches `LOCK_HEIGHT`, so it mines in the first block that allows it, racing any late taker claim. Refused if this swap's Solana escrow is `Claimed` (section 7.3). | `DONE` |
 
 ## 6. Message formats
@@ -285,19 +301,19 @@ freezable account and an exception to this; see [contracts.md](contracts.md).
 
 ## 7.6 Privacy
 
-**Swaps are not confidential, and can't be under this design.** The covenant needs to read the asset and amount, so an HTLC coin
-and the claim's output 0 must be explicit.
+**An outside observer can't link the two legs, and can't see the Liquid amount or asset.** Each measure and its limits are in
+[confidential.md](confidential.md).
 
 | Who can see | What |
 |---|---|
-| Anyone reading Liquid | The HTLC address, asset and amount, the claim's destination script, and the preimage once claimed. The taker's change from a wallet may stay blinded. |
-| Anyone reading Solana | The escrow, both parties' addresses, the amount, the payment hash and the preimage. |
-| Anyone reading both | **That the two legs are one swap**, because the same payment hash appears on both chains. So a Liquid script and a Solana address are publicly linked. |
+| Anyone reading Liquid | A taproot spend of a blinded coin, paying a blinded output, like any other. A claim shows one signature and no script. **A refund is recognisable:** it reveals a Simplicity leaf with a lock height. The L-BTC fee is public. |
+| Anyone reading Solana | The escrow, both parties' addresses, the amount, the point `T` and the revealed value. The Solana leg isn't private. |
+| Anyone reading both | **No shared value.** `T` and `t` appear nowhere on Liquid. Only timing could suggest a link, and the amount can't, because it is hidden. |
+| The counterparty | Everything about this swap: the blinding key reads the amount, and it knows both legs. |
 | Relays | Who receives a message and when. Not its contents, or who sent it. |
 
-A taker can reduce what follows them by receiving at a fresh address and moving funds on afterwards, on Liquid into a confidential
-output. That breaks no link already on-chain. Hiding the link between the legs would take a different construction, such as adapter
-signatures, which is out of scope here.
+The hidden amount holds only if the coins around it are blinded. A wallet spending explicit coins gives a bound on what it paid, so
+the maker's wallet holds only blinded coins. A taker paying from an explicit coin leaks that bound for its own swap.
 
 ## 8. Free option and griefing
 
@@ -335,7 +351,8 @@ The user accepted all ten recommended options on 2026-11-05. The alternatives st
 ### D3. L-BTC for Liquid fees
 
 Non-L-BTC fees aren't usable: consensus tracks fees per asset, but the mempool counts only the policy asset, so a
-USDt-only fee counts as zero and fails relay. So the covenant can't take the fee in USDt and pay it directly.
+USDt-only fee counts as zero and fails relay. This decision still holds under the confidential design, with the fee coin now blinded, and a
+reserved pool on the maker's side ([confidential.md](confidential.md)).
 
 | Option | Trade-off |
 |---|---|
@@ -344,6 +361,8 @@ USDt-only fee counts as zero and fails relay. So the covenant can't take the fee
 | Covenant allows `output 0 ≥ AMOUNT − SPONSOR_CAP`, so a third party can add L-BTC and be paid in USDt | Solves the no-L-BTC case fully, with a slightly larger covenant and an inexact amount. Needs a sponsor to exist, which reintroduces infrastructure. |
 
 ### D4. Recipient signature on the claim
+
+*Superseded by the confidential design: a claim is now one key-path signature from both parties, and there is no covenant.*
 
 | Option | Trade-off |
 |---|---|

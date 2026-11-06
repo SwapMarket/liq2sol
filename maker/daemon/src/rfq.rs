@@ -1,23 +1,25 @@
 //! The maker's side of RFQ. Everything arriving here is attacker-reachable, so it is parsed strictly, rate limited, and
-//! can only ever register a swap: no message moves funds, and the engine and signer still check every lock on-chain.
+//! can only register a swap or take part in its signing session: no message moves funds, and the engine and signer still
+//! check every lock on-chain and every signature share.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use liq2sol_chain::liquid::{usdt, Esplora};
 use liq2sol_maker_core::engine::{self, Terms};
 use liq2sol_maker_core::store::Store;
-use liq2sol_rfq::messages::{self as msg, *};
+use liq2sol_maker_core::LockPoint;
+use liq2sol_rfq::messages::*;
 use liq2sol_rfq::relay::{Relay, RelayEvent};
 use liq2sol_rfq::rules::{self, MakerRules, RateLimit};
 use liq2sol_rfq::wrap;
-use liq2sol_signer::{Call, Client, L2sTerms, Reply, S2lTerms};
+use liq2sol_signer::{Call, Client, Reply, SwapTerms};
 use nostr::prelude::*;
 use serde::{Deserialize, Serialize};
-use simplicityhl::elements::Script;
 
 use crate::{accept, Details};
 
@@ -57,7 +59,6 @@ pub struct Handler {
     store: Store,
     chain: Esplora,
     signer: Client,
-    our_script: Script,
     our_solana: String,
     our_initiator: String,
     engine: engine::Config,
@@ -89,7 +90,7 @@ impl Handler {
         let store = Store::open(&maker.db).map_err(|e| e.to_string())?;
         let chain = crate::source(&maker.liquid);
         let mut signer = Client::connect(&maker.signer_socket)?;
-        let Reply::Identity { liquid_script, solana, escrow_initiator, .. } = signer.call(&Call::Identity)? else {
+        let Reply::Identity { solana, escrow_initiator, .. } = signer.call(&Call::Identity)? else {
             return Err("unexpected reply from the signer".into());
         };
         Ok(Self {
@@ -98,7 +99,6 @@ impl Handler {
             store,
             chain,
             signer,
-            our_script: Script::from(liquid_script),
             our_solana: solana,
             our_initiator: escrow_initiator,
             engine: maker.engine.clone(),
@@ -129,7 +129,7 @@ impl Handler {
             v: VERSION,
             network: self.cfg.network.clone(),
             program_id: solana_escrow::id().to_string(),
-            template_version: 1,
+            template_version: TEMPLATE_VERSION,
             directions: vec![Direction::L2S, Direction::S2L],
             min_sol_units: Units(self.cfg.min_sol_units),
             max_sol_units: Units(self.cfg.max_sol_units),
@@ -172,8 +172,16 @@ impl Handler {
         match got.envelope.body {
             Body::RfqRequest(request) => self.on_request(&got.sender, &id, request, now),
             Body::RfqAccept(acc) => self.on_accept(&got.sender, &id, &got.rumor_id, acc, now),
+            Body::ClaimAnswer(a) => self.on_claim_answer(&got.sender, &id, a),
+            Body::SessionOpen(o) => self.on_session_open(&got.sender, &id, o, now),
+            Body::TakerShare(s) => self.on_taker_share(&got.sender, &id, s, now),
             // A taker has no business sending these, and a reject has nothing to free up in this version.
-            Body::RfqQuote(_) | Body::RfqTerms(_) | Body::RfqReject(_) => None,
+            Body::RfqQuote(_)
+            | Body::RfqTerms(_)
+            | Body::RfqReject(_)
+            | Body::ClaimOffer(_)
+            | Body::SessionNonce(_)
+            | Body::MakerShare(_) => None,
         }
     }
 
@@ -204,7 +212,7 @@ impl Handler {
         if let Some((answered_id, event)) = &n.answered {
             return (answered_id == rumor_id).then(|| event.clone());
         }
-        let checked = rules::check_accept(&acc, n.direction, &n.quote, &n.quote_rumor_id, now).ok()?;
+        let checked = rules::check_accept(&acc, &n.quote, &n.quote_rumor_id, now).ok()?;
         let (direction, quote) = (n.direction, n.quote.clone());
         match self.terms_for(sender, id, rumor_id, direction, &quote, checked, now) {
             Ok(event) => {
@@ -243,60 +251,124 @@ impl Handler {
         // A bad address is refused here, and not when it would later fail on-chain.
         Pubkey58::check(&c.taker_solana)?;
 
-        let Reply::SwapKey { x_only } = self.signer.call(&Call::SwapKey { payment_hash: c.payment_hash })? else {
+        let lock_point = LockPoint(c.lock_point);
+        let Reply::SwapKey { key } = self.signer.call(&Call::SwapKey { swap_id: lock_point.id() })? else {
             return Err("unexpected reply from the signer".into());
         };
-        let details = match direction {
-            Direction::L2S => Details::L2S(L2sTerms {
-                payment_hash: c.payment_hash,
-                taker_pk: c.taker_liquid_pk,
-                lock_height,
-                liquid_amount,
-                solana_amount,
-                taker_solana: c.taker_solana,
-            }),
-            Direction::S2L => Details::S2L(S2lTerms {
-                payment_hash: c.payment_hash,
-                taker_pk: c.taker_liquid_pk,
-                taker_script: c.taker_liquid_script.ok_or("no taker script")?,
-                taker_fee_script: c.taker_fee_script.ok_or("no fee script")?,
-                lock_height,
-                liquid_amount,
-                taker_solana: c.taker_solana,
-            }),
-        };
-        let terms = Terms {
+        let swap = SwapTerms {
             direction: match direction {
                 Direction::L2S => engine::Direction::L2S,
                 Direction::S2L => engine::Direction::S2L,
             },
-            payment_hash: c.payment_hash,
+            lock_point,
+            taker_key: LockPoint(c.taker_key),
+            blinding_key: c.blinding_key,
+            lock_height,
             liquid_amount,
             solana_amount,
-            h_accept: tip,
-            lock_height,
+            taker_solana: c.taker_solana,
         };
-        // The forever check: a payment hash ever seen before is refused, because its preimage may be public.
+        // A point off the curve, a bad key or a bad blinding key is refused here, and not when funds depend on it.
+        liq2sol_swapkey::solana_point_of(&lock_point.0).map_err(|e| e.to_string())?;
+        swap.address(&key)?;
+        let details = Details { terms: swap.clone(), taker_nostr: sender.to_hex(), negotiation: id.to_string() };
+        let terms =
+            Terms { direction: swap.direction, lock_point, liquid_amount, solana_amount, h_accept: tip, lock_height };
+        // The forever check: a point ever seen before is refused, because its secret may be public.
         if !accept(&self.store, &terms, &details)? {
-            return Err("this payment hash has been used before".into());
+            return Err("this lock point has been used before".into());
         }
         let is_l2s = direction == Direction::L2S;
         let body = Body::RfqTerms(MakerTerms {
             accept_event: accept_rumor_id.to_string(),
             h_accept: tip,
             lock_height,
-            maker_liquid_pk: msg::hex(&x_only),
-            maker_liquid_script: is_l2s.then(|| msg::hex(self.our_script.as_bytes())),
+            maker_key: key.to_hex(),
             maker_solana: self.our_solana.clone(),
             maker_initiator: is_l2s.then(|| self.our_initiator.clone()),
             usdt_asset: usdt().to_string(),
             program_id: solana_escrow::id().to_string(),
-            template_version: 1,
+            template_version: TEMPLATE_VERSION,
             liquid_amount: Units(liquid_amount),
             solana_amount: Units(solana_amount),
             min_deadline_slots: self.cfg.min_deadline_slots,
         });
         self.reply(sender, id, body, now).map(|(event, _)| event)
+    }
+
+    /// The swap a session message belongs to. Only that swap's taker, in that swap's negotiation, gets anywhere, and
+    /// nobody does while the rollback alarm is on: what we believe about the chain can't be trusted then.
+    fn swap_for(&self, sender: &PublicKey, id: &str, lock_point: &str) -> Option<SwapTerms> {
+        if self.store.rollback().unwrap_or(true) {
+            return None;
+        }
+        let point = LockPoint::from_hex(lock_point)?;
+        let body = self.store.details(&point.id()).ok()??;
+        let details: Details = serde_json::from_str(&body).ok()?;
+        (details.taker_nostr == sender.to_hex() && details.negotiation == id && details.terms.lock_point == point)
+            .then_some(details.terms)
+    }
+
+    /// L→S. Nothing goes back: the engine sees the stored signature on its next tick, and locks.
+    fn on_claim_answer(&mut self, sender: &PublicKey, id: &str, a: ClaimAnswer) -> Option<Event> {
+        let terms = self.swap_for(sender, id, &a.lock_point)?;
+        let call = Call::StoreAdaptor { terms, taker_nonce: a.nonce, taker_share: a.share };
+        match self.signer.call(&call) {
+            Ok(Reply::Held(true)) => println!("{} adapter signature stored", a.lock_point),
+            other => eprintln!("rfq: claim answer refused: {other:?}"),
+        }
+        None
+    }
+
+    fn on_session_open(&mut self, sender: &PublicKey, id: &str, o: SessionOpen, now: u64) -> Option<Event> {
+        let terms = self.swap_for(sender, id, &o.lock_point)?;
+        let call = Call::OpenSession { terms, claim_tx: o.tx, taker_nonce: o.nonce };
+        match self.signer.call(&call) {
+            Ok(Reply::Nonce(nonce)) => {
+                let body = Body::SessionNonce(SessionNonce { lock_point: o.lock_point, nonce });
+                self.reply(sender, id, body, now).ok().map(|(e, _)| e)
+            }
+            other => {
+                eprintln!("rfq: signing session refused: {other:?}");
+                None
+            }
+        }
+    }
+
+    fn on_taker_share(&mut self, sender: &PublicKey, id: &str, s: SessionShare, now: u64) -> Option<Event> {
+        let terms = self.swap_for(sender, id, &s.lock_point)?;
+        match self.signer.call(&Call::FinishSession { terms, taker_share: s.share }) {
+            Ok(Reply::Share(share)) => {
+                let body = Body::MakerShare(SessionShare { lock_point: s.lock_point, share });
+                self.reply(sender, id, body, now).ok().map(|(e, _)| e)
+            }
+            other => {
+                eprintln!("rfq: taker's share refused: {other:?}");
+                None
+            }
+        }
+    }
+}
+
+/// How the main loop reaches a taker. Everything goes out through every relay.
+#[derive(Clone)]
+pub struct Outbox {
+    keys: Keys,
+    network: String,
+    relays: Vec<Sender<Event>>,
+}
+
+impl Outbox {
+    pub fn send(&self, to_hex: &str, id: &str, body: Body) -> Result<(), String> {
+        let to = PublicKey::from_hex(to_hex).map_err(|e| e.to_string())?;
+        let now = now_secs();
+        let envelope = Envelope { v: VERSION, id: id.to_string(), network: self.network.clone(), sent_at: now, body };
+        let (event, _) = wrap::wrap(&self.keys, &to, &envelope, now).map_err(|e| format!("{e:?}"))?;
+        for relay in &self.relays {
+            // A relay thread only goes away with the process, so a failure here means nothing is listening anyway.
+            let _ = relay.send(event.clone());
+        }
+        Ok(())
     }
 }
 
@@ -309,7 +381,13 @@ impl Pubkey58 {
 
 /// One relay, forever: reconnect on failure, publish offers, and answer what arrives. A relay that goes away costs
 /// quotes on that relay, and nothing else.
-fn run_relay(url: String, handler: Arc<Mutex<Handler>>, pubkey: PublicKey, offer_every: Duration) {
+fn run_relay(
+    url: String,
+    handler: Arc<Mutex<Handler>>,
+    pubkey: PublicKey,
+    offer_every: Duration,
+    outgoing: Receiver<Event>,
+) {
     loop {
         let mut relay = match Relay::connect(&url, Duration::from_secs(1)) {
             Ok(r) => r,
@@ -326,7 +404,15 @@ fn run_relay(url: String, handler: Arc<Mutex<Handler>>, pubkey: PublicKey, offer
             continue;
         }
         let mut last_offer: Option<Instant> = None;
-        loop {
+        // Whatever piled up during an outage is stale, and the engine will ask again.
+        while outgoing.try_recv().is_ok() {}
+        'connected: loop {
+            while let Ok(event) = outgoing.try_recv() {
+                if let Err(e) = relay.publish(&event) {
+                    eprintln!("rfq: {url}: {e}");
+                    break 'connected;
+                }
+            }
             if last_offer.is_none_or(|t| t.elapsed() >= offer_every) {
                 let offer = handler.lock().map_err(|_| "poisoned".to_string()).and_then(|h| h.offer(now_secs()));
                 match offer.and_then(|o| relay.publish(&o)) {
@@ -359,15 +445,18 @@ fn run_relay(url: String, handler: Arc<Mutex<Handler>>, pubkey: PublicKey, offer
 }
 
 /// Start answering on every configured relay.
-pub fn start(cfg: RfqConfig, maker: &crate::Config) -> Result<PublicKey, String> {
+pub fn start(cfg: RfqConfig, maker: &crate::Config) -> Result<(PublicKey, Outbox), String> {
     let relays = cfg.relays.clone();
     let every = Duration::from_secs(cfg.offer_every_secs);
     let handler = Handler::new(cfg, maker)?;
     let pubkey = handler.keys.public_key();
+    let mut outbox = Outbox { keys: handler.keys.clone(), network: handler.cfg.network.clone(), relays: vec![] };
     let handler = Arc::new(Mutex::new(handler));
     for url in relays {
         let h = handler.clone();
-        std::thread::spawn(move || run_relay(url, h, pubkey, every));
+        let (send, receive) = channel();
+        outbox.relays.push(send);
+        std::thread::spawn(move || run_relay(url, h, pubkey, every, receive));
     }
-    Ok(pubkey)
+    Ok((pubkey, outbox))
 }

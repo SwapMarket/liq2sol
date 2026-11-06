@@ -309,7 +309,8 @@ fn our_share_is_given_once_and_only_while_the_swap_is_live() {
     let m = Mem::default();
     assert_eq!(apply(&m, &share(1_000)), Err(Refusal::UnknownSwap), "nothing is locked");
     apply(&m, &lock_liquid()).unwrap();
-    let refunded = Request::GiveShare { swap_id: hash(), lock_height: 1_090, liquid_tip: 1_000, taker_escrow_open: false };
+    let refunded =
+        Request::GiveShare { swap_id: hash(), lock_height: 1_090, liquid_tip: 1_000, taker_escrow_open: false };
     assert_eq!(apply(&m, &refunded), Err(Refusal::NoTakerEscrow), "the taker took its refund, so a claim would steal");
     assert!(matches!(apply(&m, &share(1_090)), Err(Refusal::BadTimeout(_))), "the refund path is open");
     apply(&m, &share(1_089)).unwrap();

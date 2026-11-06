@@ -1,5 +1,6 @@
 //! The real daemon and signer processes, against a regtest node and a real Solana cluster, with a simulated taker.
-//! Scenarios E1, E3, E5, E9, E11, E15 and E17 from docs/test-plan.md: each checks where the money ended up.
+//! Scenarios E1, E3, E5, E9, E11, E15 and E17 from docs/test-plan.md: each checks where the money ended up. A swap's taker is
+//! simulated by a bot answering over the relay, as a real wallet would.
 //!
 //!   ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli SOLANA_RPC=https://api.devnet.solana.com \
 //!     cargo test -p liq2sol-maker --test e2e -- --ignored --nocapture
@@ -7,39 +8,40 @@
 //! Run `cargo build` first, because this starts the signer binary from the same workspace. Needs `cli/.keys` from
 //! `liq2sol-cli setup`, holding SOL and stand-in tokens. `SCENARIO` runs a subset.
 
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anchor_lang::prelude::Pubkey;
 use liq2sol_chain::liquid::{
-    address_of, exact_coin, keypair_from, lbtc, pay, random32, spend_htlc, txout, usdt, use_network, Coin, Esplora,
-    HtlcSpend, NetworkConfig, Rpc, FEE,
+    build_confidential_pay, build_swap_spend, exact_secret_coin, keypair_from, lbtc, random32, usdt, use_network,
+    Esplora, NetworkConfig, Payment, Rpc, SecretCoin, Wallet, FEE,
 };
 use liq2sol_chain::sol::{self, ata, escrow_pda, Sol, MAINNET_GENESIS};
-use liq2sol_htlc::{Htlc, HtlcParams};
+use liq2sol_chain::swap::{answer_claim, TakerClaim};
 use liq2sol_maker::rfq::{load_keys, RfqConfig};
 use liq2sol_maker::{accept, Config, Details};
 use liq2sol_maker_core::engine::{Action, Config as EngineConfig, Direction, Outcome, State, Terms};
-use liq2sol_maker_core::hash_preimage;
 use liq2sol_maker_core::policy::Limits;
 use liq2sol_maker_core::store::Store;
+use liq2sol_maker_core::LockPoint;
 use liq2sol_rfq::messages::{self as msg, Accept, AmountSide, Body, Envelope, MakerTerms, Request, Units};
 use liq2sol_rfq::mock_relay::MockRelay;
 use liq2sol_rfq::relay::{Relay, RelayEvent};
 use liq2sol_rfq::rules::TakerRules;
-use liq2sol_rfq::taker::{find_offers, negotiate, Negotiated, TakerSide};
+use liq2sol_rfq::taker::{find_offers, negotiate, send_body, wait_from, Negotiated, TakerSide};
 use liq2sol_rfq::wrap;
-use liq2sol_signer::{
-    l2s_params, s2l_params, Call, Client, Config as SignerConfig, L2sTerms, LiquidSource, Reply, S2lTerms,
-};
+use liq2sol_signer::{unhex, Call, Client, Config as SignerConfig, LiquidSource, Reply, SwapTerms};
+use liq2sol_swapkey::{nonce_bytes, nonce_from, point_of, share_bytes, share_from, solana_point_of, solana_value};
 use nostr::prelude::{Keys, Kind};
-use simplicityhl::elements::secp256k1_zkp::Keypair as LiquidKey;
-use simplicityhl::elements::{AddressParams, AssetId, BlockHash, Script, Transaction as LiquidTx};
+use simplicityhl::elements::encode::{deserialize, serialize_hex};
+use simplicityhl::elements::secp256k1_zkp::{Keypair as LiquidKey, SecretKey};
+use simplicityhl::elements::{Address, AddressParams, AssetId, BlockHash, Script, Sequence, Transaction as LiquidTx};
 use solana_escrow::state::EscrowState;
 use solana_sdk::signature::{read_keypair_file, Keypair};
 use solana_sdk::signer::Signer as _;
@@ -98,6 +100,7 @@ impl Node {
             .arg(format!("-datadir={}", self.dir.display()))
             .args(["-chain=liquidregtest", "-listen=0", "-txindex=1", "-validatepegin=0", "-fallbackfee=0.00001"])
             .args(["-initialfreecoins=2100000000", "-anyonecanspendaremine=1", "-evbparams=simplicity:-1:::"])
+            .arg("-acceptdiscountct=1")
             .args([
                 "-persistmempool=0",
                 "-rpcuser=t",
@@ -215,14 +218,15 @@ struct World {
     sol: Sol,
     genesis: BlockHash,
     taker_sol: Keypair,
-    taker_wallet: LiquidKey,
+    taker_wallet: Wallet,
     maker_solana: Pubkey,
     /// Our escrows are seeded with the vault, and draw from its token account.
     vault: Pubkey,
     vault_token: Pubkey,
     vault_owner: Keypair,
-    maker_script: Script,
     maker_address: String,
+    maker_blinding: SecretKey,
+    bot: Bot,
     client: Client,
     store: Store,
     daemon: Option<Proc>,
@@ -284,19 +288,19 @@ impl World {
         }
     }
 
-    fn holdings(&self, key_address: &simplicityhl::elements::Address) -> Res<u64> {
+    fn holdings(&self) -> Res<u64> {
+        let address = simplicityhl::elements::Address::from_str(&self.maker_address).map_err(|e| format!("{e:?}"))?;
         Ok(self
             .chain
-            .coins(key_address)?
+            .secret_coins(&address, &self.maker_blinding)?
             .iter()
-            .filter(|c| c.out.asset.explicit() == Some(usdt()))
-            .filter_map(|c| c.out.value.explicit())
+            .filter(|c| c.secrets.asset == usdt())
+            .map(|c| c.secrets.value)
             .sum())
     }
 
     fn maker_holdings(&self) -> Res<u64> {
-        let address = simplicityhl::elements::Address::from_str(&self.maker_address).map_err(|e| format!("{e:?}"))?;
-        self.holdings(&address)
+        self.holdings()
     }
 
     fn tokens(&self, owner: &Pubkey) -> Res<u64> {
@@ -308,100 +312,303 @@ impl World {
         Ok(self.sol.token_balance(&self.vault_token)? + self.tokens(&self.maker_solana)?)
     }
 
-    fn swap_key(&mut self, hash: [u8; 32]) -> [u8; 32] {
-        let Reply::SwapKey { x_only } = self.client.call(&Call::SwapKey { payment_hash: hash }).unwrap() else {
-            panic!()
-        };
-        x_only
+    fn maker_key(&mut self, id: [u8; 32]) -> LockPoint {
+        let Reply::SwapKey { key } = self.client.call(&Call::SwapKey { swap_id: id }).unwrap() else { panic!() };
+        key
     }
 }
 
-/// One simulated taker's side of an L→S swap.
-struct L2s {
-    preimage: [u8; 32],
-    hash: [u8; 32],
-    params: HtlcParams,
-    escrow: Pubkey,
+/// A taker's wallet at work: it watches for claim offers on its L→S swaps, checks each one, and signs it.
+struct Bot {
+    keys: Keys,
+    swaps: Arc<Mutex<HashMap<String, BotSwap>>>,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
-fn new_l2s(w: &mut World, lock_in: u32) -> Res<L2s> {
-    let preimage = random32()?;
-    let hash = hash_preimage(&preimage);
-    let refund_key = keypair_from(&random32()?)?;
-    let tip = w.chain.tip()?;
-    let details = L2sTerms {
-        payment_hash: hash,
-        taker_pk: refund_key.x_only_public_key().0.serialize(),
-        lock_height: tip + lock_in,
-        liquid_amount: LIQ_AMOUNT,
-        solana_amount: SOL_AMOUNT,
-        taker_solana: w.taker_sol.pubkey().to_string(),
-    };
-    let key = w.swap_key(hash);
-    let params = l2s_params(&details, key, &w.maker_script);
-    let terms = Terms {
-        direction: Direction::L2S,
-        payment_hash: hash,
-        liquid_amount: LIQ_AMOUNT,
-        solana_amount: SOL_AMOUNT,
-        h_accept: tip,
-        lock_height: tip + lock_in,
-    };
-    check(accept(&w.store, &terms, &Details::L2S(details))?, "the maker accepted the swap")?;
-    Ok(L2s { preimage, hash, params, escrow: escrow_pda(&w.vault, &hash) })
+#[derive(Clone)]
+struct BotSwap {
+    terms: SwapTerms,
+    key: LiquidKey,
+    maker_key: LockPoint,
 }
 
-/// One simulated taker's side of an S→L swap.
-struct S2l {
-    preimage: [u8; 32],
-    hash: [u8; 32],
-    claim_key: LiquidKey,
-    fee_key: LiquidKey,
-    params: HtlcParams,
+impl Bot {
+    fn start(url: &str, maker: nostr::prelude::PublicKey, chain: Esplora, genesis: BlockHash) -> Self {
+        let keys = Keys::generate();
+        let swaps: Arc<Mutex<HashMap<String, BotSwap>>> = Arc::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (url, me, map, halt) = (url.to_string(), keys.clone(), swaps.clone(), stop.clone());
+        let thread = std::thread::spawn(move || {
+            let mut relay = Relay::connect(&url, Duration::from_millis(200)).expect("bot relay");
+            relay
+                .subscribe("bot", &[Kind::from(msg::WRAP_KIND)], Some(&me.public_key()), now_secs() - 2 * 86_400)
+                .expect("bot subscribe");
+            let mut answered = HashSet::new();
+            while !halt.load(Ordering::SeqCst) {
+                let Ok(Some(RelayEvent::Event(e))) = relay.next_event() else { continue };
+                let Ok(got) = wrap::unwrap(&me, &e) else { continue };
+                if got.sender != maker {
+                    continue;
+                }
+                let Body::ClaimOffer(offer) = got.envelope.body else { continue };
+                // The maker repeats its offer until the lock appears. Answering once per nonce is enough.
+                if !answered.insert(offer.nonce.clone()) {
+                    continue;
+                }
+                let Some(swap) = map.lock().unwrap().get(&offer.lock_point).cloned() else { continue };
+                match answer_offer(&chain, &swap, &offer, genesis) {
+                    Ok(answer) => {
+                        let sent =
+                            send_body(&mut relay, &me, &maker, &got.envelope.id, NETWORK, Body::ClaimAnswer(answer));
+                        if let Err(e) = sent {
+                            eprintln!("bot: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("bot: refusing an offer: {e}"),
+                }
+            }
+        });
+        Self { keys, swaps, stop, thread: Some(thread) }
+    }
+
+    fn watch(&self, swap: BotSwap) {
+        self.swaps.lock().unwrap().insert(swap.terms.lock_point.to_hex(), swap);
+    }
+}
+
+impl Drop for Bot {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Check a claim offer and answer it. The coin comes from the taker's own reading of the chain.
+fn answer_offer(chain: &Esplora, s: &BotSwap, offer: &msg::ClaimOffer, genesis: BlockHash) -> Res<msg::ClaimAnswer> {
+    let address = s.terms.address(&s.maker_key)?;
+    let coins = chain.secret_coins(&address, &s.terms.blinding()?)?;
+    let coin = exact_secret_coin(&coins, usdt(), s.terms.liquid_amount, chain.tip()?, 0).ok_or("no coin of ours")?;
+    let tx: LiquidTx = deserialize(&unhex(&offer.tx)?).map_err(|e| e.to_string())?;
+    let nonce = nonce_from(&unhex(&offer.nonce)?).map_err(|e| e.to_string())?;
+    let output = s.terms.output(&s.maker_key)?;
+    let (ours, share) =
+        answer_claim(chain, &s.key, &output, &coin.coin.outpoint, &s.terms.lock_point.0, &nonce, &tx, genesis)?;
+    Ok(msg::ClaimAnswer {
+        lock_point: offer.lock_point.clone(),
+        nonce: msg::hex(&nonce_bytes(&ours)),
+        share: msg::hex(&share_bytes(&share)),
+    })
+}
+
+/// One simulated taker's swap, in either direction.
+struct Swap {
+    secret: [u8; 32],
+    id: [u8; 32],
+    point: LockPoint,
+    key: LiquidKey,
+    terms: SwapTerms,
+    maker_key: LockPoint,
     escrow: Pubkey,
+    negotiation: String,
     to: Script,
 }
 
-fn new_s2l(w: &mut World, lock_in: u32) -> Res<S2l> {
-    let preimage = random32()?;
-    let hash = hash_preimage(&preimage);
-    let (claim_key, fee_key) = (keypair_from(&random32()?)?, keypair_from(&random32()?)?);
-    let to = address_of(&w.taker_wallet).script_pubkey();
-    let tip = w.chain.tip()?;
-    let details = S2lTerms {
-        payment_hash: hash,
-        taker_pk: claim_key.x_only_public_key().0.serialize(),
-        taker_script: to.to_bytes(),
-        taker_fee_script: address_of(&fee_key).script_pubkey().to_bytes(),
-        lock_height: tip + lock_in,
-        liquid_amount: LIQ_AMOUNT,
+fn fresh_swap_terms(
+    w: &World,
+    direction: Direction,
+    lock_height: u32,
+    liquid: u64,
+    solana: u64,
+) -> Res<(LiquidKey, SwapTerms, [u8; 32])> {
+    let secret = random32()?;
+    let point = LockPoint(point_of(&secret).map_err(|e| e.to_string())?);
+    let key = keypair_from(&random32()?)?;
+    let terms = SwapTerms {
+        direction,
+        lock_point: point,
+        taker_key: LockPoint(key.public_key().serialize()),
+        blinding_key: random32()?,
+        lock_height,
+        liquid_amount: liquid,
+        solana_amount: solana,
         taker_solana: w.taker_sol.pubkey().to_string(),
     };
-    let key = w.swap_key(hash);
-    let params = s2l_params(&details, key);
-    let terms = Terms {
-        direction: Direction::S2L,
-        payment_hash: hash,
+    Ok((key, terms, secret))
+}
+
+fn point_64(point: &LockPoint) -> [u8; 64] {
+    solana_point_of(&point.0).unwrap()
+}
+
+fn new_swap(w: &mut World, direction: Direction, lock_in: u32) -> Res<Swap> {
+    let tip = w.chain.tip()?;
+    let (key, terms, secret) = fresh_swap_terms(w, direction, tip + lock_in, LIQ_AMOUNT, SOL_AMOUNT)?;
+    let point = terms.lock_point;
+    let id = point.id();
+    let maker_key = w.maker_key(id);
+    let negotiation = msg::hex(&random32()?);
+    let details = Details {
+        terms: terms.clone(),
+        taker_nostr: w.bot.keys.public_key().to_hex(),
+        negotiation: negotiation.clone(),
+    };
+    let engine_terms = Terms {
+        direction,
+        lock_point: point,
         liquid_amount: LIQ_AMOUNT,
         solana_amount: SOL_AMOUNT,
         h_accept: tip,
         lock_height: tip + lock_in,
     };
-    check(accept(&w.store, &terms, &Details::S2L(details))?, "the maker accepted the swap")?;
-    Ok(S2l { preimage, hash, claim_key, fee_key, params, escrow: escrow_pda(&w.taker_sol.pubkey(), &hash), to })
+    check(accept(&w.store, &engine_terms, &details)?, "the maker accepted the swap")?;
+    let initiator = match direction {
+        Direction::L2S => w.vault,
+        Direction::S2L => w.taker_sol.pubkey(),
+    };
+    let escrow = escrow_pda(&initiator, &point_64(&point));
+    if direction == Direction::L2S {
+        w.bot.watch(BotSwap { terms: terms.clone(), key, maker_key });
+    }
+    Ok(Swap {
+        secret,
+        id,
+        point,
+        key,
+        terms,
+        maker_key,
+        escrow,
+        negotiation,
+        to: w.taker_wallet.address().script_pubkey(),
+    })
 }
 
-fn htlc_address(params: &HtlcParams) -> simplicityhl::elements::Address {
-    Htlc::new(params).unwrap().address(&AddressParams::ELEMENTS)
+fn new_l2s(w: &mut World, lock_in: u32) -> Res<Swap> {
+    new_swap(w, Direction::L2S, lock_in)
 }
 
-fn taker_pays(w: &World, s: &L2s) -> Res<()> {
-    pay(&w.chain, &w.taker_wallet, vec![txout(usdt(), LIQ_AMOUNT, htlc_address(&s.params).script_pubkey())], w.genesis)
-        .map(|_| ())
+fn new_s2l(w: &mut World, lock_in: u32) -> Res<Swap> {
+    new_swap(w, Direction::S2L, lock_in)
 }
 
-fn htlc_coin(w: &World, params: &HtlcParams, confs: u32) -> Res<Option<Coin>> {
-    Ok(exact_coin(&w.chain.coins(&htlc_address(params))?, usdt(), LIQ_AMOUNT, w.chain.tip()?, confs))
+fn swap_address(s: &Swap) -> Address {
+    s.terms.address(&s.maker_key).unwrap()
+}
+
+/// Pay from the taker's wallet. A second payment in one block would reuse the first's coins, so that one waits its turn.
+fn taker_pays_to(w: &World, address: &Address, asset: AssetId, amount: u64) -> Res<()> {
+    let payment = || Payment { asset, amount, address: address.clone() };
+    w.wait_for("the taker's payment to be accepted", 60, || {
+        let tx = build_confidential_pay(&w.chain, &w.taker_wallet, vec![payment()], w.genesis)?;
+        match w.chain.broadcast(&tx) {
+            Ok(_) => Ok(Some(())),
+            Err(e) if e.contains("conflict") || e.contains("missingorspent") => Ok(None),
+            Err(e) => Err(e),
+        }
+    })
+}
+
+fn taker_pays(w: &World, s: &Swap) -> Res<()> {
+    taker_pays_to(w, &swap_address(s), usdt(), LIQ_AMOUNT)
+}
+
+fn swap_coin(w: &World, s: &Swap, confs: u32) -> Res<Option<SecretCoin>> {
+    let coins = w.chain.secret_coins(&swap_address(s), &s.terms.blinding()?)?;
+    Ok(exact_secret_coin(&coins, usdt(), LIQ_AMOUNT, w.chain.tip()?, confs))
+}
+
+fn fee_coin(w: &World, s: &Swap) -> Res<SecretCoin> {
+    let address = s.terms.taker_fee_address()?;
+    w.chain
+        .secret_coins(&address, &s.terms.blinding()?)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no fee coin from the maker".into())
+}
+
+/// The whole S→L claim, over a relay, from an unsigned transaction to one the network accepts.
+#[allow(clippy::too_many_arguments)]
+fn session_claim(
+    w: &World,
+    relay: &mut Relay,
+    me: &Keys,
+    id: &str,
+    terms: &SwapTerms,
+    key: &LiquidKey,
+    maker_key: &LockPoint,
+    secret: &[u8; 32],
+    fee: &SecretCoin,
+    coin: &SecretCoin,
+    to: &Address,
+) -> Res<LiquidTx> {
+    let output = terms.output(maker_key)?;
+    let point = terms.lock_point;
+    let (tx, _) = build_swap_spend(coin, fee, to, 0, Sequence::MAX)?;
+    let claim = TakerClaim::start(&w.chain, key, &output, tx, w.genesis)?;
+    let maker = w.maker_nostr;
+    let open = Body::SessionOpen(msg::SessionOpen {
+        lock_point: point.to_hex(),
+        tx: serialize_hex(&claim.tx),
+        nonce: msg::hex(&nonce_bytes(&claim.nonce())),
+    });
+    send_body(relay, me, &maker, id, NETWORK, open)?;
+    let got = wait_from(relay, me, &maker, id, NETWORK, Duration::from_secs(30))?;
+    let Body::SessionNonce(answer) = got.envelope.body else {
+        return Err(format!("expected a nonce, got {:?}", got.envelope.body));
+    };
+    let maker_nonce = nonce_from(&unhex(&answer.nonce)?).map_err(|e| e.to_string())?;
+    let (share, signed) = claim.sign(key, &output, &point.0, &maker_nonce)?;
+    let body =
+        Body::TakerShare(msg::SessionShare { lock_point: point.to_hex(), share: msg::hex(&share_bytes(&share)) });
+    send_body(relay, me, &maker, id, NETWORK, body)?;
+    let got = wait_from(relay, me, &maker, id, NETWORK, Duration::from_secs(30))?;
+    let Body::MakerShare(answer) = got.envelope.body else {
+        return Err(format!("expected a share, got {:?}", got.envelope.body));
+    };
+    let maker_share = share_from(&unhex(&answer.share)?).map_err(|e| e.to_string())?;
+    signed.finish(key, &output, &maker_key.0, maker_share, &point.0, secret, w.genesis)
+}
+
+/// The taker's S→L claim, with the swap's own taker key. Publishing it is what reveals the secret to the maker.
+fn taker_claims(w: &World, s: &Swap, coin: &SecretCoin) -> Res<LiquidTx> {
+    let fee = fee_coin(w, s)?;
+    check(fee.secrets.value == FEE && fee.secrets.asset == lbtc(), "the maker sent the taker a fee coin")?;
+    let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
+    let me = w.bot.keys.clone();
+    relay.subscribe("claim", &[Kind::from(msg::WRAP_KIND)], Some(&me.public_key()), now_secs() - 2 * 86_400)?;
+    let tx = session_claim(
+        w,
+        &mut relay,
+        &me,
+        &s.negotiation,
+        &s.terms,
+        &s.key,
+        &s.maker_key,
+        &s.secret,
+        &fee,
+        coin,
+        &w.taker_wallet.address(),
+    )?;
+    w.chain.broadcast(&tx)?;
+    Ok(tx)
+}
+
+/// What a crash leaves behind if it happens right after the adapter signature is stored: done through the signer directly,
+/// with the daemon down.
+fn store_adaptor_directly(w: &mut World, s: &Swap) -> Res<()> {
+    let swap = BotSwap { terms: s.terms.clone(), key: s.key, maker_key: s.maker_key };
+    let Reply::ClaimTemplate { tx, nonce } = w.client.call(&Call::PrepareClaim { terms: s.terms.clone() })? else {
+        return Err("no claim template".into());
+    };
+    let offer = msg::ClaimOffer { lock_point: s.point.to_hex(), tx, nonce };
+    let answer = answer_offer(&w.chain, &swap, &offer, w.genesis)?;
+    let call = Call::StoreAdaptor { terms: s.terms.clone(), taker_nonce: answer.nonce, taker_share: answer.share };
+    match w.client.call(&call)? {
+        Reply::Held(true) => Ok(()),
+        other => Err(format!("not stored: {other:?}")),
+    }
 }
 
 fn locked(s: &State) -> bool {
@@ -412,12 +619,16 @@ fn done(outcome: Outcome) -> impl Fn(&State) -> bool {
     move |s| *s == State::Done { outcome }
 }
 
+fn revealed(s: &Swap) -> [u8; 32] {
+    solana_value(&s.secret).unwrap()
+}
+
 /// E1 and E17: a whole L→S swap, with the daemon killed at the two points that matter most.
 fn l2s_with_crashes(w: &mut World) -> Res<()> {
     let (maker_before, taker_before) = (w.maker_holdings()?, w.tokens(&w.taker_sol.pubkey())?);
     let s = new_l2s(w, 300)?;
     taker_pays(w, &s)?;
-    w.wait_state(&s.hash, "the maker's Solana lock", 120, locked)?;
+    w.wait_state(&s.id, "the maker's Solana lock", 180, locked)?;
     w.kill_daemon();
     let e = w.wait_for("the lock to land anyway, or be retried", 30, || w.sol.escrow(&s.escrow)).or_else(|_| {
         w.start_daemon();
@@ -428,37 +639,34 @@ fn l2s_with_crashes(w: &mut World) -> Res<()> {
     }
     check(e.close_on_restart && e.amount == SOL_AMOUNT, "the escrow has the right terms")?;
 
-    w.sol.claim(&w.taker_sol, &s.escrow, &e, s.preimage)?;
+    w.sol.claim(&w.taker_sol, &s.escrow, &e, revealed(&s))?;
     check(w.tokens(&w.taker_sol.pubkey())? == taker_before + SOL_AMOUNT, "the taker was paid on Solana")?;
     w.kill_daemon();
     w.start_daemon();
-    w.wait_state(&s.hash, "completion after the restart", 180, done(Outcome::Completed))?;
+    w.wait_state(&s.id, "completion after the restart", 180, done(Outcome::Completed))?;
     check(w.maker_holdings()? == maker_before + LIQ_AMOUNT, "the maker was paid on Liquid, exactly once")?;
     Ok(())
 }
 
-/// E1 and E17: a whole S→L swap, with crashes. The key check is that the HTLC is only ever paid once.
+/// E1 and E17: a whole S→L swap, with crashes. The key check is that the swap address is only ever paid once.
 fn s2l_with_crashes(w: &mut World) -> Res<()> {
     let (maker_before, vault_before) = (w.maker_holdings()?, w.sol.token_balance(&w.vault_token)?);
     let s = new_s2l(w, 80)?;
     let deadline = w.sol.slot()? + 5_000;
-    w.sol.lock(&w.taker_sol, s.hash, w.maker_solana, SOL_AMOUNT, deadline, false)?;
-    w.wait_state(&s.hash, "the maker's Liquid lock", 120, locked)?;
+    w.sol.lock(&w.taker_sol, point_64(&s.point), w.maker_solana, SOL_AMOUNT, deadline, false)?;
+    w.wait_state(&s.id, "the maker's Liquid lock", 120, locked)?;
     w.kill_daemon();
     w.start_daemon();
-    let coin = w.wait_for("the lock to confirm", 120, || htlc_coin(w, &s.params, 2))?;
+    let coin = w.wait_for("the lock to confirm", 120, || swap_coin(w, &s, 2))?;
     std::thread::sleep(Duration::from_secs(8)); // Long enough for a buggy retry to pay a second time.
-    check(w.chain.coins(&htlc_address(&s.params))?.len() == 1, "the HTLC was paid exactly once, despite the crash")?;
+    check(w.chain.outputs(&swap_address(&s))?.len() == 1, "the address was paid exactly once, despite the crash")?;
     check(w.maker_holdings()? == maker_before - LIQ_AMOUNT, "the maker paid exactly the agreed amount")?;
 
-    let fee = w.chain.coins(&address_of(&s.fee_key))?.into_iter().next().ok_or("no fee coin from the maker")?;
-    check(fee.out.value.explicit() == Some(FEE), "the maker sent the taker a fee coin")?;
-    let how = HtlcSpend::Claim { preimage: s.preimage, recipient: s.claim_key, to: s.to.clone() };
-    spend_htlc(&w.chain, &s.params, &coin, &fee, &s.fee_key, how, w.genesis)?;
+    taker_claims(w, &s, &coin)?;
     w.kill_daemon();
     std::thread::sleep(Duration::from_secs(4));
     w.start_daemon();
-    w.wait_state(&s.hash, "completion after the restart", 180, done(Outcome::Completed))?;
+    w.wait_state(&s.id, "completion after the restart", 180, done(Outcome::Completed))?;
     let e = w.sol.escrow(&s.escrow)?.ok_or("no escrow")?;
     check(e.state == EscrowState::Claimed, "the escrow is claimed")?;
     w.wait_for("the proceeds to be swept into the vault, back under the cap", 90, || {
@@ -470,52 +678,73 @@ fn s2l_with_crashes(w: &mut World) -> Res<()> {
 /// E17, the dangerous window: a crash after the state is saved, but before the action is sent. The state is written with
 /// the daemon down, which is exactly what such a crash leaves behind.
 fn crash_between_commit_and_send(w: &mut World) -> Res<()> {
-    // L→S: the daemon "decided" to lock on Solana, then died before sending anything.
+    // L→S: the daemon "decided" to lock on Solana, then died before sending anything. The adapter signature was already
+    // stored by the signer, because the engine doesn't decide to lock without it.
     let s = new_l2s(w, 300)?;
     w.kill_daemon();
     taker_pays(w, &s)?;
-    let coin_seen = w.wait_for("the taker's coin to confirm", 60, || htlc_coin(w, &s.params, 2))?;
+    let coin_seen = w.wait_for("the taker's coin to confirm", 60, || swap_coin(w, &s, 2))?;
+    let start = Instant::now();
+    while !matches!(w.client.call(&Call::PrepareClaim { terms: s.terms.clone() })?, Reply::ClaimTemplate { .. }) {
+        check(start.elapsed() < Duration::from_secs(90), "a fee coin became ready")?;
+        if let Reply::Liquid(hex) = w.client.call(&Call::TopUpFeeCoins)? {
+            let tx: LiquidTx = deserialize(&unhex(&hex)?).map_err(|e| e.to_string())?;
+            let _ = w.chain.broadcast(&tx);
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    store_adaptor_directly(w, &s)?;
     let deadline_slot = w.sol.slot()? + 150;
     let action = Action::LockSolana { deadline_slot };
-    w.store.commit_step(&s.hash, &State::LockedSolana { deadline_slot }, &[action]).map_err(|e| e.to_string())?;
+    w.store.commit_step(&s.id, &State::LockedSolana { deadline_slot }, &[action]).map_err(|e| e.to_string())?;
     check(w.sol.escrow(&s.escrow)?.is_none(), "nothing was sent before the crash")?;
     w.start_daemon();
     let e = w.wait_for("the lock to be sent after the restart", 90, || w.sol.escrow(&s.escrow))?;
     check(e.deadline_slot == deadline_slot, "with the deadline decided before the crash")?;
-    w.sol.claim(&w.taker_sol, &s.escrow, &e, s.preimage)?;
-    w.wait_state(&s.hash, "completion", 120, done(Outcome::Completed))?;
-    check(w.chain.spender(&coin_seen.outpoint)?.is_some(), "the maker collected its coin")?;
+    w.sol.claim(&w.taker_sol, &s.escrow, &e, revealed(&s))?;
+    w.wait_state(&s.id, "completion", 120, done(Outcome::Completed))?;
+    check(w.chain.spender(&coin_seen.coin.outpoint)?.is_some(), "the maker collected its coin")?;
 
     // S→L: the same, on the side that could pay twice.
     let s = new_s2l(w, 80)?;
     let maker_before = w.maker_holdings()?;
     let deadline = w.sol.slot()? + 5_000;
     w.kill_daemon();
-    w.sol.lock(&w.taker_sol, s.hash, w.maker_solana, SOL_AMOUNT, deadline, false)?;
-    w.store.commit_step(&s.hash, &State::LockedLiquid, &[Action::LockLiquid]).map_err(|e| e.to_string())?;
-    check(htlc_coin(w, &s.params, 0)?.is_none(), "nothing was paid before the crash")?;
+    w.sol.lock(&w.taker_sol, point_64(&s.point), w.maker_solana, SOL_AMOUNT, deadline, false)?;
+    w.store.commit_step(&s.id, &State::LockedLiquid, &[Action::LockLiquid]).map_err(|e| e.to_string())?;
+    check(swap_coin(w, &s, 0)?.is_none(), "nothing was paid before the crash")?;
     w.start_daemon();
-    let coin = w.wait_for("the lock to be paid after the restart", 90, || htlc_coin(w, &s.params, 2))?;
+    let coin = w.wait_for("the lock to be paid after the restart", 90, || swap_coin(w, &s, 2))?;
     std::thread::sleep(Duration::from_secs(12)); // Longer than the retry interval, so a second payment would show.
-    check(w.chain.coins(&htlc_address(&s.params))?.len() == 1, "the HTLC was paid exactly once")?;
+    check(w.chain.outputs(&swap_address(&s))?.len() == 1, "the address was paid exactly once")?;
     check(w.maker_holdings()? == maker_before - LIQ_AMOUNT, "for exactly the agreed amount")?;
-    let fee = w.chain.coins(&address_of(&s.fee_key))?.into_iter().next().ok_or("no fee coin")?;
-    let how = HtlcSpend::Claim { preimage: s.preimage, recipient: s.claim_key, to: s.to.clone() };
-    spend_htlc(&w.chain, &s.params, &coin, &fee, &s.fee_key, how, w.genesis)?;
-    w.wait_state(&s.hash, "completion", 120, done(Outcome::Completed))?;
+    taker_claims(w, &s, &coin)?;
+    w.wait_state(&s.id, "completion", 120, done(Outcome::Completed))?;
     Ok(())
 }
 
-/// E3: the taker pays, then vanishes. The maker gets its Solana funds back at the deadline by itself.
+/// E3: the taker pays and signs, then vanishes. The maker gets its Solana funds back at the deadline by itself.
 fn l2s_taker_vanishes(w: &mut World) -> Res<()> {
     let before = w.maker_tokens()?;
     let s = new_l2s(w, 300)?;
     taker_pays(w, &s)?;
-    w.wait_state(&s.hash, "the maker's Solana lock", 120, locked)?;
+    w.wait_state(&s.id, "the maker's Solana lock", 180, locked)?;
     w.wait_for("the escrow to appear", 60, || w.sol.escrow(&s.escrow))?;
     check(w.maker_tokens()? == before - SOL_AMOUNT, "the funds are locked, drawn from the vault")?;
-    w.wait_state(&s.hash, "the maker's automatic refund", 180, done(Outcome::Refunded))?;
+    w.wait_state(&s.id, "the maker's automatic refund", 180, done(Outcome::Refunded))?;
     check(w.maker_tokens()? == before, "the refund went back to the vault")?;
+    Ok(())
+}
+
+/// A taker who pays but never signs: without an adapter signature the maker risks nothing, so it never locks.
+fn l2s_taker_never_signs(w: &mut World) -> Res<()> {
+    let tokens = w.maker_tokens()?;
+    let s = new_l2s(w, 300)?;
+    w.bot.swaps.lock().unwrap().remove(&s.point.to_hex());
+    taker_pays(w, &s)?;
+    w.wait_state(&s.id, "giving up on a taker who never signs", 240, |st| *st == State::Abandoned)?;
+    check(w.sol.escrow(&s.escrow)?.is_none(), "no escrow was ever created")?;
+    check(w.maker_tokens()? == tokens, "no maker funds moved")?;
     Ok(())
 }
 
@@ -525,9 +754,9 @@ fn s2l_taker_vanishes(w: &mut World) -> Res<()> {
     let taker_before = w.tokens(&w.taker_sol.pubkey())?;
     let s = new_s2l(w, 35)?;
     let deadline = w.sol.slot()? + 400;
-    w.sol.lock(&w.taker_sol, s.hash, w.maker_solana, SOL_AMOUNT, deadline, false)?;
-    w.wait_state(&s.hash, "the maker's Liquid lock", 60, locked)?;
-    w.wait_state(&s.hash, "the maker's automatic refund", 300, done(Outcome::Refunded))?;
+    w.sol.lock(&w.taker_sol, point_64(&s.point), w.maker_solana, SOL_AMOUNT, deadline, false)?;
+    w.wait_state(&s.id, "the maker's Liquid lock", 60, locked)?;
+    w.wait_state(&s.id, "the maker's automatic refund", 300, done(Outcome::Refunded))?;
     check(w.maker_holdings()? == maker_before, "the maker has its Liquid funds back")?;
     while w.sol.slot()? < deadline {
         std::thread::sleep(Duration::from_secs(2));
@@ -542,10 +771,11 @@ fn s2l_taker_vanishes(w: &mut World) -> Res<()> {
 fn bad_locks(w: &mut World) -> Res<()> {
     let tokens = w.maker_tokens()?;
     let s = new_l2s(w, 300)?;
-    let address = htlc_address(&s.params);
-    pay(&w.chain, &w.taker_wallet, vec![txout(usdt(), LIQ_AMOUNT - 100, address.script_pubkey())], w.genesis)?;
+    let address = swap_address(&s);
+    taker_pays_to(w, &address, usdt(), LIQ_AMOUNT - 100)?;
+    // Blinded, so nothing on-chain says what it is. Only reading it does.
     w.node.fund(&address.to_string(), LIQ_AMOUNT, &w.fake_asset.to_string());
-    w.wait_state(&s.hash, "giving up on a short coin and a fake asset", 240, |st| *st == State::Abandoned)?;
+    w.wait_state(&s.id, "giving up on a short coin and a fake asset", 240, |st| *st == State::Abandoned)?;
     check(w.sol.escrow(&s.escrow)?.is_none(), "no escrow was ever created")?;
     check(w.maker_tokens()? == tokens, "no maker funds moved")?;
 
@@ -553,8 +783,8 @@ fn bad_locks(w: &mut World) -> Res<()> {
     let taker_before = w.tokens(&w.taker_sol.pubkey())?;
     let s = new_s2l(w, 80)?;
     let deadline = w.sol.slot()? + 5_000;
-    w.sol.lock(&w.taker_sol, s.hash, w.maker_solana, SOL_AMOUNT - 1, deadline, false)?;
-    w.wait_state(&s.hash, "giving up on a short escrow", 240, |st| *st == State::Abandoned)?;
+    w.sol.lock(&w.taker_sol, point_64(&s.point), w.maker_solana, SOL_AMOUNT - 1, deadline, false)?;
+    w.wait_state(&s.id, "giving up on a short escrow", 240, |st| *st == State::Abandoned)?;
     check(w.maker_holdings()? == maker_before, "no maker funds moved")?;
     w.wait_for("the taker's escrow to be handed back", 60, || {
         Ok((w.tokens(&w.taker_sol.pubkey())? == taker_before).then_some(()))
@@ -566,9 +796,9 @@ fn bad_locks(w: &mut World) -> Res<()> {
 fn liquid_halt_extends(w: &mut World) -> Res<()> {
     let s = new_s2l(w, 80)?;
     let deadline = w.sol.slot()? + 1_000;
-    w.sol.lock(&w.taker_sol, s.hash, w.maker_solana, SOL_AMOUNT, deadline, false)?;
-    w.wait_state(&s.hash, "the maker's Liquid lock", 60, locked)?;
-    let coin = w.wait_for("the lock to confirm", 90, || htlc_coin(w, &s.params, 2))?;
+    w.sol.lock(&w.taker_sol, point_64(&s.point), w.maker_solana, SOL_AMOUNT, deadline, false)?;
+    w.wait_state(&s.id, "the maker's Liquid lock", 60, locked)?;
+    let coin = w.wait_for("the lock to confirm", 90, || swap_coin(w, &s, 2))?;
 
     w.miner.halt();
     println!("    Liquid halts now");
@@ -584,10 +814,8 @@ fn liquid_halt_extends(w: &mut World) -> Res<()> {
 
     println!("    Liquid resumes");
     w.miner.resume();
-    let fee = w.chain.coins(&address_of(&s.fee_key))?.into_iter().next().ok_or("no fee coin")?;
-    let how = HtlcSpend::Claim { preimage: s.preimage, recipient: s.claim_key, to: s.to.clone() };
-    spend_htlc(&w.chain, &s.params, &coin, &fee, &s.fee_key, how, w.genesis)?;
-    w.wait_state(&s.hash, "completion after the halt", 180, done(Outcome::Completed))?;
+    taker_claims(w, &s, &coin)?;
+    w.wait_state(&s.id, "completion after the halt", 180, done(Outcome::Completed))?;
     Ok(())
 }
 
@@ -595,14 +823,12 @@ fn liquid_halt_extends(w: &mut World) -> Res<()> {
 fn rollback_stops_everything(w: &mut World) -> Res<()> {
     let s = new_s2l(w, 45)?;
     let deadline = w.sol.slot()? + 5_000;
-    w.sol.lock(&w.taker_sol, s.hash, w.maker_solana, SOL_AMOUNT, deadline, false)?;
-    w.wait_state(&s.hash, "the maker's Liquid lock", 60, locked)?;
-    let coin = w.wait_for("the lock to confirm", 90, || htlc_coin(w, &s.params, 2))?;
-    let fee = w.chain.coins(&address_of(&s.fee_key))?.into_iter().next().ok_or("no fee coin")?;
-    let how = HtlcSpend::Claim { preimage: s.preimage, recipient: s.claim_key, to: s.to.clone() };
-    let claim_id = spend_htlc(&w.chain, &s.params, &coin, &fee, &s.fee_key, how, w.genesis)?;
-    let claim_tx: LiquidTx = w.chain.tx(&claim_id)?;
-    w.wait_state(&s.hash, "the maker collecting on Solana", 120, done(Outcome::Completed))?;
+    w.sol.lock(&w.taker_sol, point_64(&s.point), w.maker_solana, SOL_AMOUNT, deadline, false)?;
+    w.wait_state(&s.id, "the maker's Liquid lock", 60, locked)?;
+    let coin = w.wait_for("the lock to confirm", 90, || swap_coin(w, &s, 2))?;
+    let claim_tx = taker_claims(w, &s, &coin)?;
+    let claim_id = claim_tx.txid();
+    w.wait_state(&s.id, "the maker collecting on Solana", 120, done(Outcome::Completed))?;
     let claim_height = w.wait_for("the taker's claim to confirm", 60, || {
         let rpc = &w.node.rpc;
         let info: serde_json::Value =
@@ -618,22 +844,22 @@ fn rollback_stops_everything(w: &mut World) -> Res<()> {
     let tokens = w.maker_tokens()?;
     println!("    The federation rolls Liquid back past the claim");
     w.kill_daemon();
-    let lock_height = s.params.lock_height;
+    let lock_height = s.terms.lock_height;
     w.node.roll_back_to_before(claim_height);
     w.start_daemon();
     w.wait_for("the daemon to raise the rollback alarm", 60, || {
         Ok(std::fs::read_to_string(&w.pages).ok().filter(|t| t.contains("Rollback")))
     })?;
     check(w.store.rollback().map_err(|e| e.to_string())?, "the alarm is latched")?;
-    check(w.chain.spender(&coin.outpoint)?.is_none(), "the claim is gone, so the coin looks unspent")?;
+    check(w.chain.spender(&coin.coin.outpoint)?.is_none(), "the claim is gone, so the coin looks unspent")?;
 
     // A coin that really is there, confirmed after the rollback: everything but the alarm says to lock.
     let waiting = new_l2s(w, 300)?;
     taker_pays(w, &waiting)?;
     w.node.mine(2);
-    check(htlc_coin(w, &waiting.params, 2)?.is_some(), "a confirmed coin is waiting")?;
+    check(swap_coin(w, &waiting, 2)?.is_some(), "a confirmed coin is waiting")?;
     std::thread::sleep(Duration::from_secs(10));
-    check(w.state(&waiting.hash)? == State::WatchLock, "the alarm stops a lock that would otherwise go ahead")?;
+    check(w.state(&waiting.id)? == State::WatchLock, "the alarm stops a lock that would otherwise go ahead")?;
     check(w.sol.escrow(&waiting.escrow)?.is_none(), "no escrow was created")?;
     check(w.maker_tokens()? == tokens, "no Solana funds moved")?;
 
@@ -644,7 +870,7 @@ fn rollback_stops_everything(w: &mut World) -> Res<()> {
         .status()
         .map_err(|e| e.to_string())?;
     check(status.success(), "the operator cleared the alarm")?;
-    w.wait_state(&waiting.hash, "the waiting swap going ahead once the alarm is cleared", 60, locked)?;
+    w.wait_state(&waiting.id, "the waiting swap going ahead once the alarm is cleared", 120, locked)?;
     check(!w.store.rollback().map_err(|e| e.to_string())?, "the alarm stayed clear")?;
     w.wait_for("its lock to land on Solana", 60, || w.sol.escrow(&waiting.escrow))?;
 
@@ -653,10 +879,10 @@ fn rollback_stops_everything(w: &mut World) -> Res<()> {
         w.node.mine(5);
     }
     std::thread::sleep(Duration::from_secs(10));
-    check(w.chain.spender(&coin.outpoint)?.is_none(), "the maker didn't refund a coin it already collected for")?;
+    check(w.chain.spender(&coin.coin.outpoint)?.is_none(), "the maker didn't refund a coin it already collected for")?;
     w.chain.broadcast(&claim_tx)?;
     w.node.mine(1);
-    let spend = w.chain.spender(&coin.outpoint)?.ok_or("not spent")?;
+    let spend = w.chain.spender(&coin.coin.outpoint)?.ok_or("not spent")?;
     check(spend.output[0].script_pubkey == s.to, "the taker's rebroadcast claim still collects, however late")?;
     w.miner.resume();
     Ok(())
@@ -755,11 +981,10 @@ fn build_world(root: &Path) -> World {
         std::thread::sleep(Duration::from_millis(200));
     }
     let mut client = Client::connect(&socket).unwrap();
-    let Reply::Identity { liquid_address, liquid_script, solana, escrow_initiator } =
-        client.call(&Call::Identity).unwrap()
-    else {
+    let Reply::Identity { liquid_address, solana, escrow_initiator } = client.call(&Call::Identity).unwrap() else {
         panic!()
     };
+    let maker_blinding = SecretKey::from_slice(&std::fs::read(keys.join("liquid-blinding.key")).unwrap()).unwrap();
     assert_eq!(escrow_initiator, vault.to_string(), "the signer runs on the vault");
 
     let pages = root.join("pages.log");
@@ -804,8 +1029,11 @@ fn build_world(root: &Path) -> World {
     let daemon_config = root.join("maker.json");
     std::fs::write(&daemon_config, serde_json::to_string(&cfg).unwrap()).unwrap();
 
-    let taker_wallet = keypair_from(&random32().unwrap()).unwrap();
-    for address in [liquid_address.clone(), address_of(&taker_wallet).to_string()] {
+    let taker_wallet = Wallet {
+        key: keypair_from(&random32().unwrap()).unwrap(),
+        blinding: SecretKey::from_slice(&random32().unwrap()).unwrap(),
+    };
+    for address in [liquid_address.clone(), taker_wallet.address().to_string()] {
         for _ in 0..8 {
             node.fund(&address, 200_000, "bitcoin");
         }
@@ -815,6 +1043,7 @@ fn build_world(root: &Path) -> World {
     let miner = Miner::start(node.wallet_rpc.clone());
 
     let store = Store::open(&db).unwrap();
+    let bot = Bot::start(&relay_url, maker_nostr, chain.clone(), genesis);
     let mut world = World {
         node,
         miner,
@@ -827,8 +1056,9 @@ fn build_world(root: &Path) -> World {
         vault,
         vault_token,
         vault_owner,
-        maker_script: Script::from(liquid_script),
         maker_address: liquid_address,
+        maker_blinding,
+        bot,
         client,
         store,
         daemon: None,
@@ -841,7 +1071,6 @@ fn build_world(root: &Path) -> World {
         maker_nostr,
     };
     world.start_daemon();
-    let _ = lbtc();
     world
 }
 
@@ -854,7 +1083,7 @@ fn taker_rules() -> TakerRules {
         network: NETWORK.into(),
         program_id: solana_escrow::id().to_string(),
         usdt_asset: usdt().to_string(),
-        template_version: 1,
+        template_version: msg::TEMPLATE_VERSION,
         l2s_min_blocks: 240,
         l2s_max_blocks: 360,
         s2l_min_blocks: 50,
@@ -868,31 +1097,37 @@ fn rfq_request(direction: msg::Direction) -> Request {
     Request { direction, amount_side: AmountSide::Send, amount: Units(RFQ_SEND) }
 }
 
-fn pk(key: &LiquidKey) -> [u8; 32] {
-    key.x_only_public_key().0.serialize()
+/// The terms the taker will hold the maker to, built from what the taker chose and what it just checked.
+fn agreed_terms(s: &SwapTerms, terms: &MakerTerms) -> Res<(SwapTerms, LockPoint)> {
+    let maker_key = LockPoint(msg::hex33(&terms.maker_key).ok_or("bad maker key")?);
+    let agreed = SwapTerms {
+        lock_height: terms.lock_height,
+        liquid_amount: terms.liquid_amount.0,
+        solana_amount: terms.solana_amount.0,
+        ..s.clone()
+    };
+    Ok((agreed, maker_key))
 }
 
-/// E1 over Nostr: L→S, where the taker derives the HTLC itself from the agreed terms, and only then pays it.
+/// E1 over Nostr: L→S, where the taker derives the address itself from the agreed terms, and only then pays it.
 fn rfq_l2s_swap(w: &mut World) -> Res<()> {
     let me = Keys::generate();
     let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
     let offers = find_offers(&mut relay, NETWORK, Duration::from_secs(5))?;
     check(offers.iter().any(|(k, _)| *k == w.maker_nostr), "the taker found the maker's offer")?;
 
-    let preimage = random32()?;
-    let hash = hash_preimage(&preimage);
-    let refund_key = keypair_from(&random32()?)?;
+    let (key, chosen, secret) = fresh_swap_terms(w, Direction::L2S, 0, 0, 0)?;
+    let id = chosen.swap_id();
     let side = TakerSide {
-        payment_hash: hash,
-        taker_liquid_pk: pk(&refund_key),
+        lock_point: chosen.lock_point.0,
+        taker_key: chosen.taker_key.0,
+        blinding_key: chosen.blinding_key,
         taker_solana: w.taker_sol.pubkey().to_string(),
-        taker_liquid_script: None,
-        taker_fee_script: None,
     };
     let chain = w.chain.clone();
     let tip = move || chain.tip();
     let maker = w.maker_nostr;
-    let Negotiated { quote, terms } = negotiate(
+    let Negotiated { id: negotiation, quote, terms } = negotiate(
         &mut relay,
         &me,
         &maker,
@@ -903,38 +1138,32 @@ fn rfq_l2s_swap(w: &mut World) -> Res<()> {
         Duration::from_secs(15),
     )?;
     check(quote.send.0 == RFQ_SEND && quote.receive.0 == RFQ_RECEIVE, "the quote carries the agreed spread")?;
-    check(matches!(w.state(&hash)?, State::WatchLock | State::LockedSolana { .. }), "the maker registered the swap")?;
-
-    let script =
-        Script::from(msg::hex_any(terms.maker_liquid_script.as_deref().ok_or("no script")?).ok_or("bad script")?);
-    let params = HtlcParams {
-        payment_hash: hash,
-        recipient_pk: msg::hex32(&terms.maker_liquid_pk).ok_or("bad key")?,
-        sender_pk: pk(&refund_key),
-        lock_height: terms.lock_height,
-        usdt_asset: liq2sol_htlc::asset_param(&usdt()),
-        amount: terms.liquid_amount.0,
-        recipient_script_hash: liq2sol_htlc::script_hash(&script),
-    };
+    check(matches!(w.state(&id)?, State::WatchLock | State::LockedSolana { .. }), "the maker registered the swap")?;
     check(terms.liquid_amount.0 == RFQ_SEND * 100, "the taker pays exactly what was quoted")?;
-    pay(
-        &w.chain,
-        &w.taker_wallet,
-        vec![txout(usdt(), terms.liquid_amount.0, htlc_address(&params).script_pubkey())],
-        w.genesis,
-    )?;
+    let (agreed, maker_key) = agreed_terms(&chosen, &terms)?;
+    taker_pays_to(w, &agreed.address(&maker_key)?, usdt(), terms.liquid_amount.0)?;
+
+    // The maker offers its claim once the coin confirms. The maker can't use the signature until we reveal the secret.
+    let swap = BotSwap { terms: agreed, key, maker_key };
+    let got = wait_from(&mut relay, &me, &maker, &negotiation, NETWORK, Duration::from_secs(120))?;
+    let Body::ClaimOffer(offer) = got.envelope.body else {
+        return Err(format!("expected a claim offer, got {:?}", got.envelope.body));
+    };
+    let answer = answer_offer(&w.chain, &swap, &offer, w.genesis)?;
+    send_body(&mut relay, &me, &maker, &negotiation, NETWORK, Body::ClaimAnswer(answer))?;
+
     let initiator =
         Pubkey::from_str(terms.maker_initiator.as_deref().ok_or("no initiator")?).map_err(|e| e.to_string())?;
-    let escrow_addr = escrow_pda(&initiator, &hash);
+    let escrow_addr = escrow_pda(&initiator, &point_64(&chosen.lock_point));
     let e = w.wait_for("the maker to lock on Solana", 120, || w.sol.escrow(&escrow_addr))?;
     check(
         e.amount == RFQ_RECEIVE && e.recipient == w.taker_sol.pubkey(),
         "the escrow pays the taker the quoted amount",
     )?;
     let before = w.tokens(&w.taker_sol.pubkey())?;
-    w.sol.claim(&w.taker_sol, &escrow_addr, &e, preimage)?;
+    w.sol.claim(&w.taker_sol, &escrow_addr, &e, solana_value(&secret).map_err(|e| e.to_string())?)?;
     check(w.tokens(&w.taker_sol.pubkey())? == before + RFQ_RECEIVE, "the taker was paid")?;
-    w.wait_state(&hash, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;
     Ok(())
 }
 
@@ -942,20 +1171,17 @@ fn rfq_l2s_swap(w: &mut World) -> Res<()> {
 fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     let me = Keys::generate();
     let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
-    let preimage = random32()?;
-    let hash = hash_preimage(&preimage);
-    let (claim_key, fee_key) = (keypair_from(&random32()?)?, keypair_from(&random32()?)?);
-    let to = address_of(&w.taker_wallet).script_pubkey();
+    let (key, chosen, secret) = fresh_swap_terms(w, Direction::S2L, 0, 0, 0)?;
+    let id = chosen.swap_id();
     let side = TakerSide {
-        payment_hash: hash,
-        taker_liquid_pk: pk(&claim_key),
+        lock_point: chosen.lock_point.0,
+        taker_key: chosen.taker_key.0,
+        blinding_key: chosen.blinding_key,
         taker_solana: w.taker_sol.pubkey().to_string(),
-        taker_liquid_script: Some(to.to_bytes()),
-        taker_fee_script: Some(address_of(&fee_key).script_pubkey().to_bytes()),
     };
     let chain = w.chain.clone();
     let maker = w.maker_nostr;
-    let Negotiated { terms, .. } = negotiate(
+    let Negotiated { id: negotiation, terms, .. } = negotiate(
         &mut relay,
         &me,
         &maker,
@@ -971,25 +1197,23 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     )?;
     let recipient = Pubkey::from_str(&terms.maker_solana).map_err(|e| e.to_string())?;
     let deadline = w.sol.slot()? + terms.min_deadline_slots;
-    w.sol.lock(&w.taker_sol, hash, recipient, RFQ_SEND, deadline, false)?;
+    w.sol.lock(&w.taker_sol, point_64(&chosen.lock_point), recipient, RFQ_SEND, deadline, false)?;
 
-    let params = HtlcParams {
-        payment_hash: hash,
-        recipient_pk: pk(&claim_key),
-        sender_pk: msg::hex32(&terms.maker_liquid_pk).ok_or("bad key")?,
-        lock_height: terms.lock_height,
-        usdt_asset: liq2sol_htlc::asset_param(&usdt()),
-        amount: terms.liquid_amount.0,
-        recipient_script_hash: liq2sol_htlc::script_hash(&to),
-    };
+    let (agreed, maker_key) = agreed_terms(&chosen, &terms)?;
+    let address = agreed.address(&maker_key)?;
+    let blinding = agreed.blinding()?;
     let amount = terms.liquid_amount.0;
     let coin = w.wait_for("the maker to lock on Liquid", 120, || {
-        Ok(exact_coin(&w.chain.coins(&htlc_address(&params))?, usdt(), amount, w.chain.tip()?, 2))
+        Ok(exact_secret_coin(&w.chain.secret_coins(&address, &blinding)?, usdt(), amount, w.chain.tip()?, 2))
     })?;
-    let fee = w.chain.coins(&address_of(&fee_key))?.into_iter().next().ok_or("no fee coin")?;
-    let how = HtlcSpend::Claim { preimage, recipient: claim_key, to };
-    spend_htlc(&w.chain, &params, &coin, &fee, &fee_key, how, w.genesis)?;
-    w.wait_state(&hash, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    let fee_address = agreed.taker_fee_address()?;
+    let fee = w.chain.secret_coins(&fee_address, &blinding)?.into_iter().next().ok_or("no fee coin")?;
+    check(fee.secrets.value == FEE && fee.secrets.asset == lbtc(), "the fee coin is what was promised")?;
+    let to = w.taker_wallet.address();
+    let claim = session_claim(w, &mut relay, &me, &negotiation, &agreed, &key, &maker_key, &secret, &fee, &coin, &to)?;
+    println!("    the claim went through the relay in pieces, and is {} bytes", serialize_hex(&claim).len() / 2);
+    w.chain.broadcast(&claim)?;
+    w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;
     Ok(())
 }
 
@@ -1043,14 +1267,19 @@ impl RawTaker {
     }
 }
 
-fn accept_body(w: &World, quote_event: String, hash: [u8; 32]) -> Res<Body> {
+fn fresh_id() -> Res<(LockPoint, [u8; 32])> {
+    let point = LockPoint(point_of(&random32()?).map_err(|e| e.to_string())?);
+    Ok((point, point.id()))
+}
+
+fn accept_body(w: &World, quote_event: String, point: LockPoint) -> Res<Body> {
+    let key = keypair_from(&random32()?)?;
     Ok(Body::RfqAccept(Accept {
         quote_event,
-        payment_hash: msg::hex(&hash),
-        taker_liquid_pk: msg::hex(&pk(&keypair_from(&random32()?)?)),
+        lock_point: point.to_hex(),
+        taker_key: msg::hex(&key.public_key().serialize()),
+        blinding_key: msg::hex(&random32()?),
         taker_solana: w.taker_sol.pubkey().to_string(),
-        taker_liquid_script: None,
-        taker_fee_script: None,
     }))
 }
 
@@ -1074,16 +1303,16 @@ fn rfq_attacks(w: &mut World) -> Res<()> {
     victim.send(request())?;
     let (_, quote_id) = victim.quote(Duration::from_secs(10))?;
     let mut mallory = RawTaker::new(w)?;
-    let hash = hash_preimage(&random32()?);
-    let stolen = accept_body(w, quote_id.clone(), hash)?;
+    let (point, hash) = fresh_id()?;
+    let stolen = accept_body(w, quote_id.clone(), point)?;
     let vid = victim.id.clone();
     mallory.send_at(&vid, NETWORK, now_secs(), stolen)?;
     check(mallory.answer(QUIET)?.is_none(), "a stranger accepting someone's quote gets no answer")?;
     check(!known(w, &hash)?, "and no swap was registered")?;
 
     // An accept naming the wrong quote is refused.
-    let hash = hash_preimage(&random32()?);
-    victim.send(accept_body(w, "not-the-quote".into(), hash)?)?;
+    let (point, hash) = fresh_id()?;
+    victim.send(accept_body(w, "not-the-quote".into(), point)?)?;
     check(victim.answer(QUIET)?.is_none(), "an accept naming the wrong quote gets no answer")?;
     check(!known(w, &hash)?, "and no swap was registered")?;
 
@@ -1092,8 +1321,8 @@ fn rfq_attacks(w: &mut World) -> Res<()> {
     slow.send(request())?;
     let (_, quote_id) = slow.quote(Duration::from_secs(10))?;
     std::thread::sleep(Duration::from_secs(QUOTE_SECS + 2));
-    let hash = hash_preimage(&random32()?);
-    slow.send(accept_body(w, quote_id, hash)?)?;
+    let (point, hash) = fresh_id()?;
+    slow.send(accept_body(w, quote_id, point)?)?;
     check(slow.answer(QUIET)?.is_none(), "an expired quote can't be accepted")?;
     check(!known(w, &hash)?, "and no swap was registered")?;
 
@@ -1101,8 +1330,8 @@ fn rfq_attacks(w: &mut World) -> Res<()> {
     let mut twice = RawTaker::new(w)?;
     twice.send(request())?;
     let (_, quote_id) = twice.quote(Duration::from_secs(10))?;
-    let hash = hash_preimage(&random32()?);
-    let body = accept_body(w, quote_id, hash)?;
+    let (point, hash) = fresh_id()?;
+    let body = accept_body(w, quote_id, point)?;
     let rumor = twice.send(body)?;
     let first = twice.answer(Duration::from_secs(10))?.ok_or("no terms")?;
     let Body::RfqTerms(MakerTerms { accept_event, .. }) = &first.envelope.body else {
@@ -1111,16 +1340,39 @@ fn rfq_attacks(w: &mut World) -> Res<()> {
     check(*accept_event == rumor, "the terms name this accept")?;
     w.relay.replay_everything();
     std::thread::sleep(QUIET);
-    let swaps = w.store.open_swaps().map_err(|e| e.to_string())?.iter().filter(|(t, _)| t.payment_hash == hash).count();
+    let swaps = w.store.open_swaps().map_err(|e| e.to_string())?.iter().filter(|(t, _)| t.swap_id() == hash).count();
     check(swaps == 1, "a relay replaying everything creates no second swap")?;
 
-    // A payment hash can never be reused: a new negotiation offering the same hash is declined.
+    // A stranger can't join that swap's signing session, by its id or any other.
+    let mut stranger = RawTaker::new(w)?;
+    let open = Body::SessionOpen(msg::SessionOpen { lock_point: point.to_hex(), tx: "00".into(), nonce: "00".into() });
+    let twice_id = twice.id.clone();
+    stranger.send_at(&twice_id, NETWORK, now_secs(), open.clone())?;
+    check(stranger.answer(QUIET)?.is_none(), "a stranger gets no answer from a swap's signing session")?;
+    twice.send_at(&msg::hex(&random32()?), NETWORK, now_secs(), open)?;
+    check(twice.answer(QUIET)?.is_none(), "nor does the right taker under a different negotiation id")?;
+    let taker_share = Body::TakerShare(msg::SessionShare { lock_point: point.to_hex(), share: "ff".repeat(32) });
+    twice.send(taker_share)?;
+    check(twice.answer(QUIET)?.is_none(), "a share with no session behind it gets nothing")?;
+
+    // A point that isn't on the curve can't be locked to or claimed, so no swap is made of it.
+    let mut off_curve = RawTaker::new(w)?;
+    off_curve.send(request())?;
+    let (_, quote_id) = off_curve.quote(Duration::from_secs(10))?;
+    let Body::RfqAccept(good) = accept_body(w, quote_id, fresh_id()?.0)? else { unreachable!() };
+    let not_a_point = format!("02{}", "ff".repeat(32));
+    off_curve.send(Body::RfqAccept(Accept { lock_point: not_a_point.clone(), ..good }))?;
+    let answer = off_curve.answer(Duration::from_secs(10))?.ok_or("no answer")?;
+    check(matches!(answer.envelope.body, Body::RfqReject(_)), "a lock point off the curve is declined")?;
+    check(!known(w, &LockPoint::from_hex(&not_a_point).ok_or("hex")?.id())?, "and no swap was registered")?;
+
+    // A point can never be reused: a new negotiation offering the same point is declined.
     let mut again = RawTaker::new(w)?;
     again.send(request())?;
     let (_, quote_id) = again.quote(Duration::from_secs(10))?;
-    again.send(accept_body(w, quote_id, hash)?)?;
+    again.send(accept_body(w, quote_id, point)?)?;
     let answer = again.answer(Duration::from_secs(10))?.ok_or("no answer")?;
-    check(matches!(answer.envelope.body, Body::RfqReject(_)), "a reused payment hash is declined")?;
+    check(matches!(answer.envelope.body, Body::RfqReject(_)), "a reused lock point is declined")?;
 
     // A taker's message types from a taker are ignored.
     let mut odd = RawTaker::new(w)?;
@@ -1146,13 +1398,12 @@ fn rfq_attacks(w: &mut World) -> Res<()> {
     w.relay.drop_all(true);
     let me = Keys::generate();
     let mut relay = Relay::connect(&w.relay.url(), Duration::from_millis(200))?;
-    let hash = hash_preimage(&random32()?);
+    let (point, hash) = fresh_id()?;
     let side = TakerSide {
-        payment_hash: hash,
-        taker_liquid_pk: pk(&keypair_from(&random32()?)?),
+        lock_point: point.0,
+        taker_key: keypair_from(&random32()?)?.public_key().serialize(),
+        blinding_key: random32()?,
         taker_solana: w.taker_sol.pubkey().to_string(),
-        taker_liquid_script: None,
-        taker_fee_script: None,
     };
     let chain = w.chain.clone();
     let maker = w.maker_nostr;
@@ -1217,6 +1468,7 @@ fn the_daemon_runs_real_swaps() {
         ("S2L with crashes (E1, E17)", s2l_with_crashes),
         ("crash between commit and send (E17)", crash_between_commit_and_send),
         ("L2S taker vanishes (E3)", l2s_taker_vanishes),
+        ("L2S taker never signs", l2s_taker_never_signs),
         ("S2L taker vanishes (E3)", s2l_taker_vanishes),
         ("bad locks (E9)", bad_locks),
         ("Liquid halt extends (E11)", liquid_halt_extends),

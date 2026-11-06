@@ -247,6 +247,11 @@ fn the_signer_process_resists_a_compromised_engine() {
     let reserved = l2s_attacks(&world, &mut client);
     s2l_attacks(&world, &mut client, reserved);
     s2l_refund(&world, &mut client);
+    assert!(
+        world.chain.spender(&reserved).unwrap().is_none(),
+        "after every payment above, the fee coin promised to a stored signature is still unspent"
+    );
+    println!("    ok: a reserved fee coin survives all of the wallet's payments");
 
     println!("\n==> Memory survives a restart");
     let terms = s2l_collected(&world, &mut client);

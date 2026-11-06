@@ -500,6 +500,12 @@ impl Signer {
         if t.direction != Direction::L2S {
             return Err(Refusal::UnknownSwap.into());
         }
+        // Asked again while waiting: the same offer, so an answer on its way still fits. Sending a nonce twice is safe, as
+        // long as it signs once, and a session can only do that.
+        if let Some(open) = self.sessions.get(&id).filter(|o| o.terms == *t) {
+            let nonce = hex(&nonce_bytes(&open.session.public));
+            return Ok(Reply::ClaimTemplate { tx: serialize_hex(&open.tx), nonce });
+        }
         let tip = self.chain.tip()?;
         let coin = self.swap_coin(t)?.ok_or(Refusal::NoTakerCoin)?;
         let confirmations = coin.coin.height.map_or(0, |h| (tip + 1).saturating_sub(h));

@@ -9,8 +9,14 @@ use proptest::prelude::*;
 
 const NOW: u64 = 1_793_888_350;
 const NET: &str = "testnet";
-const PROGRAM: &str = "DxVq5iSzKfRMAyis8RyLUeLggidM2Jvk1FZyyEauCRQ1";
+const PROGRAM: &str = "EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU";
 const SOLANA: &str = "5QRoU8iyH7auNkmSfc9L8UAN441PiKZ2dRcXa1Lo1GkK";
+
+fn point(n: u8) -> String {
+    let mut p = [n; 33];
+    p[0] = 2;
+    hex(&p)
+}
 
 fn id() -> String {
     hex(&[7; 32])
@@ -44,7 +50,7 @@ fn taker_rules() -> TakerRules {
         network: NET.into(),
         program_id: PROGRAM.into(),
         usdt_asset: hex(&[0xce; 32]),
-        template_version: 1,
+        template_version: TEMPLATE_VERSION,
         l2s_min_blocks: 240,
         l2s_max_blocks: 360,
         s2l_min_blocks: 50,
@@ -63,13 +69,12 @@ fn terms() -> MakerTerms {
         accept_event: "accept-id".into(),
         h_accept: 1_000,
         lock_height: 1_300,
-        maker_liquid_pk: hex(&[1; 32]),
-        maker_liquid_script: Some(hex(&[0x51; 34])),
+        maker_key: point(1),
         maker_solana: SOLANA.into(),
         maker_initiator: Some(SOLANA.into()),
         usdt_asset: hex(&[0xce; 32]),
         program_id: PROGRAM.into(),
-        template_version: 1,
+        template_version: TEMPLATE_VERSION,
         liquid_amount: Units(10_000_000_000),
         solana_amount: Units(99_700_000),
         min_deadline_slots: 8_400,
@@ -79,11 +84,10 @@ fn terms() -> MakerTerms {
 fn accept() -> Accept {
     Accept {
         quote_event: "quote-id".into(),
-        payment_hash: hex(&[2; 32]),
-        taker_liquid_pk: hex(&[3; 32]),
+        lock_point: point(2),
+        taker_key: point(3),
+        blinding_key: hex(&[4; 32]),
         taker_solana: SOLANA.into(),
-        taker_liquid_script: None,
-        taker_fee_script: None,
     }
 }
 
@@ -102,7 +106,7 @@ fn stale_replayed_and_future_messages_are_refused() {
 fn another_network_or_version_is_refused() {
     let e = envelope(Body::RfqRequest(request()));
     assert_eq!(check_envelope(&e, "mainnet", NOW), Err(Refused::WrongNetwork));
-    assert_eq!(check_envelope(&Envelope { v: 2, ..e.clone() }, NET, NOW), Err(Refused::WrongVersion));
+    assert_eq!(check_envelope(&Envelope { v: 1, ..e.clone() }, NET, NOW), Err(Refused::WrongVersion));
     for bad in ["", "abc", &"G".repeat(64), &"A".repeat(64), &"a".repeat(62), &"a".repeat(66)] {
         assert_eq!(check_envelope(&Envelope { id: bad.into(), ..e.clone() }, NET, NOW), Err(Refused::BadId), "{bad}");
     }
@@ -111,35 +115,45 @@ fn another_network_or_version_is_refused() {
 #[test]
 fn an_accept_must_name_our_quote_and_arrive_in_time() {
     let q = quote();
-    assert!(check_accept(&accept(), Direction::L2S, &q, "quote-id", NOW).is_ok());
-    assert_eq!(check_accept(&accept(), Direction::L2S, &q, "another-quote", NOW), Err(Refused::WrongReference));
-    assert_eq!(check_accept(&accept(), Direction::L2S, &q, "quote-id", NOW + 61), Err(Refused::QuoteExpired));
+    assert!(check_accept(&accept(), &q, "quote-id", NOW).is_ok());
+    assert_eq!(check_accept(&accept(), &q, "another-quote", NOW), Err(Refused::WrongReference));
+    assert_eq!(check_accept(&accept(), &q, "quote-id", NOW + 61), Err(Refused::QuoteExpired));
 }
 
 #[test]
 fn accept_fields_are_validated() {
     let q = quote();
-    let bad = |a: Accept| {
-        assert!(matches!(check_accept(&a, Direction::L2S, &q, "quote-id", NOW), Err(Refused::Malformed(_))), "{a:?}")
-    };
-    bad(Accept { payment_hash: "zz".into(), ..accept() });
-    bad(Accept { payment_hash: hex(&[1; 31]), ..accept() });
-    bad(Accept { taker_liquid_pk: hex(&[1; 33]), ..accept() });
+    let bad = |a: Accept| assert!(matches!(check_accept(&a, &q, "quote-id", NOW), Err(Refused::Malformed(_))), "{a:?}");
+    bad(Accept { lock_point: "zz".into(), ..accept() });
+    bad(Accept { lock_point: hex(&[2; 32]), ..accept() });
+    bad(Accept { lock_point: hex(&[4; 33]), ..accept() }); // Not a compressed point's prefix.
+    bad(Accept { lock_point: point(0xab).to_uppercase(), ..accept() });
+    bad(Accept { taker_key: hex(&[3; 32]), ..accept() });
+    bad(Accept { taker_key: hex(&[0; 33]), ..accept() });
+    bad(Accept { blinding_key: hex(&[4; 33]), ..accept() });
+    bad(Accept { blinding_key: "".into(), ..accept() });
     bad(Accept { taker_solana: "not a solana address".into(), ..accept() });
-    bad(Accept { taker_liquid_script: Some(hex(&[0x51; 34])), ..accept() });
+}
 
-    let s2l = |script: Option<String>, fee: Option<String>| Accept {
-        taker_liquid_script: script,
-        taker_fee_script: fee,
-        ..accept()
-    };
-    let good = hex(&[0x51; 34]);
-    let check = |a: Accept| check_accept(&a, Direction::S2L, &q, "quote-id", NOW);
-    assert!(check(s2l(Some(good.clone()), Some(good.clone()))).is_ok());
-    assert!(matches!(check(s2l(None, Some(good.clone()))), Err(Refused::Malformed(_))));
-    assert!(matches!(check(s2l(Some(good.clone()), None)), Err(Refused::Malformed(_))));
-    assert!(matches!(check(s2l(Some(String::new()), Some(good.clone()))), Err(Refused::Malformed(_))));
-    assert!(matches!(check(s2l(Some(hex(&[0x51; 65])), Some(good))), Err(Refused::Malformed(_))));
+#[test]
+fn old_accepts_are_refused_outright() {
+    // A taker on the hash-lock protocol mustn't be read as anything else.
+    let old = serde_json::json!({
+        "quote_event": "q", "payment_hash": hex(&[2; 32]), "taker_liquid_pk": hex(&[3; 32]), "taker_solana": SOLANA,
+        "taker_liquid_script": null, "taker_fee_script": null
+    });
+    assert!(serde_json::from_value::<Accept>(old).is_err());
+}
+
+/// The biggest thing either side ever sends: a blinded claim, whose witness is about 5.5 KB. It must fit the event limit once
+/// it has been through both layers of NIP-59 encryption.
+#[test]
+fn a_blinded_claim_fits_in_one_event() {
+    let (maker, taker) = (Keys::generate(), Keys::generate());
+    let body = Body::ClaimOffer(ClaimOffer { lock_point: point(2), tx: "ab".repeat(6_000), nonce: "cd".repeat(66) });
+    let (event, _) = wrap(&maker, &taker.public_key(), &envelope(body.clone()), NOW).unwrap();
+    assert!(event.as_json().len() <= MAX_EVENT_BYTES, "{} bytes", event.as_json().len());
+    assert_eq!(unwrap(&taker, &event).unwrap().envelope.body, body);
 }
 
 // ---- Pricing ----
@@ -279,7 +293,7 @@ fn the_taker_refuses_every_bad_term_before_funding() {
     assert_eq!(check(MakerTerms { accept_event: "x".into(), ..terms() }), Err(Refused::WrongReference));
     assert_eq!(check(MakerTerms { program_id: SOLANA.into(), ..terms() }), Err(Refused::WrongProgram));
     assert_eq!(check(MakerTerms { usdt_asset: hex(&[1; 32]), ..terms() }), Err(Refused::WrongAsset));
-    assert_eq!(check(MakerTerms { template_version: 2, ..terms() }), Err(Refused::WrongTemplate));
+    assert_eq!(check(MakerTerms { template_version: 1, ..terms() }), Err(Refused::WrongTemplate));
     assert_eq!(
         check(MakerTerms { liquid_amount: Units(10_000_000_100), ..terms() }),
         Err(Refused::BadAmounts),
@@ -298,9 +312,9 @@ fn the_taker_refuses_every_bad_term_before_funding() {
     );
     assert_eq!(check(MakerTerms { lock_height: tip - 1, ..terms() }), Err(Refused::BadLockHeight), "already past");
     assert_eq!(check(MakerTerms { min_deadline_slots: 20_001, ..terms() }), Err(Refused::BadLockHeight));
-    assert!(matches!(check(MakerTerms { maker_liquid_pk: "zz".into(), ..terms() }), Err(Refused::Malformed(_))));
+    assert!(matches!(check(MakerTerms { maker_key: "zz".into(), ..terms() }), Err(Refused::Malformed(_))));
     assert!(matches!(check(MakerTerms { maker_solana: "bad".into(), ..terms() }), Err(Refused::Malformed(_))));
-    assert!(matches!(check(MakerTerms { maker_liquid_script: None, ..terms() }), Err(Refused::Malformed(_))));
+    assert!(matches!(check(MakerTerms { maker_key: hex(&[1; 32]), ..terms() }), Err(Refused::Malformed(_))));
     assert!(matches!(check(MakerTerms { maker_initiator: None, ..terms() }), Err(Refused::Malformed(_))));
 }
 
@@ -311,7 +325,6 @@ fn s2l_terms_map_the_amounts_the_other_way() {
         lock_height: 1_090,
         liquid_amount: Units(9_970_000_000),
         solana_amount: Units(100_000_000),
-        maker_liquid_script: None,
         maker_initiator: None,
         ..terms()
     };
@@ -418,7 +431,7 @@ fn offers_expire_and_are_network_scoped() {
         v: VERSION,
         network: NET.into(),
         program_id: PROGRAM.into(),
-        template_version: 1,
+        template_version: TEMPLATE_VERSION,
         directions: vec![Direction::L2S, Direction::S2L],
         min_sol_units: Units(10_000),
         max_sol_units: Units(1_000_000_000),

@@ -102,16 +102,10 @@ pub fn make_quote(r: &MakerRules, request: &Request, now: u64) -> Result<Quote, 
 /// An accept the maker has checked, with its fields decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedAccept {
-    pub payment_hash: [u8; 32],
-    pub taker_liquid_pk: [u8; 32],
+    pub lock_point: [u8; 33],
+    pub taker_key: [u8; 33],
+    pub blinding_key: [u8; 32],
     pub taker_solana: String,
-    pub taker_liquid_script: Option<Vec<u8>>,
-    pub taker_fee_script: Option<Vec<u8>>,
-}
-
-/// A scriptPubKey we are willing to pay: not empty, not absurd, and not spendable by anyone at all.
-fn plausible_script(script: &[u8]) -> bool {
-    (2..=64).contains(&script.len())
 }
 
 /// Solana addresses are base58 of 32 bytes. Full validation is left to the Solana parser that uses them.
@@ -119,56 +113,21 @@ fn plausible_solana(s: &str) -> bool {
     (32..=44).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() && !b"0OIl".contains(&b))
 }
 
-/// The maker's check of an accept. It must also refuse any payment hash it has ever seen, in its store.
-pub fn check_accept(
-    accept: &Accept,
-    direction: Direction,
-    quote: &Quote,
-    quote_rumor_id: &str,
-    now: u64,
-) -> Result<CheckedAccept, Refused> {
+/// The maker's check of an accept. It must also refuse any point it has ever seen, in its store.
+pub fn check_accept(accept: &Accept, quote: &Quote, quote_rumor_id: &str, now: u64) -> Result<CheckedAccept, Refused> {
     if accept.quote_event != quote_rumor_id {
         return Err(Refused::WrongReference);
     }
     if now > quote.quote_expiry {
         return Err(Refused::QuoteExpired);
     }
-    let payment_hash = hex32(&accept.payment_hash).ok_or(Refused::Malformed("payment_hash"))?;
-    let taker_liquid_pk = hex32(&accept.taker_liquid_pk).ok_or(Refused::Malformed("taker_liquid_pk"))?;
+    let lock_point = hex33(&accept.lock_point).ok_or(Refused::Malformed("lock_point"))?;
+    let taker_key = hex33(&accept.taker_key).ok_or(Refused::Malformed("taker_key"))?;
+    let blinding_key = hex32(&accept.blinding_key).ok_or(Refused::Malformed("blinding_key"))?;
     if !plausible_solana(&accept.taker_solana) {
         return Err(Refused::Malformed("taker_solana"));
     }
-    let script = |s: &Option<String>, name| -> Result<Option<Vec<u8>>, Refused> {
-        match s {
-            None => Ok(None),
-            Some(text) => {
-                let bytes = hex_any(text).ok_or(Refused::Malformed(name))?;
-                if plausible_script(&bytes) {
-                    Ok(Some(bytes))
-                } else {
-                    Err(Refused::Malformed(name))
-                }
-            }
-        }
-    };
-    let taker_liquid_script = script(&accept.taker_liquid_script, "taker_liquid_script")?;
-    let taker_fee_script = script(&accept.taker_fee_script, "taker_fee_script")?;
-    match direction {
-        Direction::S2L if taker_liquid_script.is_none() || taker_fee_script.is_none() => {
-            return Err(Refused::Malformed("S2L needs the taker's scripts"));
-        }
-        Direction::L2S if taker_liquid_script.is_some() || taker_fee_script.is_some() => {
-            return Err(Refused::Malformed("L2S takes no taker scripts"));
-        }
-        _ => {}
-    }
-    Ok(CheckedAccept {
-        payment_hash,
-        taker_liquid_pk,
-        taker_solana: accept.taker_solana.clone(),
-        taker_liquid_script,
-        taker_fee_script,
-    })
+    Ok(CheckedAccept { lock_point, taker_key, blinding_key, taker_solana: accept.taker_solana.clone() })
 }
 
 /// What a taker holds to, pinned per network in the released code. Nothing here comes from the maker.
@@ -255,20 +214,11 @@ pub fn check_terms(
     if terms.min_deadline_slots > r.max_deadline_slots {
         return Err(Refused::BadLockHeight);
     }
-    if hex32(&terms.maker_liquid_pk).is_none() || !plausible_solana(&terms.maker_solana) {
+    if hex33(&terms.maker_key).is_none() || !plausible_solana(&terms.maker_solana) {
         return Err(Refused::Malformed("maker keys"));
     }
-    match direction {
-        Direction::L2S => {
-            let script = terms.maker_liquid_script.as_deref().and_then(hex_any);
-            if !script.is_some_and(|s| plausible_script(&s)) {
-                return Err(Refused::Malformed("maker_liquid_script"));
-            }
-            if !terms.maker_initiator.as_deref().is_some_and(plausible_solana) {
-                return Err(Refused::Malformed("maker_initiator"));
-            }
-        }
-        Direction::S2L => {}
+    if direction == Direction::L2S && !terms.maker_initiator.as_deref().is_some_and(plausible_solana) {
+        return Err(Refused::Malformed("maker_initiator"));
     }
     Ok(())
 }

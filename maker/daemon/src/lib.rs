@@ -15,19 +15,21 @@ use std::time::{Duration, Instant};
 
 use anchor_lang::prelude::Pubkey;
 use liq2sol_chain::liquid::{
-    exact_coin, network, unhex_tx_witness_preimage, usdt, use_network, Esplora, NetworkConfig, Rpc,
+    exact_secret_coin, is_key_path_spend, published_signature, usdt, use_network, Esplora, NetworkConfig, Rpc,
     LIQUID_MAINNET_GENESIS,
 };
 use liq2sol_chain::sol::{ata, escrow_pda, Sol, MAINNET_GENESIS};
-use liq2sol_htlc::{Htlc, HtlcParams};
 use liq2sol_maker_core::engine::{
     self, Action, Direction, EscrowState, EscrowView, HtlcView, Outcome, Page, State, Terms, View,
 };
 use liq2sol_maker_core::store::Store;
-use liq2sol_signer::{l2s_params, s2l_params, unhex, Call, Client, L2sTerms, LiquidSource, Reply, S2lTerms};
+use liq2sol_maker_core::LockPoint;
+use liq2sol_rfq::messages::{Body, ClaimOffer};
+use liq2sol_signer::{unhex, Call, Client, LiquidSource, Reply, SwapTerms};
+use liq2sol_swapkey::solana_point_of;
 use serde::{Deserialize, Serialize};
 use simplicityhl::elements::encode::deserialize;
-use simplicityhl::elements::{AddressParams, AssetId, OutPoint, Script, Transaction as LiquidTx, Txid};
+use simplicityhl::elements::{AddressParams, AssetId, OutPoint, Transaction as LiquidTx, Txid};
 use solana_sdk::transaction::Transaction as SolanaTx;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,25 +51,27 @@ pub struct Config {
     pub rfq: Option<rfq::RfqConfig>,
 }
 
-/// The full terms of one swap.
+/// The full terms of one swap, and how to reach its taker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Details {
-    L2S(L2sTerms),
-    S2L(S2lTerms),
+pub struct Details {
+    pub terms: SwapTerms,
+    /// The taker's Nostr key. Only this key can take part in the swap's signing session.
+    pub taker_nostr: String,
+    /// The negotiation id, repeated on every message of the swap.
+    pub negotiation: String,
 }
 
-/// Register a swap for the loop to pick up, refusing a payment hash ever seen before.
+/// Register a swap for the loop to pick up, refusing a point ever seen before.
 pub fn accept(store: &Store, terms: &Terms, details: &Details) -> Result<bool, String> {
     let added = store.accept(terms, &State::WatchLock).map_err(|e| e.to_string())?;
     if added {
         let body = serde_json::to_string(details).map_err(|e| e.to_string())?;
-        store.set_details(&terms.payment_hash, &body).map_err(|e| e.to_string())?;
+        store.set_details(&terms.swap_id(), &body).map_err(|e| e.to_string())?;
     }
     Ok(added)
 }
 
 struct Identity {
-    script: Script,
     solana: Pubkey,
     initiator: Pubkey,
     vault: bool,
@@ -84,7 +88,13 @@ pub struct Maker {
     last_slot: (u64, Instant),
     last_sent: HashMap<([u8; 32], String), Instant>,
     last_paged: HashMap<([u8; 32], String), Instant>,
+    last_top_up: Option<Instant>,
+    /// The way to takers. Without it no L→S swap can get its adapter signature, so none will lock.
+    pub outbox: Option<rfq::Outbox>,
 }
+
+/// How often to look at the fee coin pool. It is several chain reads, and a pool lasts many swaps.
+const TOP_UP_EVERY: Duration = Duration::from_secs(60);
 
 fn source(s: &LiquidSource) -> Esplora {
     match s {
@@ -122,12 +132,12 @@ impl Maker {
         }
         let store = Store::open(&cfg.db).map_err(|e| e.to_string())?;
         let mut signer = Client::connect(&cfg.signer_socket)?;
-        let Reply::Identity { liquid_script, solana, escrow_initiator, .. } = signer.call(&Call::Identity)? else {
+        let Reply::Identity { solana, escrow_initiator, .. } = signer.call(&Call::Identity)? else {
             return Err("unexpected reply from the signer".into());
         };
         let parse = |s: &str| Pubkey::from_str(s).map_err(|e| e.to_string());
         let (solana, initiator) = (parse(&solana)?, parse(&escrow_initiator)?);
-        let identity = Identity { script: Script::from(liquid_script), solana, initiator, vault: initiator != solana };
+        let identity = Identity { solana, initiator, vault: initiator != solana };
         // Whatever was in flight at a crash is settled by reading the chains, so old intents need nothing more.
         for (id, hash, action) in store.unfinished_intents().map_err(|e| e.to_string())? {
             println!("resuming: {} may have been in flight for {}", action_name(&action), hex(&hash));
@@ -145,6 +155,8 @@ impl Maker {
             last_slot: (slot, Instant::now()),
             last_sent: HashMap::new(),
             last_paged: HashMap::new(),
+            last_top_up: None,
+            outbox: None,
         })
     }
 
@@ -187,18 +199,28 @@ impl Maker {
         Ok(false)
     }
 
-    fn params(&mut self, details: &Details) -> Result<HtlcParams, String> {
-        let hash = match details {
-            Details::L2S(t) => t.payment_hash,
-            Details::S2L(t) => t.payment_hash,
-        };
-        let Reply::SwapKey { x_only } = self.signer.call(&Call::SwapKey { payment_hash: hash })? else {
+    fn maker_key(&mut self, swap_id: [u8; 32]) -> Result<LockPoint, String> {
+        let Reply::SwapKey { key } = self.signer.call(&Call::SwapKey { swap_id })? else {
             return Err("unexpected reply from the signer".into());
         };
-        Ok(match details {
-            Details::L2S(t) => l2s_params(t, x_only, &self.identity.script),
-            Details::S2L(t) => s2l_params(t, x_only),
-        })
+        Ok(key)
+    }
+
+    /// Keep fee coins ready, so a swap never waits for one. Failing here only delays a swap, and only until the next try.
+    fn top_up_fee_coins(&mut self) {
+        if self.last_top_up.is_some_and(|t| t.elapsed() < TOP_UP_EVERY) {
+            return;
+        }
+        self.last_top_up = Some(Instant::now());
+        match self.signer.call(&Call::TopUpFeeCoins) {
+            Ok(Reply::Nothing) => {}
+            Ok(reply) => {
+                if let Err(e) = self.send_liquid(reply) {
+                    eprintln!("could not top up the fee coins: {}", e.chars().take(200).collect::<String>());
+                }
+            }
+            Err(e) => eprintln!("could not top up the fee coins: {e}"),
+        }
     }
 
     /// Everything open except this swap, in this direction: what a new lock would add to.
@@ -207,34 +229,40 @@ impl Maker {
         Ok(open
             .iter()
             .filter(|(t, s)| {
-                t.direction == terms.direction && t.payment_hash != terms.payment_hash && *s != State::WatchLock
+                t.direction == terms.direction && t.lock_point != terms.lock_point && *s != State::WatchLock
             })
             .map(|(t, _)| t.solana_amount)
             .sum())
     }
 
-    fn htlc_view(&mut self, terms: &Terms, params: &HtlcParams, tip: u32) -> Result<(HtlcView, bool), String> {
-        let hash = terms.payment_hash;
-        let address = Htlc::new(params).map_err(|e| e.to_string())?.address(network().params);
+    fn coin_view(&mut self, terms: &Terms, swap: &SwapTerms, tip: u32) -> Result<(HtlcView, bool), String> {
+        let id = terms.swap_id();
+        let key = self.maker_key(id)?;
+        let address = swap.address(&key)?;
+        let blinding = swap.blinding()?;
         let map = |e: liq2sol_maker_core::store::StoreError| e.to_string();
-        let exact = exact_coin(&self.chain.coins(&address)?, usdt(), params.amount, tip, 0);
-        if let Some(coin) = exact {
-            self.store.remember_coin(&hash, &coin.outpoint.txid.to_string(), coin.outpoint.vout).map_err(map)?;
-            let confirmations = coin.height.map_or(0, |h| (tip + 1).saturating_sub(h));
+        let exact =
+            exact_secret_coin(&self.chain.secret_coins(&address, &blinding)?, usdt(), swap.liquid_amount, tip, 0);
+        if let Some(found) = exact {
+            let outpoint = found.coin.outpoint;
+            self.store.remember_coin(&id, &outpoint.txid.to_string(), outpoint.vout).map_err(map)?;
+            let confirmations = found.coin.height.map_or(0, |h| (tip + 1).saturating_sub(h));
             let mut disagree = false;
             if let Some(second) = &self.second {
-                disagree = exact_coin(&second.coins(&address)?, usdt(), params.amount, second.tip()?, 0).is_none();
+                let coins = second.secret_coins(&address, &blinding)?;
+                disagree = exact_secret_coin(&coins, usdt(), swap.liquid_amount, second.tip()?, 0).is_none();
             }
             return Ok((HtlcView::Unspent { confirmations }, disagree));
         }
-        // Our own lock's coin is known even before it confirms, in case it is spent before we ever see it unspent.
+        // Our own lock's coin is known even before it confirms, in case it is spent before we ever see it unspent. The
+        // swap is always the lock's first output.
         if terms.direction == Direction::S2L {
-            if let Some(raw) = self.store.stored_lock_tx(&hash).map_err(map)? {
+            if let Some(raw) = self.store.stored_lock_tx(&id).map_err(map)? {
                 let tx: LiquidTx = deserialize(&raw).map_err(|e| e.to_string())?;
-                self.store.remember_coin(&hash, &tx.txid().to_string(), 0).map_err(map)?;
+                self.store.remember_coin(&id, &tx.txid().to_string(), 0).map_err(map)?;
             }
         }
-        let Some((txid, vout)) = self.store.seen_coin(&hash).map_err(map)? else {
+        let Some((txid, vout)) = self.store.seen_coin(&id).map_err(map)? else {
             return Ok((HtlcView::Absent, false));
         };
         let outpoint = OutPoint::new(Txid::from_str(&txid).map_err(|e| e.to_string())?, vout);
@@ -242,32 +270,36 @@ impl Maker {
             return Ok((HtlcView::Absent, false));
         };
         let confirmed = self.chain.is_confirmed(&spender.txid())?;
-        Ok((
-            match unhex_tx_witness_preimage(&spender, &outpoint, &hash) {
-                Some(preimage) => HtlcView::SpentByClaim { preimage, confirmed },
-                None => HtlcView::SpentByRefund { confirmed },
-            },
-            false,
-        ))
+        if is_key_path_spend(&spender, &outpoint) != Some(true) {
+            return Ok((HtlcView::SpentByRefund { confirmed }, false));
+        }
+        // Zero opens no point, so a signature we can't read pages a human instead of being trusted.
+        let signature = published_signature(&spender, &outpoint).ok_or("a key-path spend with no signature")?;
+        let call = Call::ExtractSecret { lock_point: terms.lock_point, signature: hex(&signature) };
+        let secret = match self.signer.call(&call)? {
+            Reply::Secret(secret) => secret,
+            _ => [0; 32],
+        };
+        Ok((HtlcView::SpentByClaim { secret, confirmed }, false))
     }
 
-    fn escrow_address(&self, details: &Details) -> Result<Pubkey, String> {
-        Ok(match details {
-            Details::L2S(t) => escrow_pda(&self.identity.initiator, &t.payment_hash),
-            Details::S2L(t) => {
-                escrow_pda(&Pubkey::from_str(&t.taker_solana).map_err(|e| e.to_string())?, &t.payment_hash)
-            }
+    fn escrow_address(&self, swap: &SwapTerms) -> Result<Pubkey, String> {
+        let point = solana_point_of(&swap.lock_point.0).map_err(|e| e.to_string())?;
+        Ok(match swap.direction {
+            Direction::L2S => escrow_pda(&self.identity.initiator, &point),
+            Direction::S2L => escrow_pda(&Pubkey::from_str(&swap.taker_solana).map_err(|e| e.to_string())?, &point),
         })
     }
 
-    fn escrow_view(&self, details: &Details) -> Result<Option<EscrowView>, String> {
-        let Some(e) = self.sol.escrow(&self.escrow_address(details)?)? else {
+    fn escrow_view(&self, swap: &SwapTerms) -> Result<Option<EscrowView>, String> {
+        let Some(e) = self.sol.escrow(&self.escrow_address(swap)?)? else {
             return Ok(None);
         };
-        let recipient_ok = match details {
-            Details::L2S(t) => Some(e.recipient) == Pubkey::from_str(&t.taker_solana).ok(),
-            Details::S2L(_) => e.recipient == self.identity.solana,
+        let recipient_ok = match swap.direction {
+            Direction::L2S => Some(e.recipient) == Pubkey::from_str(&swap.taker_solana).ok(),
+            Direction::S2L => e.recipient == self.identity.solana,
         };
+        let point = solana_point_of(&swap.lock_point.0).map_err(|e| e.to_string())?;
         let restarted = e.close_on_restart && self.sol.last_restart_slot()? > e.created_slot;
         Ok(Some(EscrowView {
             state: match e.state {
@@ -276,20 +308,20 @@ impl Maker {
                 solana_escrow::state::EscrowState::Refunded => EscrowState::Refunded,
             },
             amount: e.amount,
-            payment_hash: e.payment_hash,
+            point_ok: e.lock_point == point,
             recipient_ok,
             deadline_slot: e.deadline_slot,
             close_on_restart: e.close_on_restart,
             extended: e.extended,
             restarted,
-            preimage: e.preimage,
+            revealed: e.revealed,
         }))
     }
 
     fn view(
         &mut self,
         terms: &Terms,
-        details: &Details,
+        swap: &SwapTerms,
         tip: u32,
         tip_age: u64,
         rollback: bool,
@@ -298,8 +330,11 @@ impl Maker {
         if slot != self.last_slot.0 {
             self.last_slot = (slot, Instant::now());
         }
-        let params = self.params(details)?;
-        let (htlc, coin_disagrees) = self.htlc_view(terms, &params, tip)?;
+        let (htlc, coin_disagrees) = self.coin_view(terms, swap, tip)?;
+        let adaptor_held = match self.signer.call(&Call::AdaptorHeld { swap_id: terms.swap_id() })? {
+            Reply::Held(held) => held,
+            reply => return Err(format!("signer: {reply:?}")),
+        };
         let tips_disagree = match &self.second {
             Some(second) => second.tip()?.abs_diff(tip) > 2,
             None => false,
@@ -312,8 +347,9 @@ impl Maker {
             rollback_detected: rollback,
             sources_disagree: coin_disagrees || tips_disagree,
             maker_token_ok: self.sol.token_usable(&ata(&self.identity.solana))?,
+            adaptor_held,
             htlc,
-            escrow: self.escrow_view(details)?,
+            escrow: self.escrow_view(swap)?,
             open_exposure: self.open_exposure(terms)?,
         })
     }
@@ -341,14 +377,35 @@ impl Maker {
         Ok(raw)
     }
 
+    fn offer_claim(&mut self, details: &Details) -> Result<(), String> {
+        let lock_point = details.terms.lock_point.to_hex();
+        match self.signer.call(&Call::PrepareClaim { terms: details.terms.clone() })? {
+            Reply::Nothing => Ok(()),
+            Reply::ClaimTemplate { tx, nonce } => {
+                let outbox = self.outbox.as_ref().ok_or("no relay is configured, so the taker can't be reached")?;
+                let body = Body::ClaimOffer(ClaimOffer { lock_point, tx, nonce });
+                outbox.send(&details.taker_nostr, &details.negotiation, body)
+            }
+            // The pool ran out, so look at it again now, not in a minute.
+            Reply::Failed(e) if e.contains("fee coin") => {
+                self.last_top_up = None;
+                Err(e)
+            }
+            reply => Err(format!("signer: {reply:?}")),
+        }
+    }
+
     fn execute(&mut self, terms: &Terms, details: &Details, action: &Action) -> Result<(), String> {
-        let hash = terms.payment_hash;
-        match (action, details) {
-            (Action::LockSolana { deadline_slot }, Details::L2S(t)) => {
+        let id = terms.swap_id();
+        let lock_point = terms.lock_point;
+        let t = &details.terms;
+        match (action, t.direction) {
+            (Action::RequestAdaptor, Direction::L2S) => self.offer_claim(details),
+            (Action::LockSolana { deadline_slot }, Direction::L2S) => {
                 let reply = self.signer.call(&Call::LockSolana { terms: t.clone(), deadline_slot: *deadline_slot })?;
                 self.send_solana(reply)
             }
-            (Action::LockLiquid | Action::RebroadcastLock, Details::S2L(t)) => {
+            (Action::LockLiquid | Action::RebroadcastLock, Direction::S2L) => {
                 // The signer returns the same bytes every time, so this can't pay twice. They are kept here too, so
                 // the coin's outpoint is known at once.
                 let reply = self.signer.call(&Call::LockLiquid { terms: t.clone() })?;
@@ -356,43 +413,39 @@ impl Maker {
                     return Err(format!("signer: {reply:?}"));
                 };
                 let raw = unhex(text)?;
-                self.store.store_lock_tx(&hash, &raw).map_err(|e| e.to_string())?;
+                self.store.store_lock_tx(&id, &raw).map_err(|e| e.to_string())?;
                 self.send_liquid(reply).map(|_| ())
             }
-            (Action::ClaimLiquid { preimage }, Details::L2S(t)) => {
-                let reply = self.signer.call(&Call::ClaimLiquid { terms: t.clone(), preimage: *preimage })?;
+            (Action::ClaimLiquid { secret }, Direction::L2S) => {
+                let reply = self.signer.call(&Call::ClaimLiquid { terms: t.clone(), secret: *secret })?;
                 self.send_liquid(reply).map(|_| ())
             }
-            (Action::ClaimSolana { preimage }, Details::S2L(t)) => {
-                let call =
-                    Call::ClaimSolana { taker_solana: t.taker_solana.clone(), payment_hash: hash, preimage: *preimage };
+            (Action::ClaimSolana { secret }, Direction::S2L) => {
+                let call = Call::ClaimSolana { taker_solana: t.taker_solana.clone(), lock_point, secret: *secret };
                 let reply = self.signer.call(&call)?;
                 self.send_solana(reply)
             }
-            (Action::RefundSolana, Details::L2S(_)) => {
-                let reply = self.signer.call(&Call::RefundSolana { payment_hash: hash })?;
+            (Action::RefundSolana, Direction::L2S) => {
+                let reply = self.signer.call(&Call::RefundSolana { lock_point })?;
                 self.send_solana(reply)
             }
-            (Action::RefundLiquid, Details::S2L(t)) => {
+            (Action::RefundLiquid, Direction::S2L) => {
                 let reply = self.signer.call(&Call::RefundLiquid { terms: t.clone() })?;
                 self.send_liquid(reply).map(|_| ())
             }
-            (Action::Extend { new_deadline }, Details::S2L(t)) => {
-                let call = Call::Extend {
-                    taker_solana: t.taker_solana.clone(),
-                    payment_hash: hash,
-                    new_deadline: *new_deadline,
-                };
+            (Action::Extend { new_deadline }, Direction::S2L) => {
+                let call =
+                    Call::Extend { taker_solana: t.taker_solana.clone(), lock_point, new_deadline: *new_deadline };
                 let reply = self.signer.call(&call)?;
                 self.send_solana(reply)
             }
-            (Action::Release, Details::S2L(t)) => {
-                let call = Call::Release { taker_solana: t.taker_solana.clone(), payment_hash: hash };
+            (Action::Release, Direction::S2L) => {
+                let call = Call::Release { taker_solana: t.taker_solana.clone(), lock_point };
                 let reply = self.signer.call(&call)?;
                 self.send_solana(reply)
             }
             (Action::Page(page), _) => {
-                self.page(&hash, page);
+                self.page(&id, page);
                 Ok(())
             }
             (other, _) => Err(format!("{} does not fit this swap's direction", action_name(other))),
@@ -407,10 +460,10 @@ impl Maker {
         tip_age: u64,
         rollback: bool,
     ) -> Result<(), String> {
-        let hash = terms.payment_hash;
+        let hash = terms.swap_id();
         let body = self.store.details(&hash).map_err(|e| e.to_string())?.ok_or("a swap with no details")?;
         let details: Details = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        let view = self.view(terms, &details, tip, tip_age, rollback)?;
+        let view = self.view(terms, &details.terms, tip, tip_age, rollback)?;
         let (next, actions) = engine::step(&self.cfg.engine, terms, state, &view);
 
         // Hold back repeats of an action already sent recently. A first send always goes out.
@@ -461,9 +514,12 @@ impl Maker {
         let tip = self.chain.tip()?;
         let tip_age = now_secs().saturating_sub(self.chain.tip_time()?);
         let rollback = self.check_rollback(tip)?;
+        if !rollback {
+            self.top_up_fee_coins();
+        }
         for (terms, state) in self.store.open_swaps().map_err(|e| e.to_string())? {
             if let Err(e) = self.tick_swap(&terms, &state, tip, tip_age, rollback) {
-                eprintln!("{}: {}", hex(&terms.payment_hash), e.chars().take(300).collect::<String>());
+                eprintln!("{}: {}", hex(&terms.swap_id()), e.chars().take(300).collect::<String>());
             }
         }
         Ok(())
@@ -497,7 +553,8 @@ pub fn run(config_path: &Path) -> Result<(), String> {
         }
     };
     if let Some(rfq_cfg) = cfg.rfq.clone() {
-        let pubkey = rfq::start(rfq_cfg, &cfg)?;
+        let (pubkey, outbox) = rfq::start(rfq_cfg, &cfg)?;
+        maker.outbox = Some(outbox);
         println!("maker answering quotes as {}", pubkey.to_hex());
     }
     println!("maker running");

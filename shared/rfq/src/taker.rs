@@ -1,5 +1,5 @@
 //! The taker's side of a negotiation, over one relay. Each answer is checked before the next step, and nothing here
-//! ever touches funds: the caller derives the HTLC itself, and funds only after this returns.
+//! ever touches funds: the caller derives the swap's address itself, and funds only after this returns.
 
 use std::time::{Duration, Instant};
 
@@ -11,17 +11,18 @@ use crate::rules::*;
 use crate::wrap::{self, Received};
 
 pub struct Negotiated {
+    /// Repeated on every later message of this swap.
+    pub id: String,
     pub quote: Quote,
     pub terms: MakerTerms,
 }
 
 /// What the taker commits to in its accept.
 pub struct TakerSide {
-    pub payment_hash: [u8; 32],
-    pub taker_liquid_pk: [u8; 32],
+    pub lock_point: [u8; 33],
+    pub taker_key: [u8; 33],
+    pub blinding_key: [u8; 32],
     pub taker_solana: String,
-    pub taker_liquid_script: Option<Vec<u8>>,
-    pub taker_fee_script: Option<Vec<u8>>,
 }
 
 fn now_secs() -> u64 {
@@ -54,7 +55,7 @@ pub fn find_offers(relay: &mut Relay, network: &str, wait: Duration) -> Result<V
 
 /// Wait for a message of this negotiation from exactly this maker. Anything else is ignored, not an error, because
 /// anyone can send us anything.
-fn wait_from(
+pub fn wait_from(
     relay: &mut Relay,
     me: &Keys,
     maker: &PublicKey,
@@ -116,11 +117,10 @@ pub fn negotiate(
 
     let accept = Accept {
         quote_event: got.rumor_id,
-        payment_hash: hex(&side.payment_hash),
-        taker_liquid_pk: hex(&side.taker_liquid_pk),
+        lock_point: hex(&side.lock_point),
+        taker_key: hex(&side.taker_key),
+        blinding_key: hex(&side.blinding_key),
         taker_solana: side.taker_solana,
-        taker_liquid_script: side.taker_liquid_script.as_deref().map(hex),
-        taker_fee_script: side.taker_fee_script.as_deref().map(hex),
     };
     let (event, accept_id) =
         wrap::wrap(me, maker, &envelope(Body::RfqAccept(accept)), now_secs()).map_err(|e| format!("{e:?}"))?;
@@ -131,5 +131,19 @@ pub fn negotiate(
         return Err("expected terms".into());
     };
     check_terms(rules, direction, &quote, &accept_id, &terms, tip()?).map_err(|e| format!("bad terms: {e:?}"))?;
-    Ok(Negotiated { quote, terms })
+    Ok(Negotiated { id, quote, terms })
+}
+
+/// Send one message of a swap already under way.
+pub fn send_body(
+    relay: &mut Relay,
+    me: &Keys,
+    maker: &PublicKey,
+    id: &str,
+    network: &str,
+    body: Body,
+) -> Result<(), String> {
+    let envelope = Envelope { v: VERSION, id: id.to_string(), network: network.to_string(), sent_at: now_secs(), body };
+    let (event, _) = wrap::wrap(me, maker, &envelope, now_secs()).map_err(|e| format!("{e:?}"))?;
+    relay.publish(&event)
 }

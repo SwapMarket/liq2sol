@@ -12,7 +12,7 @@ use liq2sol_rfq::wrap;
 use nostr::prelude::*;
 
 const NET: &str = "testnet";
-const PROGRAM: &str = "DxVq5iSzKfRMAyis8RyLUeLggidM2Jvk1FZyyEauCRQ1";
+const PROGRAM: &str = "EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU";
 const SOLANA: &str = "5QRoU8iyH7auNkmSfc9L8UAN441PiKZ2dRcXa1Lo1GkK";
 const TIP: u32 = 1_000;
 
@@ -25,7 +25,7 @@ fn rules() -> TakerRules {
         network: NET.into(),
         program_id: PROGRAM.into(),
         usdt_asset: hex(&[0xce; 32]),
-        template_version: 1,
+        template_version: TEMPLATE_VERSION,
         l2s_min_blocks: 240,
         l2s_max_blocks: 360,
         s2l_min_blocks: 50,
@@ -40,13 +40,7 @@ fn request() -> Request {
 }
 
 fn side() -> TakerSide {
-    TakerSide {
-        payment_hash: [2; 32],
-        taker_liquid_pk: [3; 32],
-        taker_solana: SOLANA.into(),
-        taker_liquid_script: None,
-        taker_fee_script: None,
-    }
+    TakerSide { lock_point: [2; 33], taker_key: [3; 33], blinding_key: [4; 32], taker_solana: SOLANA.into() }
 }
 
 fn good_quote() -> Quote {
@@ -58,13 +52,12 @@ fn good_terms(accept_event: String) -> MakerTerms {
         accept_event,
         h_accept: TIP,
         lock_height: TIP + 300,
-        maker_liquid_pk: hex(&[1; 32]),
-        maker_liquid_script: Some(hex(&[0x51; 34])),
+        maker_key: hex(&[2; 33]),
         maker_solana: SOLANA.into(),
         maker_initiator: Some(SOLANA.into()),
         usdt_asset: hex(&[0xce; 32]),
         program_id: PROGRAM.into(),
-        template_version: 1,
+        template_version: TEMPLATE_VERSION,
         liquid_amount: Units(1_000_000),
         solana_amount: Units(9_970),
         min_deadline_slots: 8_400,

@@ -189,7 +189,8 @@ fn l2s_reads_the_secret_from_the_account_and_claims_until_confirmed() {
 fn l2s_ignores_a_stored_secret_that_does_not_open_the_point() {
     let t = terms(Direction::L2S);
     let s = State::LockedSolana { deadline_slot: 58_400 };
-    let bad = EscrowView { state: EscrowState::Claimed, revealed: solana_value(&[9; 32]).unwrap(), ..maker_escrow(58_400) };
+    let bad =
+        EscrowView { state: EscrowState::Claimed, revealed: solana_value(&[9; 32]).unwrap(), ..maker_escrow(58_400) };
     let (s2, a) = run(&t, &s, &View { escrow: Some(bad), htlc: coin(5), ..view() });
     assert_eq!(s2, s);
     assert!(matches!(a.as_slice(), [Action::Page(Page::Impossible(_))]));

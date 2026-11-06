@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 liq2sol-chain = { path = "../../shared/chain" }
-liq2sol-htlc = { path = "../../contracts/liquid" }
+liq2sol-swapkey = { path = "../../contracts/swapkey" }
 liq2sol-maker-core = { path = "../core" }
 liq2sol-rfq = { path = "../../shared/rfq" }
 liq2sol-signer = { path = "../signer" }

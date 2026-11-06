@@ -1,7 +1,7 @@
 // node --test client/test/plan.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_FILLS, bpsAt, effectivePrice, planOrder, receiveFor } from '../site/js/plan.js';
+import { MAX_FILLS, bpsAt, effectivePrice, planOrder, receiveFor, sendLimits } from '../site/js/plan.js';
 
 const flat = (bps, up_to = 1n << 60n) => [{ up_to, bps }];
 const maker = (name, bps, max, available, min = 10n) => ({ maker: name, tiers: flat(bps), min, max, available });
@@ -114,4 +114,57 @@ test('the effective price is what the fills really pay, not the quoted step', ()
   assert.equal(effectivePrice([{ send: 100n, receive: 99n }]).toFixed(4), '1.0101', 'rounding at a tiny size');
   assert.equal(effectivePrice([{ send: 1_000_000n, receive: 997_000n }, { send: 1_000_000n, receive: 995_000n }]).toFixed(4), '1.0040', 'a mix of steps');
   assert.equal(effectivePrice([{ send: 2_000n, receive: 1_994n }, { send: 1_000n, receive: 997n }]).toFixed(4), '1.0030');
+});
+
+test('send limits: the minimum counts both sides of the trade, and the maximum what makers can pay', () => {
+  const limits = sendLimits([maker('a', 30, 2000n, 100000n, 1000n)]);
+  assert.equal(limits.min, 1004n, '1000 is the minimum, but it must also pay out 1000');
+  assert.equal(receiveFor(limits.min, 30) >= 1000n, true);
+  assert.equal(receiveFor(limits.min - 1n, 30) < 1000n, true);
+  assert.equal(limits.max, 2000n * BigInt(MAX_FILLS), 'each of the most swaps at its largest');
+  assert.equal(sendLimits([]), null);
+  assert.equal(sendLimits([maker('dry', 30, 1000n, 0n)]), null, 'a maker that can pay nothing');
+  assert.equal(sendLimits([maker('tight', 30, 1000n, 500n, 1000n)]), null, 'its minimum is more than it can pay');
+});
+
+test('send limits: the maximum stops at what the makers can pay, across several swaps', () => {
+  const { max } = sendLimits([maker('a', 100, 1000n, 1485n), maker('b', 50, 1000n, 995n)]);
+  const plan = planOrder(max, [maker('a', 100, 1000n, 1485n), maker('b', 50, 1000n, 995n)]);
+  assert.equal(plan.unfilled, 0n);
+  assert.equal(plan.fills.length > 1, true);
+  assert.equal(planOrder(max + 100n, [maker('a', 100, 1000n, 1485n), maker('b', 50, 1000n, 995n)]).unfilled > 0n, true);
+});
+
+test('send limits always fill completely, on any book, and nothing below the minimum does', () => {
+  let seed = 12345;
+  const next = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  for (let round = 0; round < 500; round++) {
+    const makers = Array.from({ length: 1 + next(4) }, (_, i) => {
+      const a = BigInt(1 + next(4000));
+      const b = a + BigInt(1 + next(40000));
+      return {
+        maker: `m${i}`,
+        tiers: [{ up_to: a, bps: 10 + next(100) }, { up_to: b, bps: 10 + next(200) }],
+        min: BigInt(1 + next(500)),
+        max: b,
+        available: BigInt(next(60000)),
+      };
+    });
+    const spread = next(2) ? 10000 : 250;
+    const favorites = new Set(next(2) ? ['m0'] : []);
+    const limits = sendLimits(makers, null, spread, favorites);
+    if (!limits) {
+      assert.equal(planOrder(1000n, makers, null, spread, favorites).fills.length, 0, `round ${round}: a fillable book had no limits`);
+      continue;
+    }
+    for (const send of [limits.min, limits.max]) {
+      const plan = planOrder(send, makers, null, spread, favorites);
+      assert.equal(plan.unfilled, 0n, `round ${round}: ${send} left ${plan.unfilled}`);
+      assert.ok(plan.fills.length >= 1 && plan.fills.length <= MAX_FILLS);
+    }
+    assert.ok(limits.min <= limits.max, `round ${round}`);
+    assert.ok(planOrder(limits.min - 1n, makers, null, spread, favorites).unfilled > 0n, `round ${round}: below the minimum`);
+    // The planner is greedy, so an odd mix of steps can leave the true largest order slightly higher. It was 0.6% at worst over these books.
+    assert.ok(planOrder((limits.max * 102n) / 100n + 1n, makers, null, spread, favorites).unfilled > 0n, `round ${round}: well above the maximum`);
+  }
 });

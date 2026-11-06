@@ -115,6 +115,8 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **The book's columns.** Maker, price, per-swap range and what the maker can pay. Once an order is typed in, the price is what that order would really pay and "Per swap" becomes "Your fill", the part of the order going to that maker. The form and book stay on the page and change only the cells that differ.
 
+**Send min and Send max.** Links above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
+
 **Vetted makers.** `site/js/vetted.js` lists makers vetted by SwapMarket, by full key and network. Listed makers have a ✓, and "Only vetted by SwapMarket" starts on and is saved in settings. Turning it off shows everyone, with a warning. Vetting limits griefing and doesn't protect funds. Offers are signed, so a checkmark can't be copied without the maker's key. It only filters new orders: swaps in progress and Rescue never consult it.
 
 **Favorites.** A star on a maker keeps it in this browser's settings. Favorites sort first and fill first, even at a worse price, and "Only my favorites" hides everyone else. A fake maker quoting a bargain can't get ahead of them.

@@ -72,3 +72,44 @@ export function planOrder(total, makers, first = null, maxSpreadBps = 10000, fav
   }
   return { fills, unfilled: left, receive: fills.reduce((sum, f) => sum + f.receive, 0n) };
 }
+
+// The smallest amount this maker takes whole. Its minimum applies to both sides, and the step and rounding move with the size.
+function smallestFor(m, maxSpreadBps) {
+  let send = m.min > 1n ? m.min : 1n;
+  for (let tries = 0; tries < 64 && send <= m.max; tries++) {
+    const bps = bpsAt(m.tiers, send);
+    if (bps === null) return null;
+    const needed = (m.min * 10000n + keep(bps) - 1n) / keep(bps);
+    if (needed > send) {
+      send = needed;
+      continue;
+    }
+    const fill = fillFor(m, send, m.available, maxSpreadBps);
+    if (fill?.send === send) return send;
+    send += 1n;
+  }
+  return null;
+}
+
+/**
+ * The smallest and largest orders the book can fill completely, as planOrder would fill them. The minimum is exact. The planner is
+ * greedy, so with an odd mix of price steps a slightly larger order than the maximum could also fill.
+ * @returns { min, max }, or null if no maker can take anything
+ */
+export function sendLimits(makers, first = null, maxSpreadBps = 10000, favorites = new Set()) {
+  const whole = (send) => {
+    const plan = planOrder(send, makers, first, maxSpreadBps, favorites);
+    return plan.fills.length > 0 && plan.unfilled === 0n;
+  };
+  const smallest = makers.map((m) => smallestFor(m, maxSpreadBps)).filter((s) => s !== null).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const min = smallest.find(whole);
+  if (min === undefined) return null;
+  // Everything the planner would take from an endless order. A smaller order can be split differently, so check it really fills.
+  const endless = 1n << 60n;
+  const everything = planOrder(endless, makers, first, maxSpreadBps, favorites);
+  let max = endless - everything.unfilled;
+  for (let tries = 0; tries < 64 && max > min && !whole(max); tries++) {
+    max -= planOrder(max, makers, first, maxSpreadBps, favorites).unfilled || 1n;
+  }
+  return { min, max: whole(max) ? max : min };
+}

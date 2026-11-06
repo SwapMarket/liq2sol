@@ -109,6 +109,8 @@ tbody tr.off { opacity: .45; cursor: default; }
 .star { background: none; border: 0; padding: 0 2px; margin: 0; font-size: 1.1rem; line-height: 1; color: var(--dim); cursor: pointer; }
 .star:hover, .star.on { color: var(--primary); }
 .slot { display: contents; }
+.send-links { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 0 14px; margin: 8px 2px 4px; font-size: .8rem; }
+.send-links[hidden] { display: none; }
 .vetted { color: var(--ok); font-weight: 700; }
 .book-filters { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 16px; margin-top: 8px; }
 .mono { font-family: ui-monospace, "Noto Mono", Menlo, monospace; }

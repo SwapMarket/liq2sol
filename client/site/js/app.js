@@ -2,7 +2,7 @@
 import init, * as W from '../wasm/liq2sol_client_wasm.js';
 import { NETWORK, refuseMainnet } from './config.js';
 import { Esplora, Solana } from './chain.js';
-import { bpsAt, planOrder, effectivePrice } from './plan.js';
+import { bpsAt, effectivePrice, planOrder, sendLimits } from './plan.js';
 import { Relays } from './relay.js';
 import { Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
@@ -175,11 +175,31 @@ const shownOffers = (direction) => {
     .sort((a, b) => Number(fav.has(b.maker)) - Number(fav.has(a.maker)));
 };
 
+const planMakers = () => shownOffers(ui.direction).map((o) => ({
+  maker: o.maker, tiers: tiersOf(o, ui.direction), min: BigInt(o.offer.min_sol_units), max: BigInt(o.offer.max_sol_units), available: available(o, ui.direction),
+}));
+
 function currentPlan(send) {
-  const makers = shownOffers(ui.direction).map((o) => ({
-    maker: o.maker, tiers: tiersOf(o, ui.direction), min: BigInt(o.offer.min_sol_units), max: BigInt(o.offer.max_sol_units), available: available(o, ui.direction),
-  }));
-  return planOrder(send ?? 0n, makers, ui.selected, settings.maxSpreadBps ?? NETWORK.maxSpreadBps, favorites());
+  return planOrder(send ?? 0n, planMakers(), ui.selected, settings.maxSpreadBps ?? NETWORK.maxSpreadBps, favorites());
+}
+
+// The smallest and largest orders the shown makers can fill, at two places when that still fills, or else exact.
+function currentLimits() {
+  const limits = sendLimits(planMakers(), ui.selected, settings.maxSpreadBps ?? NETWORK.maxSpreadBps, favorites());
+  if (!limits) return null;
+  const whole = (send) => {
+    const plan = currentPlan(send);
+    return plan.fills.length > 0 && plan.unfilled === 0n;
+  };
+  const min = sizeUp(limits.min);
+  const max = sizeDown(limits.max);
+  return { min: whole(min) ? min : limits.min, max: whole(max) ? max : limits.max };
+}
+
+function setAmount(send) {
+  ui.amount = show(send).replaceAll(',', '');
+  amountInput.value = ui.amount;
+  updateForm();
 }
 
 // Change what's on screen only if it differs, so a selection, a hover or a tap in progress isn't disturbed.
@@ -371,11 +391,16 @@ const form = {
   facts: h('div'),
   unfilled: h('div'),
   go: h('button', { class: 'btn', id: 'go', onclick: startQuote }),
+  limits: null,
+  sendMin: h('a', { href: '#', id: 'send-min', onclick: (e) => { e.preventDefault(); if (form.limits) setAmount(form.limits.min); } }),
+  sendMax: h('a', { href: '#', id: 'send-max', onclick: (e) => { e.preventDefault(); if (form.limits) setAmount(form.limits.max); } }),
 };
+form.links = h('div', { class: 'send-links' }, form.sendMin, form.sendMax);
 form.el = h('div', { class: 'card' },
   h('button', { class: 'gear', title: 'Settings', 'aria-label': 'Settings', onclick: () => settingsDialog() }, '⚙'),
   h('h2', {}, 'Create Atomic Swap'),
   h('p', { class: 'sub' }, 'Trustless and confidential. No server holds anything.'),
+  form.links,
   h('div', { class: 'row' }, form.fromCoin, amountInput),
   h('button', { class: 'flip', title: 'Swap direction', 'aria-label': 'Swap direction', onclick: () => { ui.direction = ui.direction === 'L2S' ? 'S2L' : 'L2S'; ui.selected = null; updateForm(); } }, '⇅'),
   h('div', { class: 'row to' }, form.toCoin, form.receive),
@@ -407,6 +432,12 @@ function updateForm() {
     h('div', {}, h('dt', {}, 'Average price'), h('dd', {}, average))));
   const partial = filled && plan.unfilled > 0n;
   slot(form.unfilled, partial ? `${send}|${plan.unfilled}` : '', () => partial && h('p', { class: 'warn', id: 'unfilled' }, `The book can fill ${show(send - plan.unfilled)} of this right now. ${show(plan.unfilled)} would stay unswapped.`));
+  form.limits = currentLimits();
+  form.links.hidden = !form.limits;
+  if (form.limits) {
+    setText(form.sendMin, `Send min ${show(form.limits.min)}`, 'The smallest order the makers shown below can fill');
+    setText(form.sendMax, `Send max ${show(form.limits.max)}`, 'The largest order the makers shown below can fill. It doesn\'t check your balance.');
+  }
   setText(form.go, label);
   form.go.disabled = !ready;
   updateBook(send);

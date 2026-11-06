@@ -375,6 +375,7 @@ async function vetting() {
   if (await page.locator('#unvetted-warning').isVisible()) throw new Error('a warning with the switch on');
   await page.locator('#amount').fill(env.AMOUNT);
   if (await page.locator('#go:not(:disabled)').count()) throw new Error('an order could go to a hidden maker');
+  if (await page.locator('#send-max').isVisible()) throw new Error('send limits from makers that are hidden');
   step('a new visitor sees no unvetted maker, and can\'t trade with one');
 
   await page.locator('#only-vetted').uncheck();
@@ -458,8 +459,22 @@ async function liveBook() {
   if ((await cells())[1] !== quoted[1]) throw new Error('the quoted price did not come back');
   lost = await marked();
   if (lost.length) throw new Error(`rebuilt: ${lost}`);
+
+  for (const [link, name] of [['#send-min', 'Send min'], ['#send-max', 'Send max']]) {
+    const text = await page.locator(link).innerText();
+    await page.locator(link).click();
+    const amount = await page.locator('#amount').inputValue();
+    if (!text.startsWith(name) || Number(text.slice(name.length).replaceAll(',', '')) !== Number(amount)) throw new Error(`${text} put ${amount} in the form`);
+    if (await page.locator('#unfilled').isVisible()) throw new Error(`${name} left part of the order unfilled`);
+    if (!(await page.locator('.facts').isVisible())) throw new Error(`no maker takes ${name}`);
+    if ((await headers())[2] !== 'your fill') throw new Error(`${name} did not count as an order`);
+  }
+  await page.locator('#amount').fill('');
+  lost = await marked();
+  if (lost.length) throw new Error(`rebuilt: ${lost}`);
   await checkNoErrors(page);
   await page.context().close();
+  step('send min and max put an order in the form that the book fills completely');
   step('the book updates in place, and shows an order\'s own price and size under "your fill"');
 }
 

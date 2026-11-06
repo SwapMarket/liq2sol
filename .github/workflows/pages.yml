@@ -37,7 +37,16 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+      # A page-only change reuses the WebAssembly from an earlier run of this workflow. The key covers everything that goes into it
+      # and the versions that build it, so any change to those builds and tests it again.
+      - name: Reuse the WebAssembly if nothing in it changed
+        id: wasm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: client/site/wasm
+          key: wasm-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ env.WASM_PACK_VERSION }}-${{ hashFiles('client/build.sh', 'client/wasm/**', 'contracts/swapkey/**', 'shared/chain/**', 'shared/rfq/**', 'programs/solana-escrow/**') }}
       - name: Install the Rust toolchain
+        if: steps.wasm.outputs.cache-hit != 'true'
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown
           rustup default "$RUST_VERSION"
@@ -47,9 +56,11 @@ jobs:
       - name: Test how orders fill, and that swap records are never overwritten
         run: node --test client/test/plan.test.mjs client/test/store.test.mjs client/test/logs.test.mjs client/test/vetted.test.mjs
       - name: Test Solana transactions against the native builders
+        if: steps.wasm.outputs.cache-hit != 'true'
         working-directory: client/wasm
         run: cargo test --locked
       - name: Build the WebAssembly
+        if: steps.wasm.outputs.cache-hit != 'true'
         run: client/build.sh
       - name: Stamp the build
         run: sed -i "s/__BUILD__/${GITHUB_SHA::12}/g" client/site/index.html

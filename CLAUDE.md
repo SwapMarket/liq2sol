@@ -17,8 +17,8 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 
 ## Repo conventions
 
-- Commits are signed by SwapMarket (repo-local git config: user `SwapMarket`, key `01151A25AAE22F55`). Ask before
-  committing or pushing; the user has said "you can commit" per change so far.
+- Commits are signed by SwapMarket (repo-local git config: user `SwapMarket`, key `01151A25AAE22F55`). Work directly on
+  `main`, and commit and push when it makes sense, with no need to ask (user's decision, 2026-11-06).
 - Public repo: https://github.com/SwapMarket/liq2sol (`origin`, branch `main`).
 - End commit messages with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
@@ -34,7 +34,7 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
   directions on Liquid testnet and Solana devnet, using stand-in assets. `cli/tests/failures.rs` runs the failure scenarios on regtest plus devnet. `maker/` has the
   engine, signer process and daemon loop, tested with real processes under crashes, halts and rollbacks, with the maker vault on. `shared/rfq` and `maker/daemon/src/rfq.rs` add quotes over Nostr, tested on a mock relay and through `relay.coinos.pro`, the user's chosen relay. Next: the static client. E14 still needs a real cluster restart. E16 only runs on a local validator.
 
-**Branch `confidential` (not merged, as of 2026-11-06):** the redesign in `docs/confidential.md` replaces the Simplicity HTLC with a MuSig2 taproot output, adapter-signed claims and blinded coins. Contracts, signer, daemon, RFQ and CLI are all moved over and tested. The docs on this branch describe that design. Next: the static client, which still has to be built on `contracts/swapkey-wasm`.
+**Confidential design (on `main`, 2026-11-06):** the redesign in `docs/confidential.md` replaces the Simplicity HTLC with a MuSig2 taproot output, adapter-signed claims and blinded coins. Contracts, signer, daemon, RFQ and CLI are all moved over and tested. The docs describe that design. The program is on devnet at `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU`; the key is `programs/.keys/escrow-confidential-program.json`. Next: the static client, which still has to be built on `contracts/swapkey-wasm`.
 
 ## Design points that are easy to get wrong
 
@@ -59,6 +59,8 @@ Details and sources are in the docs. These are recorded because older assumption
 - **A nonce signs once and is never stored.** A crash abandons the session.
 - **Liquid charges confidential transactions on discount vsize,** about a tenth of vsize. `-acceptdiscountct` is on by default on `liquidv1` and `liquidtestnet`, and off on regtest, so regtest nodes must set it.
 - **Wallets must hold only blinded coins:** an explicit input bounds the blinded outputs.
+- **A fee coin is 30 sats (user's decision, 2026-11-06),** just above a refund's 29-sat floor, because Liquid has no fee spikes. It leaves no margin if the floor rises.
+- **The signer never reuses a coin it has signed away.** A retried lock must send the same bytes, so a reused coin could never land.
 - **Kind 21059 wrappers carry the real time.** Relays drop ephemeral events more than a few seconds old.
 - **The second Solana endpoint is Helius, using an optional key the taker provides** (user's decision, 2026-11-05). Never
   ship a key in the static app.

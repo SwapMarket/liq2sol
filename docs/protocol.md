@@ -356,7 +356,7 @@ reserved pool on the maker's side ([confidential.md](confidential.md)).
 
 | Option | Trade-off |
 |---|---|
-| **Maker adds an L-BTC "fee coin" to the taker's key in S→L; taker funds its own for L→S refunds, only if a refund is needed (accepted)** | No contract change. Costs the maker a few hundred sats per swap, priced in. A taker with no L-BTC needs to acquire a small amount in order to refund L→S. |
+| **Maker adds an L-BTC "fee coin" to the taker's key in S→L; taker funds its own for L→S refunds, only if a refund is needed (accepted)** | No contract change. Costs the maker a few tens of sats per swap, priced in. A taker with no L-BTC needs to acquire a small amount in order to refund L→S. |
 | Taker must always hold L-BTC | Simplest, but many USDt-only wallet users have none, so S→L fails for them. |
 | Covenant allows `output 0 ≥ AMOUNT − SPONSOR_CAP`, so a third party can add L-BTC and be paid in USDt | Solves the no-L-BTC case fully, with a slightly larger covenant and an inexact amount. Needs a sponsor to exist, which reintroduces infrastructure. |
 

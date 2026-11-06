@@ -164,7 +164,7 @@ Per D3:
 
 - S→L: the maker's fee coin pays to a key-path taproot output on the taker's ephemeral key. The claim spends it entirely
   as fee.
-- L→S refund: the client shows a fee-coin address on the ephemeral key, for the user to pay a few hundred sats of L-BTC,
+- L→S refund: the client shows a fee-coin address on the ephemeral key, for the user to pay a few tens of sats of L-BTC,
   **only if a refund is needed**. All L-BTC used is explicit, so the transaction carries no range proofs.
 
 **Wallet behaviour is UNVERIFIED and must be tested with real wallets before release:**

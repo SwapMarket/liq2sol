@@ -295,6 +295,10 @@ fn outpoint_text(c: &SecretCoin) -> String {
     format!("{}:{}", c.coin.outpoint.txid, c.coin.outpoint.vout)
 }
 
+fn spends_of(tx: &LiquidTx) -> Vec<String> {
+    tx.input.iter().map(|i| format!("{}:{}", i.previous_output.txid, i.previous_output.vout)).collect()
+}
+
 pub struct Signer {
     limits: Limits,
     chain: Esplora,
@@ -422,7 +426,13 @@ impl Signer {
 
     /// The coins ordinary payments may use. Fee coins stay out, or a payment could kill a signature that commits to one.
     fn payable_coins(&self) -> Result<Vec<SecretCoin>, String> {
-        Ok(self.wallet_coins()?.into_iter().filter(|c| !Self::is_fee_coin(c)).collect())
+        let mut coins = vec![];
+        for c in self.wallet_coins()? {
+            if !Self::is_fee_coin(&c) && !self.ledger.is_used(&outpoint_text(&c)).map_err(|e| e.to_string())? {
+                coins.push(c);
+            }
+        }
+        Ok(coins)
     }
 
     /// This swap's fee coin, reserved durably before anything commits to it. It must be confirmed: a signature on a coin
@@ -443,7 +453,16 @@ impl Signer {
         Ok(coin)
     }
 
+    /// Only ever pays our own wallet. One at a time, and a retry sends the same bytes, so a top-up that is on its way can't be
+    /// paid again, and can't take coins a lock needs.
     fn top_up_fee_coins(&self) -> Outcome {
+        if let Some(raw) = self.ledger.pending_top_up().map_err(|e| e.to_string())? {
+            let tx: LiquidTx = deserialize(&raw).map_err(|e| e.to_string())?;
+            if !self.chain.is_confirmed(&tx.txid()).unwrap_or(false) {
+                return Ok(Reply::Liquid(hex(&raw)));
+            }
+            self.ledger.clear_pending_top_up().map_err(|e| e.to_string())?;
+        }
         if self.free_fee_coins(self.wallet_coins()?)?.len() >= FEE_COINS_LOW {
             return Ok(Reply::Nothing);
         }
@@ -452,7 +471,9 @@ impl Signer {
             .map(|_| Payment { asset: liquid::lbtc(), amount: FEE, address: to.clone() })
             .collect();
         let tx = pay_from_coins(&self.payable_coins()?, &self.wallet, payments, self.genesis)?;
-        Ok(Reply::Liquid(serialize_hex(&tx)))
+        let raw = serialize(&tx);
+        self.ledger.set_pending_top_up(&raw, &spends_of(&tx)).map_err(|e| e.to_string())?;
+        Ok(Reply::Liquid(hex(&raw)))
     }
 
     fn escrow_initiator(&self) -> Pubkey {
@@ -479,11 +500,12 @@ impl Signer {
         swap_id: &[u8; 32],
         request: &Request,
         record: &policy::SwapRecord,
-        lock_tx: Option<&[u8]>,
+        lock_tx: Option<(&[u8], &[String])>,
     ) -> Result<(), Stop> {
         let before = self.ledger.record(swap_id);
         let newly = policy::newly_locked(&before, request).map(|amount| (now_secs(), amount));
-        self.ledger.commit(swap_id, record, newly, lock_tx).map_err(|e| Stop::Failed(e.to_string()))
+        let (raw, spends) = lock_tx.map_or((None, &[][..]), |(raw, spends)| (Some(raw), spends));
+        self.ledger.commit(swap_id, record, newly, raw, spends).map_err(|e| Stop::Failed(e.to_string()))
     }
 
     fn solana_reply(&self, ixs: &[solana_sdk::instruction::Instruction]) -> Outcome {
@@ -644,7 +666,7 @@ impl Signer {
         ];
         let tx = pay_from_coins(&self.payable_coins()?, &self.wallet, payments, self.genesis)?;
         let raw = serialize(&tx);
-        self.commit(&id, &request, &record, Some(&raw))?;
+        self.commit(&id, &request, &record, Some((&raw, &spends_of(&tx))))?;
         Ok(Reply::Liquid(hex(&raw)))
     }
 

@@ -467,7 +467,15 @@ fn l2s_attacks(world: &World, client: &mut Client) -> OutPoint {
     // No fee coin confirmed yet, so no session: a claim needs one reserved first.
     assert!(matches!(prepare(client, &terms), Reply::Failed(e) if e.contains("fee coin")));
     println!("    ok: no session starts without a confirmed fee coin");
-    world.top_up(client);
+    let top_up = client.call(&Call::TopUpFeeCoins).unwrap();
+    assert_eq!(
+        client.call(&Call::TopUpFeeCoins).unwrap(),
+        top_up,
+        "a retry sends the same bytes, and doesn't pay twice"
+    );
+    println!("    ok: a fee coin top-up is idempotent");
+    world.chain.broadcast(&liquid_tx(top_up)).unwrap();
+    world.node.mine(1);
     assert_eq!(client.call(&Call::TopUpFeeCoins).unwrap(), Reply::Nothing, "the pool is full");
 
     println!("\n==> L to S: locking our funds");
@@ -685,6 +693,7 @@ fn s2l_attacks(world: &World, client: &mut Client, reserved: OutPoint) {
     println!("    ok: the taker can read its coin and its fee coin, with exact amounts");
 
     // Refund timing, and giving back an escrow we've locked against.
+    coins_are_never_reused(world, client);
     assert_bad_timeout(client.call(&Call::RefundLiquid { terms: terms.clone() }).unwrap());
     assert_refused(
         client.call(&Call::Release { taker_solana: taker_solana.clone(), lock_point: point }).unwrap(),
@@ -804,6 +813,37 @@ fn s2l_attacks(world: &World, client: &mut Client, reserved: OutPoint) {
     world.send_solana(&collect).unwrap();
     assert_eq!(world.sol.escrow(&escrow).unwrap().unwrap().state, EscrowState::Claimed);
     println!("    ok: collected on Solana with the secret from Liquid");
+}
+
+/// Two locks with no block between them. The node's coin list still shows the first one's coins as unspent, and a second lock
+/// signed over them could never land, because retries must send the same bytes.
+fn coins_are_never_reused(world: &World, client: &mut Client) {
+    let maker = Pubkey58::parse(&world.maker_pubkey);
+    let mut seen: Vec<OutPoint> = vec![];
+    for _ in 0..2 {
+        let (_, point) = fresh_point();
+        taker_lock(world, &point, maker, 101_400, false, SOL_AMOUNT);
+        let height = world.chain.tip().unwrap() + 80;
+        let terms = world.terms(Direction::S2L, point, height, LIQ_AMOUNT, SOL_AMOUNT);
+        let call = Call::LockLiquid { terms };
+        let first = client.call(&call).unwrap();
+        // Short of unused coins until a block confirms the change. Then it is signed, and it must still not overlap.
+        let reply = match first {
+            Reply::Failed(e) if e.contains("wallet") => {
+                world.node.mine(1);
+                client.call(&call).unwrap()
+            }
+            other => other,
+        };
+        let tx = liquid_tx(reply);
+        for input in &tx.input {
+            assert!(!seen.contains(&input.previous_output), "a signed payment's coin was used again");
+            seen.push(input.previous_output);
+        }
+        world.chain.broadcast(&tx).expect("each lock can land");
+    }
+    world.node.mine(1);
+    println!("    ok: locks signed in one block never share a coin, and both land");
 }
 
 /// A taker who never claims: the maker's own coin comes back through the Simplicity leaf.

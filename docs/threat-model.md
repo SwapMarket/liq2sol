@@ -20,7 +20,7 @@ Status: Phase 1 design, for review. "Protocol" below refers to [protocol.md](pro
 | Maker reuses a nonce | Nonces are random, in memory only, consumed by the type system, and never stored. A crash abandons the session. | **A reuse would reveal the per-swap key.** Limited to one swap. |
 | Adapter signature lost after acting on it | Fsynced before the lock or the share | Disk failure can lose one swap, so back up the ledger |
 | Fee coin spent elsewhere | Reserved durably, and coins of that value aren't used for payments | A Liquid rollback dropping a fee coin's parent could kill a signature |
-| Claim stuck at a fixed fee | Fee coins pay far above the floor, and a child can bump | Sustained fee spikes |
+| Claim stuck at a fixed fee | A fee coin pays just above the relay floor, and a child can bump | A rise in the floor, or fee spikes, which Liquid hasn't had |
 | No relay during a swap | The session can't run, so the swap ends in refunds | Failed swap, no loss |
 | Taker reuses a point from an earlier swap | Maker rejects seen points forever | None |
 | Taker claims right at the deadline | Maker's 3 h margin, and the revealed value stays in the account | Maker must be online inside it |

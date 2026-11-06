@@ -46,6 +46,8 @@ needed.
   - **A Liquid lock is signed once.** A retry returns the identical stored bytes, so the address can't be paid twice.
   - **It keeps the signing sessions.** Nonces live in memory only, are used once, and a crash abandons the session. An adapter signature is fsynced before
     anything relies on it: before a Solana lock, or before our share is released. One session per swap. Our share is refused once the taker's escrow is gone.
+  - **It never reuses a coin it has signed away.** Each payment's inputs are recorded with its signature, because a chain source can lag, and a lock that reused
+    a coin could never land: a retry must send the same bytes. A top-up is one at a time and retried unchanged, like a lock.
   - **It keeps a pool of blinded fee coins**, reserves one for a swap durably before signing, and never spends coins of that value on anything else.
   - Requests are handled one at a time so policy checks can't race, and read outside that lock so a stalled client blocks nobody.
 - Per-swap Liquid keys are derived as SHA-256 of a domain tag, a seed and the swap id, rather than BIP-32. A restored seed

@@ -43,8 +43,8 @@ pub const LIQUID_MAINNET_GENESIS: &str = "1466275836220db2944ca059a3a10ef6fd2ea6
 pub const TEST_ASSET: &str = "38fca2d939696061a8f76d4e6b5eecd54e3b4221c846f24a6b279e79952850a5";
 /// L-BTC on Liquid testnet.
 pub const TEST_LBTC: &str = "144c654344aa716d6f3abcc1ca90e5641e4e2a7f633bc09fe3baf64585819a49";
-/// Whole-coin fee used for every spend, per docs/contracts.md.
-pub const FEE: u64 = 300;
+/// What a fee coin holds, all of it paid as the fee of a claim or refund. See docs/confidential.md.
+pub const FEE: u64 = 30;
 
 pub type Res<T> = Result<T, String>;
 
@@ -214,7 +214,17 @@ impl Esplora {
             }
             Esplora::Node(n) => {
                 let desc = format!("[\"addr({address})\"]");
-                let found = n.json(&["scantxoutset", "start", &desc])?;
+                // A node runs one scan at a time, and a maker's daemon and signer share a node, so wait for a turn.
+                let mut tries = 0;
+                let found = loop {
+                    match n.json(&["scantxoutset", "start", &desc]) {
+                        Err(e) if e.contains("error code: -8") && tries < 100 => {
+                            tries += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        other => break other?,
+                    }
+                };
                 found["unspents"]
                     .as_array()
                     .ok_or("scantxoutset result")?

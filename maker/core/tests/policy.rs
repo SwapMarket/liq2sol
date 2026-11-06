@@ -335,9 +335,9 @@ fn the_real_ledger_survives_a_restart_and_keeps_the_lock_transaction() {
     {
         let ledger = SignerLedger::open(&path).unwrap();
         let rec = check(&limits(), &ledger, NOW, &lock_liquid()).unwrap();
-        ledger.commit(&hash(), &rec, Some((NOW, AMOUNT)), Some(b"tx")).unwrap();
+        ledger.commit(&hash(), &rec, Some((NOW, AMOUNT)), Some(b"tx"), &["cc:1".to_string()]).unwrap();
         let rec = check(&limits(), &ledger, NOW, &Request::ClaimSolana { lock_point: point(), secret: P }).unwrap();
-        ledger.commit(&hash(), &rec, None, None).unwrap();
+        ledger.commit(&hash(), &rec, None, None, &[]).unwrap();
     }
     let ledger = SignerLedger::open(&path).unwrap();
     assert_eq!(
@@ -347,6 +347,16 @@ fn the_real_ledger_survives_a_restart_and_keeps_the_lock_transaction() {
     );
     assert_eq!(check(&limits(), &ledger, NOW, &lock_liquid()), Err(Refusal::AlreadyLocked));
     assert_eq!(ledger.lock_tx(&hash()).unwrap().unwrap(), b"tx");
+    assert!(
+        ledger.is_used("cc:1").unwrap() && !ledger.is_used("cc:2").unwrap(),
+        "a signed payment's coins stay marked"
+    );
+    assert_eq!(ledger.pending_top_up().unwrap(), None);
+    ledger.set_pending_top_up(b"top", &["dd:0".to_string()]).unwrap();
+    assert_eq!(ledger.pending_top_up().unwrap().unwrap(), b"top");
+    assert!(ledger.is_used("dd:0").unwrap());
+    ledger.clear_pending_top_up().unwrap();
+    assert_eq!(ledger.pending_top_up().unwrap(), None);
     assert!(ledger.reserve_fee_coin(&hash(), "aa:0").unwrap());
     assert!(!ledger.reserve_fee_coin(&[9; 32], "aa:0").unwrap(), "a coin belongs to one swap");
     assert!(ledger.is_reserved("aa:0").unwrap() && !ledger.is_reserved("bb:0").unwrap());

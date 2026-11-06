@@ -261,7 +261,9 @@ impl SignerLedger {
              CREATE TABLE IF NOT EXISTS locks (at_secs INTEGER NOT NULL, amount INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS lock_txs (swap BLOB PRIMARY KEY, raw_tx BLOB NOT NULL);
              CREATE TABLE IF NOT EXISTS adaptors (swap BLOB PRIMARY KEY, body TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS fee_coins (swap BLOB PRIMARY KEY, outpoint TEXT NOT NULL UNIQUE);",
+             CREATE TABLE IF NOT EXISTS fee_coins (swap BLOB PRIMARY KEY, outpoint TEXT NOT NULL UNIQUE);
+             CREATE TABLE IF NOT EXISTS used_coins (outpoint TEXT PRIMARY KEY);
+             CREATE TABLE IF NOT EXISTS pending_top_up (id INTEGER PRIMARY KEY CHECK (id = 1), raw_tx BLOB NOT NULL);",
         )?;
         Ok(Self { conn })
     }
@@ -319,6 +321,37 @@ impl SignerLedger {
         Ok(found.is_some())
     }
 
+    /// Whether a signed payment already spends this coin. A node's coin list can lag behind what we've signed, and a lock that
+    /// reused a coin could never land, because a retry must send the same bytes. A rollback that drops such a payment leaves
+    /// its coins marked, which is safe, and is for the operator to sort out.
+    pub fn is_used(&self, outpoint: &str) -> Result<bool> {
+        let found: Option<i64> = self
+            .conn
+            .query_row("SELECT 1 FROM used_coins WHERE outpoint = ?1", params![outpoint], |r| r.get(0))
+            .optional()?;
+        Ok(found.is_some())
+    }
+
+    /// The fee coin top-up signed and not yet seen confirmed. A retry sends these bytes.
+    pub fn pending_top_up(&self) -> Result<Option<Vec<u8>>> {
+        Ok(self.conn.query_row("SELECT raw_tx FROM pending_top_up WHERE id = 1", [], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_pending_top_up(&self, raw_tx: &[u8], spends: &[String]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for outpoint in spends {
+            tx.execute("INSERT OR IGNORE INTO used_coins (outpoint) VALUES (?1)", params![outpoint])?;
+        }
+        tx.execute("INSERT OR REPLACE INTO pending_top_up (id, raw_tx) VALUES (1, ?1)", params![raw_tx])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn clear_pending_top_up(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM pending_top_up", [])?;
+        Ok(())
+    }
+
     /// Persist, and fsync, before the signature leaves the signer.
     pub fn commit(
         &self,
@@ -326,8 +359,12 @@ impl SignerLedger {
         record: &SwapRecord,
         newly_locked: Option<(u64, u64)>,
         lock_tx: Option<&[u8]>,
+        spends: &[String],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        for outpoint in spends {
+            tx.execute("INSERT OR IGNORE INTO used_coins (outpoint) VALUES (?1)", params![outpoint])?;
+        }
         if let Some(raw) = lock_tx {
             tx.execute("INSERT INTO lock_txs (swap, raw_tx) VALUES (?1, ?2)", params![swap.as_slice(), raw])?;
         }

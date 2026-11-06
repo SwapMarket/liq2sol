@@ -106,8 +106,9 @@ regtest nodes must be started with `-acceptdiscountct=1` to behave like the real
 | A refund: 2 inputs, 1 blinded output, fee, the Simplicity leaf | 1,409 | 285 | 29 sats |
 
 Ordinary payments pay about twice the floor, computed from their shape. A swap claim's fee can't be raised, because the signature
-commits to the whole transaction, so a fee coin holds 300 sats, about 12 times the floor. The claim's blinded output can still be
-spent by a child transaction if that is ever not enough. Whether 300 is the right margin is open; it is the `FEE` constant.
+commits to the whole transaction, so a fee coin holds a fixed 30 sats (the `FEE` constant). That is just above the floor for both a claim and a refund, on
+the operator's judgement that Liquid has no fee spikes. **It leaves no margin if the relay floor ever rises.** A child transaction spending the claim's
+blinded output can still bump it.
 
 Discounted transactions relay through the public Liquid testnet Esplora: every run below went through it at these fees.
 
@@ -125,23 +126,25 @@ All done, on real systems:
 
 ## Stage 2: the whole system
 
-Every run below used real processes and a real node. Solana was a local validator, not a public cluster.
+Every run below used real processes and a real node. Solana was public devnet, at program `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU`, unless a row says otherwise.
 
 | Check | Result | Where |
 |---|---|---|
-| Both swap directions and both aborts on **public Liquid testnet** | Passed, with the discounted fees relayed by the public Esplora. A claim has one witness item and hidden outputs, at 4,690 bytes. A refund has four, at 4,823 bytes. An early refund was refused as `non-final`. | `cli/src/main.rs`. S→L claim `d03c4a86…`, L→S claim `89516d90…`, refund `2d254d6e…` |
+| Both swap directions and both aborts on **public Liquid testnet** | Passed, with the discounted fees relayed by the public Esplora. A claim has one witness item and hidden outputs, at 4,690 bytes. A refund has four, at 4,823 bytes. An early refund was refused as `non-final`. | `cli/src/main.rs`. S→L claim `af2add48…`, L→S claim `9cf82394…`, refund `ee72197a…`, all at a 30-sat fee |
 | Maker daemon under crashes, vanishing takers, bad coins, a Liquid halt and a rollback | Passed, with the maker vault on. A taker who pays and never signs costs the maker nothing. | `maker/daemon/tests/e2e.rs` |
-| Failure scenarios E4, E5, E9, E11, E12, E13, E15a, E15b, E16 | Passed. E9 now rests on off-chain checks, and E5, E12, E15a, E15b and E16 still show the losses they are meant to. | `cli/tests/failures.rs` |
+| Failure scenarios E4, E5, E9, E11, E12, E13, E15a, E15b, E16, on a local validator, and before the fee moved to 30 sats | Passed. E9 now rests on off-chain checks, and E5, E12, E15a, E15b and E16 still show the losses they are meant to. | `cli/tests/failures.rs` |
 | A compromised engine on the signer's socket | All refused: wrong asset, amount or blinding key, bad shares, repeat sessions, a flipped-parity point, a reserved fee coin, an explicit coin | `maker/signer/tests/process.rs` |
-| Both swap directions through a **public relay**, `relay.coinos.pro` | Passed, including a blinded claim of 4,690 bytes in a session message. Other relays are untested, and their size limits may differ. | `RFQ_RELAY=wss://relay.coinos.pro`, the same suite |
-| Each of 15 rules removed in turn | All 15 caught by a test. One survived at first, so it got a test. | `scripts/mutate-confidential.py` |
+| Both swap directions through a **public relay**, `relay.coinos.pro`, on a local validator | Passed, including a blinded claim of 4,690 bytes in a session message. Other relays are untested, and their size limits may differ. | `RFQ_RELAY=wss://relay.coinos.pro`, the same suite |
+| Each of 17 rules removed in turn | All caught by a test. One survived at first, so it got a test. | `scripts/mutate-confidential.py` |
 | Sessions from a stranger, under another id, or during a rollback alarm | Refused, using real requests on real coins, with the honest session as the control | `maker/daemon/tests/e2e.rs` |
 
-Measured on the local validator: a program built for SBPF v3, because that cluster refuses to deploy v0 (SIMD-0500).
+The local validator runs a program built for SBPF v3, because that cluster refuses to deploy v0 (SIMD-0500). Devnet runs v0.
+
+Devnet also found what the local validator had hidden by timing: a lock signed right after a top-up could reuse its coins, and then could never land. The signer now records every coin it signs away. A node also runs only one `scantxoutset` at a time, so callers now wait for a turn.
 
 ## Not yet covered
 
-- The program on a public cluster. The branch has its own program id, and deploying it on devnet needs about 2.3 SOL.
+- Priority fees on Solana. The code sets none, so a claim could miss its deadline on a congested mainnet. **To fix before mainnet.**
 - Firefox and Safari, and a real wallet paying a confidential address of this form.
 - A real restart for E14, as on `main`.
 - Removing the old HTLC code. `contracts/liquid` and its helpers in `shared/chain` are unused by the maker and CLI, but still in the tree.
@@ -150,6 +153,5 @@ Measured on the local validator: a program built for SBPF v3, because that clust
 
 ## Open choices
 
-- **Fee coin size.** 300 sats is about 12 times the floor for a claim whose fee can't be raised. It is the `FEE` constant.
 - **Reserved coins of abandoned swaps** stay reserved. It is at most one fee coin per swap that paid a real coin, so this was left simple.
 

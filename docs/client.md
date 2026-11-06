@@ -174,7 +174,7 @@ Per D3:
 | Reproducible builds | Docker image pinned by digest. Rust toolchain and clang pinned. `SOURCE_DATE_EPOCH` set. CI builds twice and compares hashes. |
 | Pinned dependencies | `Cargo.lock` and a package lockfile with integrity hashes. `--locked` and `npm ci`. Dependency changes require review. Minimal count. |
 | SRI | Every script, style and WASM file gets a hash in the entry HTML. WASM loading verifies its hash. |
-| CSP | `default-src 'self'; connect-src` limited to `'self'`, `https:` and `wss:`, since endpoints are user-configurable; `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`, testnet builds only (user's decision, 2026-11-06); no inline scripts. **`unsafe-eval` is there for wallets:** Phantom's injected scripts call `new Function`, and without it every wallet message fails with "Internal JSON-RPC error" (found in Opera). A page can't exempt one extension. Our own code never evaluates strings, and inline and outside scripts stay blocked. Set by meta tag, because GitHub Pages can't set headers. |
+| CSP | `default-src 'self'; connect-src` limited to `'self'`, `https:` and `wss:`, since endpoints are user-configurable; `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`, on testnet and mainnet (user's decision, 2026-11-06); no inline scripts. **`unsafe-eval` is there for wallets:** Phantom's injected scripts call `new Function`, and without it every wallet message fails with "Internal JSON-RPC error" (found in Opera). A page can't exempt one extension. Our own code never evaluates strings, and inline and outside scripts stay blocked. Set by meta tag, because GitHub Pages can't set headers. |
 | Release hashes | Signed `SHA256SUMS` with the SwapMarket key on each GitHub release. Includes the CMR of each template version. |
 | IPFS mirror | Each release is pinned, with its CID in the release notes. |
 | Run locally | Release zip, `python3 -m http.server`, or `recovery.html` from disk. |
@@ -185,9 +185,8 @@ Per D3:
 To settle when that build is made:
 
 - **Reproducible builds:** obfuscation is randomized by default, so it needs a fixed `seed`, or nobody can check a release against its source.
-- **Test the obfuscated output:** the browser suite must run against it, not only against the plain source. `disableConsoleOutput` also hides the console messages used to diagnose wallet problems.
-- **`debugProtection`:** it freezes the tab for anyone with developer tools open, including people auditing a page that holds swap secrets. It also probably depends on evaluating strings, so check it against the CSP.
-- **CSP:** mainnet needs its own decision on `unsafe-eval`, for the same wallet reason as testnet.
+- **Test the obfuscated output:** the browser suite must run against it, not only against the plain source. `disableConsoleOutput` also hides the console messages used to diagnose wallet problems, and may stop the Settings log from capturing them, so check that it still does.
+- **`debugProtection`:** it freezes the tab for anyone with developer tools open, including people auditing a page that holds swap secrets.
 - **What it gives:** obfuscation slows down someone reading the code, but doesn't protect secrets from a determined attacker. The protections that count remain SRI, signed hashes and a local copy.
 
 No analytics, no external fonts, no CDN. Program ID, asset ID, mint and template CMR are pinned per network in the

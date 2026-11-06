@@ -44,7 +44,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq clang llvm
       - name: Test how orders fill, and that swap records are never overwritten
-        run: node --test client/test/plan.test.mjs client/test/store.test.mjs
+        run: node --test client/test/plan.test.mjs client/test/store.test.mjs client/test/logs.test.mjs
       - name: Test Solana transactions against the native builders
         working-directory: client/wasm
         run: cargo test --locked

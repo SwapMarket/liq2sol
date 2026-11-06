@@ -61,8 +61,9 @@ Details and sources are in the docs. These are recorded because older assumption
 - **Wallets must hold only blinded coins:** an explicit input bounds the blinded outputs.
 - **A fee coin is 30 sats (user's decision, 2026-11-06),** just above a refund's 29-sat floor, because Liquid has no fee spikes. It leaves no margin if the floor rises.
 - **In the page, every change to a swap goes through `withSwap`.** A slow tick saving an old copy lost a lock and the maker's one-time share. Inputs stay the same elements across renders, or typing is lost when offers arrive.
-- **The testnet page's CSP allows `unsafe-eval`** (user's decision, 2026-11-06), or Phantom can't connect: its injected scripts use `new Function`. The test wallet doesn't, so browser tests won't show this. Mainnet needs its own decision.
+- **The page's CSP allows `unsafe-eval`, on testnet and mainnet** (user's decision, 2026-11-06), or Phantom can't connect: its injected scripts use `new Function`. The test wallet doesn't, so browser tests won't show this.
 - **Mainnet client builds must be obfuscated,** as `SwapMarket/swapmarket.github.io` does (user's decision, 2026-11-06). Testnet builds aren't. See `docs/client.md` section 6.
+- **Nothing in the Settings logs may hold a secret.** People paste them into chats. `js/logs.js` scrubs them, and the browser test checks after a real swap.
 - **A refund's fee coin can be any amount from 30 sats.** Aqua won't send under 100, and the Blockstream wallet sends 30.
 - **The signer never reuses a coin it has signed away.** A retried lock must send the same bytes, so a reused coin could never land.
 - **Kind 21059 wrappers carry the real time.** Relays drop ephemeral events more than a few seconds old.

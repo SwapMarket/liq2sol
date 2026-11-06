@@ -6,6 +6,7 @@ import { planOrder } from './plan.js';
 import { Relays } from './relay.js';
 import { Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
+import { captureConsole, clearLogs, log, logsCount, logsText } from './logs.js';
 import { makeRecovery, offerDownload, readRecovery } from './recovery.js';
 import { connectExtension, connectWalletConnect, extensionWallets } from './wallet.js';
 
@@ -71,6 +72,7 @@ function coinPill(name) {
 }
 
 function fail(e) {
+  log('error', e);
   const banner = $('banner');
   banner.textContent = (e?.message ?? String(e)).split('api-key=')[0];
   banner.hidden = false;
@@ -430,7 +432,7 @@ function recoveryView(swaps) {
   });
   return h('div', { class: 'card', id: 'recovery-card' },
     h('h2', {}, 'Save your recovery file'),
-    h('p', { class: 'warn' }, 'This file can move your funds, so treat it like money. It is the only way back if this browser loses its data.'),
+    h('p', { class: 'warn' }, 'This file can move your funds, so treat it like money. It is the only way back if this browser loses its data. Never share it: no maker or support person ever needs it.'),
     h('button', { class: 'btn', id: 'download', onclick: async () => offerDownload(await makeRecovery(swaps), `liq2sol-recovery-${swaps[0].order ?? swaps[0].id.slice(0, 8)}.json`) }, swaps.length > 1 ? `Download recovery file for ${swaps.length} swaps` : 'Download recovery file'),
     h('label', { class: 'field' }, h('span', {}, 'Then choose the file you saved, to confirm it is intact. The next step stays hidden until you do.'), pick));
 }
@@ -514,8 +516,8 @@ function swapBody(s) {
       return h('p', { class: 'good done' }, s.status || 'Swap complete.');
     case 'refund_wait':
       return h('p', { class: 'status spin' }, s.direction === 'L2S'
-        ? `This swap won't finish. Your refund opens at block ${s.terms.lock_height.toLocaleString('en-US')} (now ${(s.tip ?? 0).toLocaleString('en-US')}).`
-        : 'This swap won’t finish. Your refund opens at the Solana deadline.');
+        ? `This swap won't finish. Your refund opens at block ${s.terms.lock_height.toLocaleString('en-US')} (now ${(s.tip ?? 0).toLocaleString('en-US')}). Nobody needs to help, and nobody needs your recovery file.`
+        : 'This swap won’t finish. Your refund opens at the Solana deadline. Nobody needs to help, and nobody needs your recovery file.');
     case 'refund':
       return refundLiquidView(s);
     case 'refund_ready':
@@ -597,6 +599,31 @@ function historyView() {
   }));
 }
 
+// Support material, Boltz-style: copy it, save it, or clear it. It only leaves this browser if the user sends it.
+function logsRow() {
+  const note = h('p', { class: 'note', id: 'logs-note' }, `${logsCount()} lines. Secrets are removed, and these stay in this browser until you share them.`);
+  const copy = h('button', {
+    class: 'icon-btn', id: 'logs-copy', title: 'Copy logs', 'aria-label': 'Copy logs',
+    onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(logsText());
+        note.textContent = 'Copied.';
+      } catch (e) {
+        note.textContent = `Couldn't copy: ${e.message}`;
+      }
+    },
+  }, '⧉');
+  const save = h('button', {
+    class: 'icon-btn', id: 'logs-download', title: 'Download logs', 'aria-label': 'Download logs',
+    onclick: () => offerDownload(logsText(), `liq2sol-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`),
+  }, '⤓');
+  const del = h('button', {
+    class: 'icon-btn danger', id: 'logs-delete', title: 'Delete logs', 'aria-label': 'Delete logs',
+    onclick: () => { clearLogs(); note.textContent = 'Logs deleted.'; },
+  }, '🗑');
+  return [h('div', { class: 'setting-row' }, h('span', {}, 'Logs'), h('span', { class: 'icon-btns' }, copy, save, del)), note];
+}
+
 function settingsDialog() {
   const field = (label, id, value, placeholder = '') => h('label', { class: 'field' }, h('span', {}, label), h('input', { class: 'input', id, value: value ?? '', placeholder }));
   const dialog = h('dialog', {},
@@ -607,6 +634,8 @@ function settingsDialog() {
     field('Helius key, for a second Solana source. Stored only in this browser, and sent only to Helius.', 's-helius', settings.heliusKey),
     field('Nostr relays, separated by spaces', 's-relays', settings.relays?.join(' '), NETWORK.relays.join(' ')),
     field('Largest spread to accept, in basis points', 's-spread', settings.maxSpreadBps, String(NETWORK.maxSpreadBps)),
+    h('h4', {}, 'Support'),
+    logsRow(),
     h('button', {
       class: 'btn',
       onclick: () => {
@@ -671,6 +700,8 @@ function tickAll() {
 }
 
 async function main() {
+  captureConsole();
+  log('info', `started, build ${document.querySelector('footer a')?.textContent ?? ''}, ${navigator.userAgent}`);
   await init();
   if (NETWORK.regtest) W.use_regtest(NETWORK.usdt, NETWORK.lbtc);
   endpoints();

@@ -122,6 +122,14 @@ dialog::backdrop { background: rgb(0 0 0 / 55%); }
 dialog h3 { margin: 0 0 6px; }
 dialog .input { text-align: left; }
 
+dialog h4 { margin: 14px 0 4px; padding-top: 10px; border-top: 1px solid var(--edge); font-size: 1rem; }
+.setting-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.icon-btns { display: flex; gap: 6px; }
+.icon-btn { width: 44px; height: 32px; border: 0; border-radius: 8px; background: var(--primary); color: var(--card); font-size: 1rem; cursor: pointer; }
+.icon-btn:hover { background: #fee86b; }
+.icon-btn.danger { background: #6b0f0f; color: #ffd9d4; }
+.icon-btn.danger:hover { background: #8b0000; }
+
 footer { text-align: center; color: var(--dim); font-size: .78rem; padding: 28px 16px; }
 footer p { margin: 4px 0; }
 

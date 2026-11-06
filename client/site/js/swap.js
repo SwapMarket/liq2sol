@@ -3,6 +3,7 @@
 import * as W from '../wasm/liq2sol_client_wasm.js';
 import { NETWORK } from './config.js';
 import { hexToBytes } from './chain.js';
+import { log } from './logs.js';
 import { saveSwap } from './store.js';
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -34,6 +35,10 @@ export class Engine {
   }
 
   save(s) {
+    if (s.logged_state !== s.state) {
+      log('info', `swap ${s.id.slice(0, 8)} ${s.direction}: ${s.logged_state ?? 'new'} -> ${s.state}`, s.status ?? '');
+      s.logged_state = s.state;
+    }
     saveSwap(s);
     this.onChange(s);
   }

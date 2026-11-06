@@ -158,6 +158,32 @@ const step = (t) => console.log(`    ${t}`);
 const state = (page) => page.locator('.swap-card').first().getAttribute('data-state');
 const waitState = (page, want, ms = 240000) => page.locator(`.swap-card[data-state="${want}"]`).first().waitFor({ timeout: ms });
 
+// Logs get pasted into chats. After a real swap, none of its secrets may be in them, in any form the page knows.
+async function checkLogs(page) {
+  const { text, swaps } = await page.evaluate(() => ({
+    text: localStorage.getItem('liq2sol.logs') ?? '',
+    swaps: Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps') ?? '{}')),
+  }));
+  if (!text.includes('->')) throw new Error('the log has no swap states in it');
+  for (const s of swaps) {
+    for (const v of [s.secrets.lock_secret, s.secrets.taker_sk, s.secrets.blinding_key, s.nostr.secret, s.claim_tx]) {
+      if (v && text.includes(v)) throw new Error('a secret reached the log');
+    }
+  }
+}
+
+async function checkSettingsLogs(page) {
+  await page.locator('.gear').click();
+  await page.locator('#logs-download').waitFor();
+  const [file] = await Promise.all([page.waitForEvent('download'), page.locator('#logs-download').click()]);
+  const saved = readFileSync(await file.path(), 'utf8');
+  if (!saved.includes('started, build')) throw new Error(`the downloaded log is wrong: ${saved.slice(0, 200)}`);
+  await page.screenshot({ path: path.join(shots, 'settings.png') });
+  await page.locator('#logs-delete').click();
+  if (!(await page.locator('#logs-note').innerText()).includes('deleted')) throw new Error('the logs were not deleted');
+  await page.getByRole('button', { name: 'Cancel' }).click();
+}
+
 async function checkNoErrors(page) {
   const real = page.errors.filter((e) => !/Failed to load resource|WebSocket/.test(e));
   if (real.length) throw new Error(`the page logged errors: ${real.join(' | ').slice(0, 500)}`);
@@ -266,6 +292,8 @@ async function l2s() {
   await waitState(page, 'done');
   await page.screenshot({ path: path.join(shots, 'done.png') });
   step('claimed on Solana');
+  await checkLogs(page);
+  step('the log has the swap’s steps, and none of its secrets');
   await reportSwaps(page);
   await checkNoErrors(page);
   await page.context().close();
@@ -288,6 +316,7 @@ async function s2l() {
   if (coinInput.length !== 1) throw new Error(`a claim's witness has ${coinInput.length} items`);
   if (tx.vout.some((o) => o.scriptPubKey?.type !== 'fee' && o.value !== undefined)) throw new Error('an output is visible');
   step('on-chain it is one signature, and everything but the fee is hidden');
+  await checkLogs(page);
   const got = await receivedAt(to);
   if (got !== Number(swap.terms.liquid_amount)) throw new Error(`received ${got} units, expected ${swap.terms.liquid_amount}`);
   step('the wallet unblinded exactly the agreed amount at the address it gave');
@@ -335,6 +364,8 @@ async function look() {
   const phone = await newPage({ width: 400, height: 800 });
   await phone.locator('tbody tr').first().waitFor({ timeout: 30000 });
   await phone.locator('#amount').fill(env.AMOUNT);
+  await checkSettingsLogs(phone);
+  step('Settings can download and delete the logs');
   await phone.screenshot({ path: path.join(shots, 'phone.png'), fullPage: true });
   const wide = await phone.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   if (wide) throw new Error('the page scrolls sideways on a phone');

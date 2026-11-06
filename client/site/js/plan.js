@@ -1,4 +1,5 @@
 // How to fill an order from the makers book: the best price at each size first, each fill inside what that maker quotes and can pay.
+// One swap per maker: its limit per swap is its own to set, and more swaps would only cost the taker approvals and privacy.
 // Pure and exact, with amounts as BigInt in SOL-USDT base units. A maker can still decline, and each fill is its own atomic swap.
 
 export const MAX_FILLS = 5;
@@ -53,14 +54,15 @@ function fillFor(m, wanted, room, maxSpreadBps) {
  */
 export function planOrder(total, makers, first = null, maxSpreadBps = 10000, favorites = new Set()) {
   const rank = (maker) => (maker === first ? 2 : favorites.has(maker) ? 1 : 0);
-  const room = new Map(makers.map((m) => [m.maker, m.available]));
+  const used = new Set();
   const fills = [];
   let left = total;
   while (left > 0n && fills.length < MAX_FILLS) {
     // Each fill goes to whoever is cheapest at the size it would be, because a maker's price depends on that.
     let best = null;
     for (const m of makers) {
-      const fill = fillFor(m, left, room.get(m.maker), maxSpreadBps);
+      if (used.has(m.maker)) continue;
+      const fill = fillFor(m, left, m.available, maxSpreadBps);
       if (!fill) continue;
       const better = !best || rank(m.maker) > rank(best.maker) || (rank(m.maker) === rank(best.maker) && fill.bps < best.bps);
       if (better) best = fill;
@@ -68,7 +70,7 @@ export function planOrder(total, makers, first = null, maxSpreadBps = 10000, fav
     if (!best) break;
     fills.push(best);
     left -= best.send;
-    room.set(best.maker, room.get(best.maker) - best.receive);
+    used.add(best.maker);
   }
   return { fills, unfilled: left, receive: fills.reduce((sum, f) => sum + f.receive, 0n) };
 }

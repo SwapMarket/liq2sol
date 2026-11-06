@@ -128,6 +128,8 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **Connecting.** With no wallet, the main button says "Connect a Solana wallet" and is always clickable. It tries wallets in the browser, Phantom first. A person saying no stops there. If none is present or none works, a phone gets a list of supported wallets and WalletConnect, and a computer gets WalletConnect's code.
 
+**Splitting.** An order can split across makers, one swap per maker. A maker's limit per swap is its own to set, so an order above what the book can fill is shown as partly filled.
+
 **Send Min and Max.** Buttons above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
 
 **Vetted makers.** `site/js/vetted.js` lists makers vetted by SwapMarket, by full key and network. Listed makers have a ✓, and "Only vetted by SwapMarket" starts on and is saved in settings. Turning it off shows everyone, with a warning. Vetting limits griefing and doesn't protect funds. Offers are signed, so a checkmark can't be copied without the maker's key. It only filters new orders: swaps in progress and Rescue never consult it.

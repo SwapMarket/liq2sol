@@ -282,9 +282,10 @@ async function split() {
   await page.locator('#not-atomic').waitFor({ timeout: 30000 });
   await page.screenshot({ path: path.join(shots, 'split-quote.png') });
   const review = await page.locator('.card .facts').innerText();
-  // 120 units crosses into the maker's dearer step at 150 bps, and 50 stays at 100 bps.
+  // 120 units goes to the first maker's dearer step, at 150 bps, and the 50 left to the dearer second maker, at 180.
   if (!review.includes('0.00012 → 0.000118') || !review.includes('0.00005 → 0.000049')) throw new Error(`wrong prices in the review: ${review}`);
-  step('each fill has the price for its size');
+  if (new Set((await page.locator('.card .facts dt.mono').allInnerTexts())).size !== 2) throw new Error(`one maker twice: ${review}`);
+  step('each fill has the price for its size, from a different maker');
   step('the review says these are separate swaps, and that some may refund');
   await page.locator('#accept').click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download').click()]);
@@ -535,9 +536,16 @@ async function vetting() {
   await lookalike.context().close();
   step('a listed key that only looks like the maker\'s doesn\'t count');
 
-  vetted = [key];
+  // Now the other maker too, which the later scenarios split orders across.
+  const everyone = await newPage();
+  await everyone.locator('#only-vetted').uncheck();
+  await everyone.locator('tbody tr').nth(1).waitFor({ timeout: 30000 });
+  const keys = await everyone.locator('tbody td.mono').evaluateAll((all) => all.map((td) => td.title));
+  if (!keys.includes(key) || keys.length !== 2) throw new Error(`the makers: ${keys}`);
+  await everyone.context().close();
+  vetted = keys;
   const listed = await newPage();
-  await listed.locator('tbody tr .vetted').first().waitFor({ timeout: 30000 });
+  await listed.locator('tbody tr .vetted').nth(1).waitFor({ timeout: 30000 });
   await listed.context().close();
   step('once listed, the maker has its checkmark with the switch on');
 }

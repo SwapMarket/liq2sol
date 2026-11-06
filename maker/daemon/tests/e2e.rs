@@ -957,6 +957,29 @@ fn signer_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_liq2sol-maker")).with_file_name("liq2sol-signer")
 }
 
+/// A funded maker vault under a new cold owner, which the operator can lock from.
+fn new_vault(sol: &Sol, operator: &Keypair) -> (Keypair, Pubkey, Pubkey) {
+    let vault_owner = Keypair::new();
+    let mut transfer = vec![2, 0, 0, 0];
+    transfer.extend_from_slice(&20_000_000u64.to_le_bytes());
+    let fund = solana_sdk::instruction::Instruction {
+        program_id: anchor_lang::system_program::ID,
+        accounts: vec![
+            solana_sdk::instruction::AccountMeta::new(operator.pubkey(), true),
+            solana_sdk::instruction::AccountMeta::new(vault_owner.pubkey(), true),
+        ],
+        data: transfer,
+    };
+    sol.send(&[fund], operator, &[&vault_owner]).unwrap();
+    let init = sol::vault_init_ix(&vault_owner.pubkey(), operator.pubkey(), 100_000, 1_000);
+    sol.send(&[init], &vault_owner, &[]).unwrap();
+    let vault = sol::maker_vault_pda(&vault_owner.pubkey());
+    let vault_token = sol::maker_vault_token_pda(&vault);
+    let deposit = sol::vault_deposit_ix(&operator.pubkey(), &vault_owner.pubkey(), 40 * SOL_AMOUNT);
+    sol.send(&[deposit], operator, &[]).unwrap();
+    (vault_owner, vault, vault_token)
+}
+
 fn build_world(root: &Path) -> World {
     let node = Node::start(root);
     node.mine(1);
@@ -990,24 +1013,7 @@ fn build_world(root: &Path) -> World {
 
     // The vault's cold owner never goes near the signer or the daemon.
     let operator = read_keypair_file(keys.join("solana.json")).unwrap();
-    let vault_owner = Keypair::new();
-    let mut transfer = vec![2, 0, 0, 0];
-    transfer.extend_from_slice(&20_000_000u64.to_le_bytes());
-    let fund = solana_sdk::instruction::Instruction {
-        program_id: anchor_lang::system_program::ID,
-        accounts: vec![
-            solana_sdk::instruction::AccountMeta::new(operator.pubkey(), true),
-            solana_sdk::instruction::AccountMeta::new(vault_owner.pubkey(), true),
-        ],
-        data: transfer,
-    };
-    sol.send(&[fund], &operator, &[&vault_owner]).unwrap();
-    let init = sol::vault_init_ix(&vault_owner.pubkey(), operator.pubkey(), 100_000, 1_000);
-    sol.send(&[init], &vault_owner, &[]).unwrap();
-    let vault = sol::maker_vault_pda(&vault_owner.pubkey());
-    let vault_token = sol::maker_vault_token_pda(&vault);
-    let deposit = sol::vault_deposit_ix(&operator.pubkey(), &vault_owner.pubkey(), 40 * SOL_AMOUNT);
-    sol.send(&[deposit], &operator, &[]).unwrap();
+    let (vault_owner, vault, vault_token) = new_vault(&sol, &operator);
     // Short and outside the build directory: a Unix socket path is limited to about 100 bytes.
     let private = std::env::temp_dir().join(format!("l2s-{}", std::process::id()));
     std::fs::create_dir_all(&private).unwrap();
@@ -1302,11 +1308,66 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
 
 /// The real page in a real browser, against this daemon and node. See client/test/drive.mjs. Only runs with `CLIENT_TEST`,
 /// because it needs `npm install` in client/ and a built client (client/build.sh).
+/// Another maker on the same chains and relay, dearer than the first, so a large order has somewhere to split to. It is
+/// the first one's configuration, with its own Liquid wallet, vault, Nostr key and stores.
+struct SecondMaker {
+    _daemon: Proc,
+    _signer: Proc,
+    store: Store,
+}
+
+fn start_second_maker(w: &World) -> Res<SecondMaker> {
+    const BPS: u32 = 180;
+    let root = w.daemon_config.parent().ok_or("no root")?.join("second");
+    let keys = root.join("keys");
+    std::fs::create_dir_all(&keys).map_err(|e| e.to_string())?;
+    let first = w.daemon_config.parent().ok_or("no root")?;
+    std::fs::copy(first.join("keys/solana.json"), keys.join("solana.json")).map_err(|e| e.to_string())?;
+
+    let read = |p: &Path| std::fs::read_to_string(p).map_err(|e| e.to_string());
+    let mut signer: SignerConfig = serde_json::from_str(&read(&first.join("signer.json"))?).map_err(|e| e.to_string())?;
+    let mut cfg: Config = serde_json::from_str(&read(&w.daemon_config)?).map_err(|e| e.to_string())?;
+
+    let operator = read_keypair_file(keys.join("solana.json")).map_err(|e| e.to_string())?;
+    let (owner, _, _) = new_vault(&w.sol, &operator);
+    let socket = std::env::temp_dir().join(format!("l2s-{}", std::process::id())).join("second.sock");
+    signer.socket = socket.clone();
+    signer.ledger = root.join("signer.db");
+    signer.keys_dir = keys;
+    signer.vault_owner = Some(owner.pubkey().to_string());
+    let signer_path = root.join("signer.json");
+    std::fs::write(&signer_path, serde_json::to_string(&signer).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let signer_proc = Proc { child: Command::new(signer_binary()).arg(&signer_path).spawn().map_err(|e| e.to_string())? };
+    let mut client = w.wait_for("the second signer", 60, || Ok(Client::connect(&socket).ok()))?;
+    let Reply::Identity { liquid_address, .. } = client.call(&Call::Identity)? else {
+        return Err("no identity".into());
+    };
+    for _ in 0..8 {
+        w.node.fund(&liquid_address, 200_000, "bitcoin");
+    }
+    w.node.fund(&liquid_address, 40 * LIQ_AMOUNT, &usdt().to_string());
+
+    cfg.db = root.join("maker.db");
+    cfg.signer_socket = socket;
+    cfg.pages = root.join("pages.log");
+    let rfq = cfg.rfq.as_mut().ok_or("no rfq config")?;
+    rfq.nostr_key = root.join("nostr.key");
+    rfq.l2s_prices = vec![msg::PriceTier { up_to: Units(RFQ_MAX), bps: BPS }];
+    rfq.s2l_prices = vec![msg::PriceTier { up_to: Units(RFQ_MAX), bps: BPS }];
+    let config = root.join("maker.json");
+    std::fs::write(&config, serde_json::to_string(&cfg).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let log = std::fs::File::create(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("second-daemon.log")).map_err(|e| e.to_string())?;
+    let daemon = Command::new(env!("CARGO_BIN_EXE_liq2sol-maker")).arg(&config).stdout(log).spawn().map_err(|e| e.to_string())?;
+    let store = w.wait_for("the second maker's store", 30, || Ok(Store::open(&root.join("maker.db")).ok()))?;
+    Ok(SecondMaker { _daemon: Proc { child: daemon }, _signer: signer_proc, store })
+}
+
 fn browser_client(w: &mut World) -> Res<()> {
     if std::env::var("CLIENT_TEST").is_err() {
         println!("    skipped: set CLIENT_TEST=1");
         return Ok(());
     }
+    let second = start_second_maker(w)?;
     let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../client"));
     let keys = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cli/.keys/taker-solana.json"));
     let wallet_args = serde_json::to_string(&w.node.rpc.args).map_err(|e| e.to_string())?;
@@ -1337,7 +1398,15 @@ fn browser_client(w: &mut World) -> Res<()> {
     // The page says it finished. The maker's own store must agree it was paid.
     for line in text.lines().filter_map(|l| l.strip_prefix("SWAP ")) {
         let point = LockPoint::from_hex(line).ok_or("bad swap line")?;
-        w.wait_state(&point.id(), "the maker completing the page's swap", 120, done(Outcome::Completed))?;
+        if w.store.state(&point.id()).map_err(|e| e.to_string())?.is_some() {
+            w.wait_state(&point.id(), "the maker completing the page's swap", 120, done(Outcome::Completed))?;
+        } else {
+            let finished = done(Outcome::Completed);
+            w.wait_for("the second maker completing the page's swap", 120, || {
+                let state = second.store.state(&point.id()).map_err(|e| e.to_string())?;
+                Ok(state.filter(|(_, s)| finished(s)))
+            })?;
+        }
     }
     println!("    ok: the maker completed each of the page's swaps");
     Ok(())

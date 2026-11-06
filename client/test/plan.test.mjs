@@ -15,7 +15,7 @@ test('one maker that can take it all, at the best price', () => {
 
 test('an order larger than the best offer flows to the next', () => {
   const p = planOrder(1500n, [maker('dear', 100, 5000n, 5000n), maker('cheap', 30, 1000n, 5000n)]);
-  assert.deepEqual(p.fills.map((f) => [f.maker, f.send]), [['cheap', 1000n], ['cheap', 500n]], 'the same maker again, while it can pay');
+  assert.deepEqual(p.fills.map((f) => [f.maker, f.send]), [['cheap', 1000n], ['dear', 500n]], 'one swap per maker');
   const q = planOrder(1500n, [maker('dear', 100, 5000n, 5000n), maker('cheap', 30, 1000n, 700n)]);
   assert.equal(q.fills[0].maker, 'cheap');
   assert.ok(q.fills[0].receive <= 700n, 'never above what it can pay');
@@ -50,7 +50,8 @@ test('what the book can’t cover is reported, not hidden', () => {
 });
 
 test('the number of swaps is capped, because each needs its own payment or approval', () => {
-  const p = planOrder(100000n, [maker('a', 30, 100n, 100000n)]);
+  const many = Array.from({ length: MAX_FILLS + 3 }, (_, i) => maker(`m${i}`, 30 + i, 100n, 100000n));
+  const p = planOrder(100000n, many);
   assert.equal(p.fills.length, MAX_FILLS);
   assert.equal(p.unfilled, 100000n - 100n * BigInt(MAX_FILLS));
 });
@@ -62,16 +63,11 @@ test('a maker the taker picked comes first, even at a worse price', () => {
 
 test('a fill whose rounding breaks the taker’s spread limit is not proposed', () => {
   // 120 fills, and 2 more units would receive 1, which is a 50% spread.
-  const p = planOrder(122n, [maker('a', 100, 120n, 120n, 1n)], null, 200);
+  const makers = [maker('a', 100, 120n, 120n, 1n), maker('b', 100, 120n, 120n, 1n)];
+  const p = planOrder(122n, makers, null, 200);
   assert.deepEqual(p.fills.map((f) => f.send), [120n]);
   assert.equal(p.unfilled, 2n);
-  assert.equal(planOrder(122n, [maker('a', 100, 120n, 120n, 1n)]).fills.length, 2, 'with no limit it would have been');
-});
-
-test('what a maker can pay may be more than one swap’s limit', () => {
-  const p = planOrder(170n, [maker('a', 100, 120n, 401n, 1n)], null, 200);
-  assert.deepEqual(p.fills.map((f) => f.send), [120n, 50n]);
-  assert.equal(p.unfilled, 0n);
+  assert.equal(planOrder(122n, makers).fills.length, 2, 'with no limit it would have been');
 });
 
 test('the price comes from the step covering the fill’s size', () => {
@@ -121,7 +117,7 @@ test('send limits: the minimum counts both sides of the trade, and the maximum w
   assert.equal(limits.min, 1004n, '1000 is the minimum, but it must also pay out 1000');
   assert.equal(receiveFor(limits.min, 30) >= 1000n, true);
   assert.equal(receiveFor(limits.min - 1n, 30) < 1000n, true);
-  assert.equal(limits.max, 2000n * BigInt(MAX_FILLS), 'each of the most swaps at its largest');
+  assert.equal(limits.max, 2000n, 'its largest single swap');
   assert.equal(sendLimits([]), null);
   assert.equal(sendLimits([maker('dry', 30, 1000n, 0n)]), null, 'a maker that can pay nothing');
   assert.equal(sendLimits([maker('tight', 30, 1000n, 500n, 1000n)]), null, 'its minimum is more than it can pay');
@@ -167,4 +163,13 @@ test('send limits always fill completely, on any book, and nothing below the min
     // The planner is greedy, so an odd mix of steps can leave the true largest order slightly higher. It was 0.6% at worst over these books.
     assert.ok(planOrder((limits.max * 102n) / 100n + 1n, makers, null, spread, favorites).unfilled > 0n, `round ${round}: well above the maximum`);
   }
+});
+
+test('one swap per maker, however much it could pay, because its limit per swap is its own to set', () => {
+  const p = planOrder(1000n, [maker('a', 30, 100n, 100000n)]);
+  assert.equal(p.fills.length, 1);
+  assert.equal(p.unfilled, 900n);
+  assert.equal(sendLimits([maker('a', 30, 100n, 100000n)]).max, 100n, 'send max follows');
+  const two = planOrder(150n, [maker('a', 30, 100n, 100000n), maker('b', 90, 100n, 100000n)]);
+  assert.deepEqual(two.fills.map((f) => [f.maker, f.send]), [['a', 100n], ['b', 50n]]);
 });

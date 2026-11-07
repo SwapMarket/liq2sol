@@ -82,15 +82,15 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 
 | Option | Reaches | Needs the relay? |
 |---|---|---|
-| **Wallet's own browser** | On a phone with no injected wallet, a list opens the page inside Phantom or Solflare. Trust joins them on mainnet. **UNVERIFIED** on a real device. | Yes |
-| **WalletConnect** | Phone wallets by QR code. Trust Wallet lists only Solana mainnet in [Reown's registry](https://explorer-api.walletconnect.com/v3/wallets?search=trust) (checked 2026-11-06), so a devnet build's session should be refused; it can only apply to a mainnet build. **UNVERIFIED** on a real device. `sol2base` documents that Phantom isn't reachable this way. | Yes |
-| **Extension wallets** | Phantom, Solflare, Backpack and others, through the Wallet Standard. The older injected objects need a Solana library's transaction type, so they aren't supported. | No |
+| **Wallet's own browser** | On a phone with no injected wallet, a list opens the page inside Phantom or Solflare. Trust joins them on mainnet. Seen working in Chrome on Android, which opened the page inside Solflare (the user, 2026-11-07). Opera on Android sent the same link to Google Play with Solflare installed, so Opera now gets Android intent links naming the app (`client/site/js/openin.js`), **UNVERIFIED** there. A wallet's browser can't save files, so the recovery file can also be copied as text. | No |
+| **WalletConnect** | Phone wallets by QR code. Trust Wallet lists only Solana mainnet in [Reown's registry](https://explorer-api.walletconnect.com/v3/wallets?search=trust) (checked 2026-11-06), so a devnet build's session should be refused; it can only apply to a mainnet build. On a real Android phone the QR code appears, and "open in a wallet on this phone" offered only Trust Wallet and Bridge Wallet: Solflare doesn't handle `wc:` links (the user, 2026-11-07). No phone wallet has finished a session yet. `sol2base` documents that Phantom isn't reachable this way. | Yes |
+| **Extension wallets** | Phantom, Solflare, Backpack and others, through the Wallet Standard. The older injected objects need a Solana library's transaction type, so they aren't supported. Phantom connects in Opera on Windows once the CSP allows `unsafe-eval` (the user, 2026-11-06). Whether it signs a full swap there is **UNVERIFIED**. | No |
 
 `sol2base` (`app.js`) has a working version of both, which is the starting point.
 
 | Topic | Design |
 |---|---|
-| Library | `@walletconnect/sign-client` directly, rather than a wallet adapter library. **Bundled into `site/vendor` at a pinned version, not loaded from `esm.sh`** as `sol2base` does, because this client allows no CDN. Loaded only when the user picks WalletConnect. **UNVERIFIED:** no real phone wallet has connected yet. |
+| Library | `@walletconnect/sign-client` directly, rather than a wallet adapter library. **Bundled into `site/vendor` at a pinned version, not loaded from `esm.sh`** as `sol2base` does, because this client allows no CDN. Loaded only when it is needed. **UNVERIFIED:** no real phone wallet has finished a session yet. |
 | Project ID | `c001d9e3d0c6308a5ce7e5932d40064a`, the Reown project shared with `sol2base` and `eth2base` (user's decision). It is public by nature, because a static page can't hide it. Reown advises one ID per project, and sharing means sharing quota and allowlist. |
 | Allowed origins | **`swapmarket.github.io` must be on the project's allowlist.** It serves `sol2base`, and the allowlist can't be checked from here. Localhost is always allowed. IPFS gateways and other mirrors are refused unless listed, so those users need extension wallets, a listed origin, or their own project ID, which the app accepts as a setting. |
 | Chain ids | CAIP-2: mainnet `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`, devnet `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`. |
@@ -107,7 +107,7 @@ The user chose these on 2026-11-05, and chose against a key held by the page. Th
 - L→S, after funding, before claiming: the taker can't claim, so the secret stays hidden. Funds come back through the Liquid refund, which doesn't use WalletConnect.
 - S→L refund: `refund` is permissionless, so anyone can send it. The standalone recovery tools accept any funded fee-payer key, for instance from the Solana CLI.
 
-**UNVERIFIED, to test in the client phase:** claims through each wallet type, whether wallets accept version 1 transactions, and devnet use through WalletConnect (`sol2base` only uses mainnet).
+**UNVERIFIED, still to test with real wallets:** claims through each wallet type, whether wallets accept version 1 transactions, and a full devnet session through WalletConnect (`sol2base` only uses mainnet). The browser suite covers all of these with a test wallet only.
 
 ### The makers book and splitting an order
 

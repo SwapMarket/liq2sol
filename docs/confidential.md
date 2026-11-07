@@ -1,7 +1,7 @@
 # Confidential swaps
 
-Status: built on the `confidential` branch, through the maker and the CLI. This is the reasoning and the evidence; [protocol.md](protocol.md) and
-[contracts.md](contracts.md) describe the result. The static client is not built yet.
+Status: built and on `main`, through the contracts, maker, CLI and the static client at https://swapmarket.github.io/liq2sol/. This is the reasoning
+and the evidence; [protocol.md](protocol.md) and [contracts.md](contracts.md) describe the result.
 
 Goal: **an outside observer can't link the two legs of a swap, and can't see the Liquid amount or asset.**
 

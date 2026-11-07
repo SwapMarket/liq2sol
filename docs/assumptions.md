@@ -49,7 +49,7 @@ Anything not confirmed from a primary source is marked **UNVERIFIED**.
 | L-USDt | Asset id `ce091c998b83c78bb71a632313ba3760f1763d9cfcffae02258ffa9865a37bd2`, name "Tether USD", ticker USDt, **precision 8**, entity domain `tether.to`, issuer pubkey `0337cceec0beea0232eb…`. | [Esplora asset](https://blockstream.info/liquid/api/asset/ce091c998b83c78bb71a632313ba3760f1763d9cfcffae02258ffa9865a37bd2) (same on liquid.network) |
 | SOL USDT | Mint `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB`, legacy **Token program** (`TokenkegQ…`), **6 decimals**, mint and **freeze authority** `Q6XprfkF8RQQKoQVG33xT88H7wi8Uk1B1CC7YAs69Gi` (Tether can freeze token accounts). | Solana RPC `getAccountInfo` (jsonParsed), mainnet |
 | Conversion | 1 SOL-USDT base unit = 100 L-USDt base units. | derived from the above |
-| Testnets | Tether does not issue on Liquid testnet or Solana devnet: tests use self-issued stand-in assets. **UNVERIFIED** that no official test assets exist. | — |
+| Testnets | Tether does not issue on Liquid testnet or Solana devnet. On Liquid testnet the page and makers use `b612eb46…9d73`, the testnet USDt SideSwap uses, which its wallet swaps for L-BTC (the user, 2026-11-06). Regtest suites issue their own. On devnet, USDT is a self-issued stand-in, `8BXim…aFwi`, handed out by the page's faucet. **UNVERIFIED** that no official test assets exist. | — |
 | Tether freeze on Liquid | **UNVERIFIED:** whether/how Tether can freeze L-USDt UTXOs (accepted residual trust per prompt). | — |
 
 ## 5. Liquid consensus

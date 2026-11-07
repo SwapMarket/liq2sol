@@ -23,19 +23,18 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 - **Licences (user's decision, 2026-11-07):** `client/` is AGPL-3.0-only (`client/LICENSE`), because it copies code from `SwapMarket/swapmarket.github.io`, which is AGPL. Everything else is MIT (`LICENSE`), so makers can modify the daemon without publishing their changes. Never copy AGPL code outside `client/`.
 - End commit messages with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
-## Status (2026-11-05)
+## Status (2026-11-07)
 
-- **Phase 0: done.** `docs/assumptions.md` has every finding with links and the UNVERIFIED list. Section 10 holds later
-  findings, some of which update earlier sections.
-- **Phase 1: documents written.** `docs/protocol.md`, `contracts.md`, `nostr-rfq.md`, `client.md`, `maker.md`,
-  `threat-model.md`, `test-plan.md`, plus `contracts/liquid/src/htlc.simf`. The user accepted all decisions D1–D10
-  (`docs/protocol.md` section 9) on 2026-11-05. 
-- **Phase 2: started, with approval (2026-11-05).** Build order: contracts with tests, CLI end-to-end, maker, client.
-  `contracts/liquid` (HTLC library and tests) and `contracts/liquid-wasm` are done, and proofs F1, F2, F3 and F5 pass. `programs/solana-escrow` has all core and vault instructions with tests. `cli/` ran full swaps and aborts in both
-  directions on Liquid testnet and Solana devnet, using stand-in assets. `cli/tests/failures.rs` runs the failure scenarios on regtest plus devnet. `maker/` has the
-  engine, signer process and daemon loop, tested with real processes under crashes, halts and rollbacks, with the maker vault on. `shared/rfq` and `maker/daemon/src/rfq.rs` add quotes over Nostr, tested on a mock relay and through `relay.coinos.pro`, the user's chosen relay. Next: the static client. E14 still needs a real cluster restart. E16 only runs on a local validator.
-
-**Confidential design (on `main`, 2026-11-06):** the redesign in `docs/confidential.md` replaces the Simplicity HTLC with a MuSig2 taproot output, adapter-signed claims and blinded coins. Contracts, signer, daemon, RFQ and CLI are all moved over and tested. The docs describe that design. The program is on devnet at `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU`; the key is `programs/.keys/escrow-confidential-program.json`. The static client is in `client/`, deployed by `.github/workflows/pages.yml` to https://swapmarket.github.io/liq2sol/. Next: real wallets, other browsers, and release hardening (`docs/client.md` section 6).
+- **Phases 0 and 1: done.** `docs/assumptions.md` has every finding and the UNVERIFIED list. The user accepted D1–D10 (`docs/protocol.md`
+  section 9) on 2026-11-05.
+- **Phase 2: built, on testnet.** The confidential design (`docs/confidential.md`) replaced the Simplicity HTLC: a MuSig2 taproot output,
+  adapter-signed claims, blinded coins and a Simplicity refund leaf. Contracts, signer, daemon, RFQ over Nostr, CLI and the static client are
+  all built and tested, including failure scenarios, signer attacks and mutation checks.
+- **Live:** the page at https://swapmarket.github.io/liq2sol/, deployed by `.github/workflows/pages.yml`, with a faucet tab on test builds.
+  The escrow is on devnet at `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU` (key `programs/.keys/escrow-confidential-program.json`).
+  Maker releases (`v0.0x`) are built by `.github/workflows/release.yml` from signed tags, for Debian, and run on the user's VPS.
+- **Next:** real wallets on real phones, Firefox and Safari, then the mainnet blockers: maker priority fees, `cargo-deny` and `cargo-audit` in
+  CI, a `musig2` audit, release hardening and offline recovery (`docs/client.md` section 6, `docs/confidential.md` "Not yet covered").
 
 ## Design points that are easy to get wrong
 

@@ -1,6 +1,7 @@
 // The Solana wallet: extensions through the Wallet Standard, or a phone through WalletConnect. The app holds no Solana key.
 // It only ever asks for a signature and sends the transaction itself, because it must control when a claim's secret goes out.
 import { NETWORK } from './config.js';
+import { walletLink } from './openin.js';
 import { b64ToBytes, bytesToB64 } from './chain.js';
 
 const found = new Set();
@@ -35,14 +36,7 @@ export async function connectExtension(w, silent = false) {
   };
 }
 
-// Links that open a page in a wallet app's own browser, from each wallet's docs by way of sol2base.
-const OPEN_IN = {
-  Phantom: (url, ref) => `https://phantom.app/ul/browse/${url}?ref=${ref}`,
-  Solflare: (url, ref) => `https://solflare.com/ul/v1/browse/${url}?ref=${ref}`,
-  Trust: (url) => `https://link.trustwallet.com/open_url?coin_id=501&url=${url}`,
-};
-
-export const openInWallets = (url, ref) => NETWORK.openInWallets.map((name) => ({ name, href: OPEN_IN[name](url, ref) }));
+export const openInWallets = (url, ref) => NETWORK.openInWallets.map((name) => ({ name, href: walletLink(name, url, ref, navigator.userAgent) }));
 
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 

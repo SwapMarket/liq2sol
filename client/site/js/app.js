@@ -4,7 +4,7 @@ import { NETWORK, refuseMainnet } from './config.js';
 import { Esplora, Solana, hexToBytes } from './chain.js';
 import { bpsAt, effectivePrice, planOrder, sendLimits } from './plan.js';
 import { Relays } from './relay.js';
-import { Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
+import { CANCELLABLE, Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
 import { captureConsole, clearLogs, log, logsCount, logsText } from './logs.js';
 import { makeRecovery, offerDownload, readRecovery } from './recovery.js';
@@ -380,8 +380,11 @@ function phoneWalletsDialog() {
     h('h3', {}, 'Choose a wallet'),
     h('p', { class: 'note' }, `These wallets work with ${NETWORK.walletNetwork}. Each opens this page in its own browser.`),
     links.map(({ name, href }) => h('a', { class: 'btn quiet open-wallet', href }, name)),
+    h('p', { class: 'note' }, `If it doesn’t open: open the wallet yourself, set it to ${NETWORK.walletNetwork}, go to its browser, and enter this address:`),
+    copyable('page-address', location.origin + location.pathname, location.origin + location.pathname, 'Address'),
     h('button', {
       class: 'btn quiet',
+      id: 'phone-walletconnect',
       onclick: async () => {
         dialog.close();
         dialog.remove();
@@ -391,7 +394,7 @@ function phoneWalletsDialog() {
           fail(e);
         }
       },
-    }, 'Another wallet, with WalletConnect'),
+    }, 'Other wallets, with WalletConnect'),
     h('button', { class: 'btn quiet', onclick: () => { dialog.close(); dialog.remove(); } }, 'Close'));
   document.body.append(dialog);
   dialog.showModal();
@@ -448,7 +451,12 @@ async function walletConnect() {
       box.removeAttribute('aria-label');
       box.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2, scalable: true });
       // The same request for a wallet on this device, which can't scan its own screen.
-      if (matchMedia('(pointer: coarse)').matches) box.after(h('a', { class: 'btn quiet open-wc', href: uri }, 'Open in a wallet on this phone'));
+      if (matchMedia('(pointer: coarse)').matches) {
+        box.after(
+          h('a', { class: 'btn quiet open-wc', href: uri }, 'Open in a wallet on this phone'),
+          h('p', { class: 'note' }, 'Your phone only lists wallets that handle these links. If yours isn’t there, close this and open the page in the wallet’s own browser.'),
+        );
+      }
     });
   } finally {
     dialog.close();
@@ -702,28 +710,69 @@ function stepsView(s) {
 }
 
 // One file for a whole order, and nothing is funded until it has been read back with every swap in it.
+// A box to paste recovery text into, for a browser that can't save or pick files, like a wallet's.
+function pasteBox(id, label, onText) {
+  const text = h('textarea', { class: 'input recovery-paste', id, rows: 3, spellcheck: false, autocomplete: 'off', placeholder: '{ "format": "liq2sol-recovery", … }' });
+  return h('div', { class: 'paste-box' },
+    h('label', { class: 'field' }, h('span', {}, label), text),
+    h('button', {
+      class: 'btn quiet',
+      id: `${id}-go`,
+      onclick: async () => {
+        try {
+          await onText(text.value);
+        } catch (err) {
+          fail(err);
+        }
+      },
+    }, 'Use this text'));
+}
+
 function recoveryView(swaps) {
+  const accept = async (text) => {
+    const read = await readRecovery(text);
+    const has = (s) => read.some((r) => r.id === s.id && r.secrets.lock_secret === s.secrets.lock_secret);
+    if (!swaps.every(has)) throw new Error('That recovery file is for a different swap.');
+    await Promise.all(swaps.map((s) => withSwap(s.id, (fresh) => engine.set(fresh, { state: fresh.direction === 'L2S' ? 'fund' : 'lock', recovery_saved: true }))));
+    // render() leaves the page alone while a file picker or text box has focus, and using one leaves it there.
+    document.activeElement?.blur();
+    render();
+  };
   const pick = h('input', {
     type: 'file', accept: '.json,application/json', class: 'input', id: 'recovery-file',
     onchange: async (e) => {
       try {
-        const read = await readRecovery(await e.target.files[0].text());
-        const has = (s) => read.some((r) => r.id === s.id && r.secrets.lock_secret === s.secrets.lock_secret);
-        if (!swaps.every(has)) throw new Error('That recovery file is for a different swap.');
-        await Promise.all(swaps.map((s) => withSwap(s.id, (fresh) => engine.set(fresh, { state: fresh.direction === 'L2S' ? 'fund' : 'lock', recovery_saved: true }))));
-        // render() leaves the page alone while a file picker has focus, and choosing a file leaves it there.
-        e.target.blur();
-        render();
+        await accept(await e.target.files[0].text());
       } catch (err) {
         fail(err);
       }
     },
   });
+  // Shown only if the browser won't let the page copy, so the text can be selected by hand.
+  const shown = h('textarea', { class: 'input recovery-paste', id: 'recovery-text', rows: 4, readOnly: true, spellcheck: false });
+  const shownBox = h('div', { hidden: true }, h('p', { class: 'note' }, 'This browser won’t let the page copy. Select all of this text, and copy it yourself:'), shown);
+  const copy = async () => {
+    const text = await makeRecovery(swaps);
+    shown.value = text;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Recovery text copied. Save it now.');
+    } catch {
+      shownBox.hidden = false;
+      shown.focus();
+      shown.select();
+    }
+  };
   return h('div', { class: 'card', id: 'recovery-card' },
     h('h2', {}, 'Save your recovery file'),
     h('p', { class: 'warn' }, 'This file can move your funds, so treat it like money. It is the only way back if this browser loses its data. Never share it: no maker or support person ever needs it.'),
-    h('button', { class: 'btn', id: 'download', onclick: async () => offerDownload(await makeRecovery(swaps), `liq2sol-recovery-${swaps[0].order ?? swaps[0].id.slice(0, 8)}.json`) }, swaps.length > 1 ? `Download recovery file for ${swaps.length} swaps` : 'Download recovery file'),
-    h('label', { class: 'field' }, h('span', {}, 'Then choose the file you saved, to confirm it is intact. The next step stays hidden until you do.'), pick));
+    h('button', { class: 'btn', id: 'download', onclick: async () => offerDownload(await makeRecovery(swaps), `liq2sol-recovery-${swaps[0].order ?? swaps[0].id.slice(0, 8)}.json`) }, swaps.length > 1 ? `Download the recovery file for all ${swaps.length} swaps` : 'Download recovery file'),
+    h('label', { class: 'field' }, h('span', {}, 'Then choose the file you saved, to confirm it is intact. The next step stays hidden until you do.'), pick),
+    h('h4', {}, 'Can’t download? A wallet’s browser usually can’t.'),
+    h('p', { class: 'note' }, 'Copy the same thing as text, and save it somewhere private, such as a password manager. Other apps can sometimes read what you copy, so clear it from your clipboard afterwards.'),
+    h('button', { class: 'btn quiet', id: 'copy-recovery', onclick: copy }, 'Copy it as text'),
+    shownBox,
+    pasteBox('recovery-paste', 'Then paste what you saved, to confirm it is intact.', accept));
 }
 
 function toast(text) {
@@ -870,6 +919,8 @@ function swapBody(s) {
       return h('p', { class: 'good refunded' }, 'Refunded.');
     case 'expired':
       return h('p', { class: 'note' }, 'This swap expired before anything was paid.');
+    case 'cancelled':
+      return h('p', { class: 'note' }, 'You cancelled this swap. If a payment reached it anyway, use Rescue with your recovery file.');
     default:
       return h('p', { class: 'status' }, s.status);
   }
@@ -889,33 +940,68 @@ function swapView(s) {
 
 const orderOf = (id) => Object.values(loadSwaps()).filter((s) => (s.order ?? s.id) === id).sort((a, b) => a.id.localeCompare(b.id));
 
+function cancelCard(swaps) {
+  const cancel = async (dialog) => {
+    dialog.close();
+    dialog.remove();
+    try {
+      // All or none, so no part of an order is dropped while another turns out to be paid.
+      const problems = await Promise.all(swaps.map((s) => engine.cancelProblem(s)));
+      const problem = problems.find(Boolean);
+      if (problem) throw new Error(`This can't be cancelled, because ${problem}.`);
+      await Promise.all(swaps.map((s) => withSwap(s.id, (fresh) => engine.set(fresh, { state: 'cancelled', status: '' }))));
+      ui.openOrder = null;
+      render();
+    } catch (e) {
+      fail(e);
+    }
+  };
+  const ask = () => {
+    const dialog = h('dialog', {},
+      h('h3', {}, swaps.length > 1 ? `Cancel these ${swaps.length} swaps?` : 'Cancel this swap?'),
+      h('p', { class: 'warn' }, 'If you have already sent the payment, don’t cancel. If one arrives afterwards, use Rescue with your recovery file to get it back.'),
+      h('button', { class: 'btn', id: 'cancel-confirm', onclick: () => cancel(dialog) }, 'Cancel the swap'),
+      h('button', { class: 'btn quiet', id: 'cancel-keep', onclick: () => { dialog.close(); dialog.remove(); } }, 'Keep it'));
+    document.body.append(dialog);
+    dialog.showModal();
+  };
+  return h('div', { class: 'card back' }, h('button', { class: 'btn quiet', id: 'cancel-order', onclick: ask }, 'Cancel'));
+}
+
 function orderView(swaps) {
   const waiting = swaps.filter((s) => s.state === 'recovery');
   const back = h('div', { class: 'card back' }, h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = null; render(); } }, 'Back'));
-  if (waiting.length) return [recoveryView(waiting), back];
+  // Back would leave it open in the history for ever, with nothing to do but wait.
+  const end = swaps.every((s) => CANCELLABLE.includes(s.state)) ? cancelCard(swaps) : back;
+  if (waiting.length) return [recoveryView(waiting), end];
   const header = swaps.length > 1 && h('p', { class: 'sub order-summary' }, `${swaps.filter((s) => s.state === 'done').length} of ${swaps.length} swaps complete. Each one finishes or refunds by itself.`);
-  return [header, swaps.map(swapView), back];
+  return [header, swaps.map(swapView), end];
 }
 
 // ---- Rescue and history ----
 function rescueView() {
+  const restore = async (text) => {
+    const swaps = await readRecovery(text);
+    const known = loadSwaps();
+    for (const raw of swaps) {
+      ui.openOrder = raw.order ?? raw.id;
+      // This browser's own record knows more than the file, which was saved before the swap began. Unless it was cancelled:
+      // then the file is here because a payment may have arrived after all, so ask the chains.
+      if (known[raw.id] && known[raw.id].state !== 'cancelled') continue;
+      const s = deriveSwap(raw);
+      s.state = 'restored';
+      saveSwap(s);
+      watch(s);
+    }
+    location.hash = '#swap';
+    document.activeElement?.blur();
+    render();
+  };
   const pick = h('input', {
     type: 'file', accept: '.json,application/json', class: 'input', id: 'rescue-file',
     onchange: async (e) => {
       try {
-        const swaps = await readRecovery(await e.target.files[0].text());
-        for (const raw of swaps) {
-          ui.openOrder = raw.order ?? raw.id;
-          // This browser's own record knows more than the file, which was saved before the swap began.
-          if (loadSwaps()[raw.id]) continue;
-          const s = deriveSwap(raw);
-          s.state = 'restored';
-          saveSwap(s);
-          watch(s);
-        }
-        location.hash = '#swap';
-        e.target.blur();
-        render();
+        await restore(await e.target.files[0].text());
       } catch (err) {
         fail(err);
       }
@@ -924,7 +1010,8 @@ function rescueView() {
   return h('div', { class: 'card' },
     h('h2', {}, 'Rescue'),
     h('p', { class: 'sub' }, 'Pick up a swap on any device, with its recovery file. No maker, relay or server is needed for a refund.'),
-    h('label', { class: 'field' }, h('span', {}, 'Your recovery file'), pick));
+    h('label', { class: 'field' }, h('span', {}, 'Your recovery file'), pick),
+    pasteBox('rescue-paste', 'Or paste its text', restore));
 }
 
 // What this swap's agreed amounts come to per unit received. Liquid amounts have two more decimals than Solana's.
@@ -1114,7 +1201,7 @@ function render() {
   const below = $('below');
   // A file picker or a half-typed address shouldn't vanish when the chain is polled.
   const active = document.activeElement;
-  if (active && (active.classList?.contains('refund-to') || active.type === 'file') && view.contains(active)) return;
+  if (active && (active.classList?.contains('refund-to') || active.type === 'file' || active.tagName === 'TEXTAREA') && view.contains(active)) return;
   const showForm = tab !== 'rescue' && tab !== 'history' && tab !== 'faucet' && !(ui.openOrder && orderOf(ui.openOrder).length) && !ui.quote;
   if (showForm) {
     if (!form.el.isConnected) {
@@ -1152,7 +1239,19 @@ function tickAll() {
   }
 }
 
+function navMenu() {
+  const burger = $('burger');
+  const menu = $('collapse');
+  const set = (open) => {
+    menu.classList.toggle('open', open);
+    burger.setAttribute('aria-expanded', String(open));
+  };
+  burger.addEventListener('click', () => set(!menu.classList.contains('open')));
+  menu.addEventListener('click', (e) => { if (e.target.closest('a')) set(false); });
+}
+
 async function main() {
+  navMenu();
   captureConsole();
   log('info', `started, build ${document.querySelector('footer a')?.textContent ?? ''}, ${navigator.userAgent}`);
   await init();

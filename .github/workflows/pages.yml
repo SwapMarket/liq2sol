@@ -39,7 +39,7 @@ jobs:
         with:
           node-version: 24
       - name: Test how orders fill, and that swap records are never overwritten
-        run: node --test client/test/plan.test.mjs client/test/store.test.mjs client/test/logs.test.mjs client/test/vetted.test.mjs
+        run: node --test client/test/plan.test.mjs client/test/store.test.mjs client/test/logs.test.mjs client/test/vetted.test.mjs client/test/openin.test.mjs
       # A marker saved only when this job succeeds, so a failure can't be skipped on the next run. The key covers everything these tests build.
       - name: Skip the native tests if they already passed on this code
         id: passed

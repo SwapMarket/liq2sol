@@ -12,7 +12,9 @@ export const rulesJson = (maxSpread = NETWORK.maxSpreadBps) => JSON.stringify({
   network: NETWORK.name, program_id: NETWORK.programId, usdt_asset: NETWORK.usdt, max_spread_bps: maxSpread, ...NETWORK.rules,
 });
 
-export const FINISHED = ['done', 'refunded', 'expired'];
+export const FINISHED = ['done', 'refunded', 'expired', 'cancelled'];
+// Nothing has been paid or locked in these, as far as this page knows. cancelProblem asks the chains.
+export const CANCELLABLE = ['recovery', 'fund', 'lock'];
 
 const swapArgs = (s) => ({
   direction: s.direction, maker_key: s.terms.maker_key, taker_key: s.secrets.taker_key,
@@ -89,6 +91,19 @@ export class Engine {
     }
     const second = this.secondSolana();
     return this.checkEscrow(await second.escrow(s.escrow_address), s, await second.slot());
+  }
+
+  // ---- Cancelling, before anything is paid or locked ----
+
+  // Why this swap can't be cancelled, or ''. A payment the page hasn't noticed yet would otherwise end up hidden. Not being able
+  // to read the chain throws, and that counts as a no too.
+  async cancelProblem(s) {
+    if (!CANCELLABLE.includes(s.state)) return 'it has already moved on';
+    if (s.direction === 'L2S') {
+      return (await this.esplora[0].history(s.info.plain_address)).length ? 'a payment has already reached its address' : '';
+    }
+    const locked = await this.solana.escrow(s.escrow_address, 'confirmed') || (await this.solana.signatures(s.escrow_address)).length;
+    return locked ? 'it has already been locked on Solana' : '';
   }
 
   // ---- A swap picked up from its recovery file ----

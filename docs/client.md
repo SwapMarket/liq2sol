@@ -134,6 +134,10 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **Offers expire.** Each carries an expiry, set by the maker's `offer_ttl_secs`. The book drops an offer when it passes, on an open page as well as a new one, so a dead maker disappears at most that long after its last offer.
 
+**Cancelling.** While every part of an order is at the recovery, pay or lock step, Cancel replaces Back. It asks first, and reads the chains: a payment or a lock's history refuses it, and so does not being able to read them. A cancelled swap can be forgotten from History, or picked up by Rescue if a payment arrives after all.
+
+**Recovery as text.** A wallet's browser usually can't save or pick files, so the recovery file can also be copied as text and pasted back, with the same checks. If the browser blocks copying, the text is shown to select by hand. Rescue takes pasted text too.
+
 **Send Min and Max.** Buttons above the amount, worked out with the order planner over the makers currently shown, so the switches change them. Each gives an order the book fills completely. Send max doesn't check the wallet's balance.
 
 **Vetted makers.** `site/js/vetted.js` lists makers vetted by SwapMarket, by full key and network. Listed makers have a ✓, and "Only vetted by SwapMarket" starts on and is saved in settings. Turning it off shows everyone, with a warning. Vetting limits griefing and doesn't protect funds. Offers are signed, so a checkmark can't be copied without the maker's key. It only filters new orders: swaps in progress and Rescue never consult it.

@@ -229,7 +229,7 @@ async function checkNoErrors(page) {
   if (real.length) throw new Error(`the page logged errors: ${real.join(' | ').slice(0, 500)}`);
 }
 
-async function startSwap(page, flip, to) {
+async function upToRecovery(page, flip, to) {
   await connectTestWallet(page);
   if (flip) await page.locator('.flip').click();
   await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
@@ -242,7 +242,10 @@ async function startSwap(page, flip, to) {
   await page.locator('#accept').click();
   await page.locator('#download').waitFor({ timeout: 30000 });
   step('quote accepted and terms checked');
+}
 
+async function startSwap(page, flip, to) {
+  await upToRecovery(page, flip, to);
   if (await page.locator('.pay-address').count() || await page.locator('.lock').count()) throw new Error('the next step showed before the recovery file');
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download').click()]);
   const file = path.join(shots, `recovery-${Date.now()}.json`);
@@ -724,8 +727,27 @@ async function phoneWallets() {
   const here = encodeURIComponent(page.url());
   if (hrefs.length !== 2 || !hrefs[0].startsWith(`https://phantom.app/ul/browse/${here}`) || !hrefs[1].startsWith(`https://solflare.com/ul/v1/browse/${here}`)) throw new Error(`the links: ${hrefs}`);
   await page.locator('.phone-wallets').getByRole('button', { name: 'WalletConnect' }).waitFor({ timeout: 2000 });
+  await page.locator('.phone-wallets .page-address').waitFor({ timeout: 2000 });
   await page.screenshot({ path: path.join(shots, 'phone-wallets.png') });
+  await page.locator('.phone-wallets').getByRole('button', { name: 'Close' }).click();
+
+  const history = page.locator('.tab[data-tab="history"]');
+  if (await history.isVisible()) throw new Error('the menu should start collapsed on a phone');
+  await page.locator('#burger').click();
+  await history.waitFor({ timeout: 2000 });
+  if ((await page.locator('#burger').getAttribute('aria-expanded')) !== 'true') throw new Error('the burger should say it is open');
+  await page.screenshot({ path: path.join(shots, 'phone-menu.png') });
+  await history.click();
+  await history.waitFor({ state: 'hidden', timeout: 2000 });
+  if (!page.url().endsWith('#history')) throw new Error(`the menu went to ${page.url()}`);
+  if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error('the phone page scrolls sideways');
   await page.context().close();
+
+  const wide = await newPage();
+  await wide.locator('.tab[data-tab="history"]').waitFor({ timeout: 15000 });
+  if (await wide.locator('#burger').isVisible()) throw new Error('a burger on a wide screen');
+  await wide.context().close();
+  step('on a phone the menu collapses to a burger, and a link closes it');
   step('a phone with no wallet in its browser gets a list of wallets, and WalletConnect');
 }
 
@@ -754,6 +776,92 @@ async function connectOrder() {
   await page.locator('.note', { hasText: 'Solana: Phantom' }).waitFor({ timeout: 5000 });
   await page.context().close();
   step('Phantom is tried first, and saying no to a wallet stops there');
+}
+
+// Nothing goes wrong by cancelling, and nothing that has really started can be cancelled. The refusals answer from fake chain
+// data, so no funds are needed, and the rest is real.
+async function cancelling() {
+  const confirm = async (page) => {
+    await page.locator('#cancel-order').click();
+    await page.locator('#cancel-confirm').click();
+  };
+  const refused = async (page, text, state_) => {
+    await page.locator('#banner:not([hidden])', { hasText: text }).waitFor({ timeout: 10000 });
+    await page.locator(`.swap-card[data-state="${state_}"]`).waitFor({ timeout: 5000 });
+  };
+
+  const page = await newPage();
+  await upToRecovery(page, false);
+  if (!(await page.locator('#cancel-order').isVisible())) throw new Error('no cancel while saving the recovery file');
+  if (await page.getByRole('button', { name: 'Back', exact: true }).count()) throw new Error('back beside cancel');
+
+  // A wallet's browser: no file to save, and maybe no clipboard either.
+  await page.evaluate(() => { navigator.clipboard.writeText = () => Promise.reject(new Error('blocked')); });
+  await page.locator('#copy-recovery').click();
+  const text = await page.locator('#recovery-text').inputValue();
+  if (!(await page.locator('#recovery-text').isVisible()) || JSON.parse(text).format !== 'liq2sol-recovery') throw new Error('the text to copy by hand');
+  await page.locator('#recovery-paste').fill(text.replace(/"lock_secret": "./, '"lock_secret": "0'));
+  await page.locator('#recovery-paste-go').click();
+  await page.locator('#banner:not([hidden])', { hasText: 'damaged' }).waitFor({ timeout: 5000 });
+  if (await page.locator('.pay-address').count()) throw new Error('altered text unlocked the next step');
+  await page.locator('#recovery-paste').fill(text);
+  await page.locator('#recovery-paste-go').click();
+  await page.locator('.pay-address').waitFor({ timeout: 10000 });
+  step('with no download or clipboard, the text can be copied by hand, and altered text is refused');
+
+  await page.locator('#cancel-order').click();
+  await page.locator('#cancel-keep').click();
+  await page.locator('.swap-card[data-state="fund"]').waitFor({ timeout: 2000 });
+
+  await page.route('**/address/*/txs', (route) => route.fulfill({ json: [{ txid: 'seen' }], headers: { 'access-control-allow-origin': '*' } }));
+  await confirm(page);
+  await refused(page, 'already reached', 'fund');
+  await page.unroute('**/address/*/txs');
+  await page.route('**/address/*/txs', (route) => route.abort());
+  await confirm(page);
+  await page.locator('.swap-card[data-state="fund"]').waitFor({ timeout: 5000 });
+  await new Promise((r) => setTimeout(r, 1000));
+  if ((await state(page)) !== 'fund') throw new Error('cancelled without being able to check the chain');
+  await page.unroute('**/address/*/txs');
+  step('a swap the chain shows as paid can\'t be cancelled, nor one the page can\'t check');
+
+  await confirm(page);
+  await page.locator('.swap-card[data-state="fund"]').waitFor({ state: 'detached', timeout: 10000 });
+  await page.locator('.tab[data-tab="history"]').click();
+  const row = page.locator('.history-row', { hasText: 'cancelled' });
+  await row.waitFor({ timeout: 5000 });
+
+  // A payment could still arrive, so the recovery text picks a cancelled swap back up, by asking the chains.
+  await page.locator('.tab[data-tab="rescue"]').click();
+  await page.locator('#rescue-paste').fill(text);
+  await page.locator('#rescue-paste-go').click();
+  await page.locator('.swap-card[data-state="fund"]').waitFor({ timeout: 30000 });
+  step('a cancelled swap can be rescued with pasted text');
+
+  await confirm(page);
+  await page.locator('.swap-card[data-state="fund"]').waitFor({ state: 'detached', timeout: 10000 });
+  await page.locator('.tab[data-tab="history"]').click();
+  await row.getByRole('button', { name: 'Forget' }).click();
+  await row.waitFor({ state: 'detached', timeout: 5000 });
+  await checkNoErrors(page);
+  await page.context().close();
+  step('once cancelled, a swap can be forgotten');
+
+  const lock = await newPage();
+  await startSwap(lock, true, await walletCli('getnewaddress'));
+  await lock.locator('.lock').waitFor({ timeout: 10000 });
+  await lock.route((url) => url.href.startsWith(env.SOLANA_RPC), async (route) => {
+    const body = route.request().postDataJSON();
+    if (body?.method !== 'getSignaturesForAddress') return route.fallback();
+    return route.fulfill({ json: { jsonrpc: '2.0', id: body.id, result: [{ signature: 'seen' }] } });
+  });
+  await confirm(lock);
+  await refused(lock, 'already been locked', 'lock');
+  await lock.unrouteAll();
+  await confirm(lock);
+  await lock.locator('.swap-card[data-state="lock"]').waitFor({ state: 'detached', timeout: 10000 });
+  await lock.context().close();
+  step('S to L cancels too, unless its lock has any history');
 }
 
 // The maker locks as soon as it has the page's signature, so the page's messages are held back until it asks for its refund.
@@ -884,9 +992,9 @@ async function look() {
 
 let code = 0;
 try {
-  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,faucet,l2s,s2l,split,rescue,early').split(',')]) {
+  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,cancelling,faucet,l2s,s2l,split,rescue,early').split(',')]) {
     console.log(`  == browser: ${name}`);
-    await { vetting, look, faucet, l2s, s2l, rescue, split, early }[name]();
+    await { vetting, look, cancelling, faucet, l2s, s2l, rescue, split, early }[name]();
   }
   console.log('BROWSER OK');
 } catch (e) {

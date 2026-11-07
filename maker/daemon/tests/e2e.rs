@@ -1309,8 +1309,9 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     println!("{text}");
     check(printed.status.success(), "the report runs while the maker does")?;
     let r = w.store.report().map_err(|e| e.to_string())?;
-    let earned = r.swaps.iter().find(|((day, dir, outcome), _)| day.is_some() && dir == "S2L" && outcome == "Completed");
-    check(earned.is_some_and(|(_, l)| l.swaps >= 1 && l.spread > 0), "it shows this swap, on a day, with its spread")?;
+    // Other scenarios' swaps have no spread, and a long run can cross midnight, so any day's line may be this swap's.
+    let earned = r.swaps.iter().any(|((day, dir, outcome), l)| day.is_some() && dir == "S2L" && outcome == "Completed" && l.spread > 0);
+    check(earned, "it shows this swap, on a day, with its spread")?;
     let (sats, lamports) = r.costs.values().fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1));
     check(sats >= FEE && lamports >= 5_000, "and what the maker spent on both chains")?;
     check(text.contains("S2L") && text.contains("Completed"), "and prints it")?;

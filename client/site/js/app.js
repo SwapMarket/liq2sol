@@ -1287,6 +1287,12 @@ function navMenu() {
 
 async function main() {
   navMenu();
+  // The deploy stamps the build. A copy served straight from the repo says so instead of showing the placeholder.
+  const build = $('build');
+  if (build.textContent.startsWith('__')) {
+    build.textContent = 'local';
+    build.href = 'https://github.com/SwapMarket/liq2sol';
+  }
   captureConsole();
   log('info', `started, build ${document.querySelector('#build')?.textContent ?? ''}, ${navigator.userAgent}`);
   await init();

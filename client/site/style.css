@@ -31,7 +31,7 @@ nav { background: var(--card); border-bottom: 1px solid rgb(255 255 255 / 8%); }
 .logo b { color: #f7931a; font-weight: 800; }
 /* SwapMarket's icon, from SwapMarket/swapmarket.github.io public/sm_icon.svg. */
 .logo { display: inline-flex; align-items: center; }
-.logo-icon { width: 30px; height: 30px; margin-right: 8px; }
+.logo-icon { width: 27px; height: 27px; margin-right: 12px; position: relative; top: 2px; }
 .tab { color: var(--text); text-decoration: none; padding: 2px 14px; border-left: 1px solid rgb(255 255 255 / 15%); }
 #collapse { display: flex; align-items: center; flex-wrap: wrap; }
 .tab:hover, .tab.on { color: var(--primary); }

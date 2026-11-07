@@ -19,6 +19,9 @@ def e2e(s):
     return ["env", f"SCENARIO={s}", "cargo", "test", "-p", "liq2sol-maker", "--test", "e2e", "--", "--ignored", "--nocapture"]
 
 MUTATIONS = [
+    ("close: an open escrow", SIGNER, "if escrow.state == EscrowState::Open {\n            return Err(\"the escrow is still open\".into());", "if false {\n            return Err(\"the escrow is still open\".into());", e2e("RFQ L2S")),
+    ("close: straight after settling", SIGNER, "if self.sol.slot()? < escrow.settled_slot.saturating_add(self.close_after_slots) {", "if false {", e2e("RFQ L2S")),
+    ("priority: sign what fails simulation", "shared/chain/src/sol.rs", "        if let Some(e) = sim.err {\n            return Err(format!(\"simulation failed: {e:?}\\n{:#?}\", sim.logs));\n        }\n        let mut accounts", "        let mut accounts", PROCESS),
     ("early refund: lock anyway", POLICY, "if record.early_refunded {\n                return Err(Refusal::EarlyRefunded);\n            }\n            if !record.adaptor_held {", "if !record.adaptor_held {", CORE),
     ("early refund: after signing a lock", POLICY, "if record.direction.is_some() {\n                return Err(Refusal::AlreadyLocked);\n            }\n            record.early_refunded = true;", "record.early_refunded = true;", CORE),
     ("early refund: forgets its promise", POLICY, "record.early_refunded = true;", "", CORE),

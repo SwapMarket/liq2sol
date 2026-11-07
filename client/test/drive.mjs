@@ -329,9 +329,17 @@ async function checkHistory(page) {
   const solana = Number(swap.terms.solana_amount) * 100;
   const want = (swap.direction === 'L2S' ? liquid / solana : solana / liquid).toFixed(4);
   await page.locator('.tab[data-tab="history"]').click();
-  const row = page.locator('.history-row').first();
-  const titles = (await page.locator('table.history th').allInnerTexts()).map((t) => t.toLowerCase()).join();
-  if (titles !== 'swap,price,maker,status,date,explorers,') throw new Error(`the history's titles: ${titles}`);
+  const row = page.locator('.history-item').first();
+  const titles = (await page.locator('.history-head span').allInnerTexts()).map((t) => t.toLowerCase()).join();
+  if (titles !== 'swap,status,date') throw new Error(`the history's titles: ${titles}`);
+  if (await row.locator('.history-price').isVisible()) throw new Error('details should start hidden');
+  await row.locator('.history-row').click();
+  await row.locator('.history-price').waitFor({ timeout: 2000 });
+  await new Promise((r) => setTimeout(r, 5500));
+  if (!(await row.locator('.history-price').isVisible())) throw new Error('the page refreshing closed the details');
+  await page.setViewportSize({ width: 360, height: 800 });
+  if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error('the history scrolls sideways on a phone');
+  await page.setViewportSize({ width: 1200, height: 1000 });
   await row.waitFor({ timeout: 5000 });
   const price = await row.locator('.history-price').innerText();
   if (price !== want) throw new Error(`the history says ${price}, but the terms come to ${want}`);
@@ -343,7 +351,7 @@ async function checkHistory(page) {
   if (!(await row.locator('.explorer-solana').getAttribute('href')).includes(swap.escrow_address)) throw new Error('the Solana link');
   if (!(await page.evaluate(() => localStorage.getItem('liq2sol.logs'))).includes('blinded=') === false) throw new Error('blinders reached the log');
   await page.locator('.tab[data-tab="swap"]').click();
-  step('the history shows the price, the maker, and explorer links with the right amount and asset');
+  step('the history fits a phone, and a row opens to show the price, the maker, and explorer links with the right amount and asset');
 }
 
 // A browser with only the file, on a swap that is over. It must never offer to pay or lock, whatever the chains are slow to say.
@@ -828,7 +836,7 @@ async function cancelling() {
   await confirm(page);
   await page.locator('.swap-card[data-state="fund"]').waitFor({ state: 'detached', timeout: 10000 });
   await page.locator('.tab[data-tab="history"]').click();
-  const row = page.locator('.history-row', { hasText: 'cancelled' });
+  const row = page.locator('.history-item', { hasText: 'cancelled' });
   await row.waitFor({ timeout: 5000 });
 
   // A payment could still arrive, so the recovery text picks a cancelled swap back up, by asking the chains.
@@ -841,6 +849,7 @@ async function cancelling() {
   await confirm(page);
   await page.locator('.swap-card[data-state="fund"]').waitFor({ state: 'detached', timeout: 10000 });
   await page.locator('.tab[data-tab="history"]').click();
+  await row.locator('.history-row').click();
   await row.getByRole('button', { name: 'Forget' }).click();
   await row.waitFor({ state: 'detached', timeout: 5000 });
   await checkNoErrors(page);

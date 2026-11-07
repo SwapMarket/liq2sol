@@ -184,8 +184,15 @@ th:nth-child(2), td.rate { width: 45%; }
 
 .clear-amount { flex: none; width: 26px; height: 26px; margin-left: 6px; padding: 0; border: 0; border-radius: 50%; background: var(--edge); color: var(--muted); font-size: 1rem; line-height: 1; cursor: pointer; }
 .clear-amount:hover, .clear-amount:focus-visible { color: var(--text); }
-table.history th, table.history td { text-align: left; }
-.history-actions { display: flex; gap: 6px; }
+.history { max-width: 480px; background: var(--card); border: 1px solid rgb(255 255 255 / 10%); border-radius: 12px; overflow: hidden; }
+.history-head, .history-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 10px 12px; }
+.history-head { color: var(--dim); font-size: .7rem; font-weight: 600; text-transform: uppercase; border-bottom: 1px solid var(--edge); }
+.history-head span:not(:first-child), .history-row span:not(:first-child) { text-align: right; }
+.history-row { width: 100%; background: none; border: 0; border-top: 1px solid rgb(255 255 255 / 5%); color: var(--text); font: inherit; font-size: .86rem; text-align: left; cursor: pointer; }
+.history-row:hover, .history-row[aria-expanded="true"] { background: var(--edge); }
+.history-date { color: var(--muted); font-size: .8rem; }
+.history-details { margin: 0; padding: 4px 12px 12px; background: var(--edge); }
+.history-actions { display: flex; gap: 6px; margin-top: 8px; }
 .history-actions .btn { width: auto; margin: 0; padding: 4px 12px; font-size: .76rem; }
 
 @media (max-width: 700px) {
@@ -198,3 +205,4 @@ table.history th, table.history td { text-align: left; }
 
 .recovery-paste { resize: vertical; font-family: ui-monospace, "Noto Mono", Menlo, monospace; font-size: .78rem; box-sizing: border-box; }
 .paste-box { margin-top: 10px; }
+.nowrap { white-space: nowrap; }

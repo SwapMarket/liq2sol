@@ -1052,26 +1052,44 @@ function explorerLinks(s) {
   return box;
 }
 
+// Which history rows are open, so the page refreshing itself doesn't close them.
+const expanded = new Set();
+
 function historyView() {
   const all = Object.values(loadSwaps()).sort((a, b) => b.created_at - a.created_at);
   if (!all.length) return h('div', { class: 'card' }, h('h2', {}, 'History'), h('p', { class: 'sub' }, 'Swaps from this browser appear here.'));
-  const rows = all.map((s) => {
+  const fact = (name, value) => h('div', {}, h('dt', {}, name), h('dd', {}, value));
+  const items = all.map((s) => {
     const [from, to] = names[s.direction];
-    return h('tr', { class: 'history-row' },
-      h('td', {}, `${show(s.direction === 'L2S' ? BigInt(s.terms.liquid_amount) / 100n : s.terms.solana_amount)} ${from} → ${to}`),
-      h('td', { class: 'history-price', title: `${from} paid for each ${to} received` }, swapPrice(s)),
-      h('td', { class: 'mono history-maker', title: s.maker }, short(s.maker),
-        vettedMaker(NETWORK.name, s.maker) && h('span', { class: 'vetted', title: 'Vetted by SwapMarket', 'aria-label': 'Vetted by SwapMarket' }, ' ✓')),
-      h('td', { class: 'mono' }, s.state),
-      h('td', {}, new Date(s.created_at * 1000).toLocaleString()),
-      h('td', {}, explorerLinks(s)),
-      h('td', { class: 'history-actions' },
+    const vetted = vettedMaker(NETWORK.name, s.maker);
+    const details = h('dl', { class: 'facts history-details', hidden: !expanded.has(s.id) },
+      fact('Created', new Date(s.created_at * 1000).toLocaleString()),
+      fact('Price', h('span', { class: 'history-price', title: `${from} paid for each ${to} received` }, swapPrice(s))),
+      fact('Maker', h('span', { class: 'mono history-maker', title: s.maker }, short(s.maker),
+        vetted && h('span', { class: 'vetted', title: 'Vetted by SwapMarket', 'aria-label': 'Vetted by SwapMarket' }, ' ✓'))),
+      fact('Explorers', explorerLinks(s)),
+      h('div', { class: 'history-actions' },
         h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = s.order ?? s.id; location.hash = '#swap'; render(); } }, 'Open'),
-        FINISHED.includes(s.state) && h('button', { class: 'btn quiet', onclick: () => { removeSwap(s.id); render(); } }, 'Forget')));
+        FINISHED.includes(s.state) && h('button', { class: 'btn quiet', onclick: () => { removeSwap(s.id); expanded.delete(s.id); render(); } }, 'Forget')));
+    const summary = h('button', {
+      class: 'history-row', type: 'button', 'aria-expanded': String(!details.hidden),
+      onclick: () => {
+        details.hidden = !details.hidden;
+        if (details.hidden) expanded.delete(s.id);
+        else expanded.add(s.id);
+        summary.setAttribute('aria-expanded', String(!details.hidden));
+      },
+    },
+    h('span', { class: 'history-swap' },
+      h('span', { class: 'nowrap' }, `${show(s.direction === 'L2S' ? BigInt(s.terms.liquid_amount) / 100n : s.terms.solana_amount)} ${from}`), ' ',
+      h('span', { class: 'nowrap' }, `→ ${to}`)),
+    h('span', { class: 'mono history-state' }, s.state),
+    h('span', { class: 'history-date' }, new Date(s.created_at * 1000).toLocaleDateString(undefined, { dateStyle: 'short' })));
+    return h('div', { class: 'history-item' }, summary, details);
   });
-  return h('div', { class: 'list scroll' }, h('table', { class: 'history' },
-    h('thead', {}, h('tr', {}, ['Swap', 'Price', 'Maker', 'Status', 'Date', 'Explorers', ''].map((t) => h('th', {}, t)))),
-    h('tbody', {}, rows)));
+  return h('div', { class: 'list history' },
+    h('div', { class: 'history-head' }, ['Swap', 'Status', 'Date'].map((t) => h('span', {}, t))),
+    items);
 }
 
 // Support material, Boltz-style: copy it, save it, or clear it. It only leaves this browser if the user sends it.

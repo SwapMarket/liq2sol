@@ -585,7 +585,7 @@ async function liveBook() {
   await row.waitFor({ timeout: 30000 });
   const headers = async () => (await page.locator('thead th').allInnerTexts()).map((t) => t.toLowerCase());
   const cells = async () => row.locator('td').allInnerTexts();
-  if ((await headers()).join() !== 'maker,price,per swap') throw new Error(`columns: ${await headers()}`);
+  if ((await headers()).join() !== 'maker,price,size') throw new Error(`columns: ${await headers()}`);
   const quoted = await cells();
   const steps = quoted[1].split('\n');
   if (!quoted[2].includes('–') || steps.length < 2 || !steps.every((t) => /^≤[\d,.]+: \d\.\d{4}$/.test(t))) throw new Error(`before an order: ${quoted}`);
@@ -611,7 +611,7 @@ async function liveBook() {
   if (lost.length) throw new Error(`rebuilt: ${lost}`);
 
   await page.locator('#amount').fill('');
-  if ((await headers())[2] !== 'per swap') throw new Error('the caption did not come back');
+  if ((await headers())[2] !== 'size') throw new Error('the caption did not come back');
   if ((await cells())[1] !== quoted[1]) throw new Error('the quoted price did not come back');
   lost = await marked();
   if (lost.length) throw new Error(`rebuilt: ${lost}`);
@@ -628,7 +628,7 @@ async function liveBook() {
   if (!(await page.locator('#clear-amount').isVisible())) throw new Error('nothing to clear the amount with');
   await page.locator('#clear-amount').click();
   if ((await page.locator('#amount').inputValue()) !== '') throw new Error('the amount was not cleared');
-  if ((await headers())[2] !== 'per swap') throw new Error('clearing the amount did not count as no order');
+  if ((await headers())[2] !== 'size') throw new Error('clearing the amount did not count as no order');
   if (await page.locator('#clear-amount').isVisible()) throw new Error('a clear button with nothing to clear');
   lost = await marked();
   if (lost.length) throw new Error(`rebuilt: ${lost}`);

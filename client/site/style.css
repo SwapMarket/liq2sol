@@ -98,7 +98,7 @@ dl { margin: 0; }
 .swap-card, .back, #recovery-card { margin-bottom: 14px; }
 .back { background: none; border: 0; box-shadow: none; padding: 0; }
 .order-summary { margin-bottom: 12px; }
-.book { max-width: 720px; margin: 28px auto 0; }
+.book { max-width: 480px; margin: 28px auto 0; }
 .book h3 { margin: 0 0 8px; font-size: 1.05rem; color: var(--muted); text-align: center; }
 .scroll { overflow-x: auto; background: var(--card); border: 1px solid rgb(255 255 255 / 10%); border-radius: 12px; }
 table { width: 100%; border-collapse: collapse; font-size: .86rem; }

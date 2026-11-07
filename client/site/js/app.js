@@ -237,7 +237,7 @@ function bookCells(o, direction, send, fills) {
 const book = {
   rows: new Map(),
   title: h('h3'),
-  headers: ['Maker', 'Price', 'Per swap'].map((t) => h('th', {}, t)),
+  headers: ['Maker', 'Price', 'Size'].map((t) => h('th', {}, t)),
   body: h('tbody'),
   empty: h('div', { class: 'empty' }),
   onlyVetted: h('input', { type: 'checkbox', id: 'only-vetted', onchange: (e) => setOnlyVetted(e.target.checked) }),
@@ -281,7 +281,7 @@ function updateBook(send) {
   setText(book.headers[1], 'Price', ordered
     ? `What you pay per ${to} on this order, in ${from}`
     : `${from} you pay for each ${to} you receive`);
-  setText(book.headers[2], ordered ? 'Your fill' : 'Per swap', ordered
+  setText(book.headers[2], ordered ? 'Your fill' : 'Size', ordered
     ? `How much of your order goes to this maker, in ${from}`
     : `The smallest and largest single swap, in ${from} and ${to} alike`);
 

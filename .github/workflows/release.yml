@@ -27,7 +27,7 @@ jobs:
         run: |
           name="liq2sol-maker-${GITHUB_REF_NAME}-x86_64-linux"
           mkdir -p "dist/$name"
-          cp maker/target/release/liq2sol-signer maker/target/release/liq2sol-maker deploy/* "dist/$name/"
+          cp maker/target/release/liq2sol-signer maker/target/release/liq2sol-maker deploy/* LICENSE "dist/$name/"
           cd dist
           tar czf "$name.tar.gz" "$name"
           rm -r "$name"

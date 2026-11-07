@@ -654,7 +654,7 @@ async function pageLoading() {
   await page.locator('.page-loading .spinner').waitFor({ timeout: 5000 });
   if ((await page.locator('.page-loading .spinner').evaluate((e) => getComputedStyle(e).animationName)) !== 'spin') throw new Error('the spinner isn\'t animated');
   if (await page.locator('#amount').count()) throw new Error('the form appeared before it could work');
-  const link = page.locator('footer a').first();
+  const link = page.locator('#build');
   if ((await link.getAttribute('target')) !== '_blank') throw new Error('the build link stays in this tab');
   if (!(await link.getAttribute('href')).includes('/commit/')) throw new Error('the build link isn\'t to a commit');
   release();

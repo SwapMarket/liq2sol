@@ -26,17 +26,16 @@ a { color: var(--link); }
 [hidden] { display: none !important; }
 
 nav { background: var(--card); border-bottom: 1px solid rgb(255 255 255 / 8%); }
-.nav-inner { max-width: 960px; margin: 0 auto; padding: 14px 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 0; }
+.nav-inner { max-width: 960px; margin: 0 auto; padding: 14px 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 0; justify-content: center; }
 .logo { font-size: 1.45rem; font-style: italic; font-weight: 800; color: var(--primary); text-decoration: none; margin-right: 28px; letter-spacing: -.01em; }
 .logo b { color: #f7931a; font-weight: 800; }
 .tab { color: var(--text); text-decoration: none; padding: 2px 14px; border-left: 1px solid rgb(255 255 255 / 15%); }
 #collapse { display: flex; align-items: center; flex-wrap: wrap; }
-#burger { display: none; background: none; border: 0; padding: 0 4px; margin-left: auto; color: var(--text); font-size: 1.5rem; line-height: 1; cursor: pointer; }
 .tab:hover, .tab.on { color: var(--primary); }
 .ext-icon { fill: currentColor; vertical-align: -2px; margin-left: 2px; }
-.net { display: table; margin: -4px auto 12px; font-size: .78rem; color: var(--muted); border: 1px dashed var(--dim); border-radius: 999px; padding: 2px 10px; }
+.net { display: table; margin: 0 auto 18px; font-size: .78rem; color: var(--muted); border: 1px dashed var(--dim); border-radius: 999px; padding: 2px 10px; }
 
-main { max-width: 960px; margin: 0 auto; padding: 32px 16px 16px; }
+main { max-width: 960px; margin: 0 auto; padding: 14px 16px 16px; }
 .banner { max-width: 480px; margin: 0 auto 16px; padding: 10px 14px; border-radius: 12px; background: var(--err-bg); color: #ffd9d4; font-size: .9rem; overflow-wrap: anywhere; }
 .card { max-width: 480px; margin: 0 auto; padding: 16px 12px 14px; background: var(--card); border: 1px solid rgb(255 255 255 / 10%); border-radius: var(--radius); box-shadow: 0 0 34px var(--primary-soft); position: relative; }
 .card h2 { margin: 2px 40px 2px; text-align: center; font-size: 1.3rem; color: var(--muted); }
@@ -147,7 +146,6 @@ footer { text-align: center; color: var(--dim); font-size: .78rem; padding: 28px
 footer p { margin: 4px 0; }
 
 @media (max-width: 500px) {
-  main { padding-top: 18px; }
   .card { border-radius: 12px; }
   .logo { margin-right: 12px; }
   .amount { font-size: 1.4rem; }
@@ -195,11 +193,23 @@ th:nth-child(2), td.rate { width: 45%; }
 .history-actions { display: flex; gap: 6px; margin-top: 8px; }
 .history-actions .btn { width: auto; margin: 0; padding: 4px 12px; font-size: .76rem; }
 
-@media (max-width: 700px) {
+/* The burger and its menu, from SwapMarket/swapmarket.github.io src/style/nav.scss (AGPL-3.0), with this page's colours. */
+#burger { display: none; background: none; border: 0; padding: 0; margin-left: auto; position: relative; z-index: 1000;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform 400ms; user-select: none; }
+#burger.active { transform: rotate(45deg); }
+body.menu-open { overflow: hidden; }
+#burger .line { fill: none; transition: stroke-dasharray 400ms, stroke-dashoffset 400ms; stroke: var(--text); stroke-width: 5.5; stroke-linecap: round; }
+#burger .top, #burger .bottom { stroke-dasharray: 40 121; }
+#burger.active .top, #burger.active .bottom { stroke-dashoffset: -68px; }
+
+@media (max-width: 768px) {
+  .nav-inner { justify-content: flex-start; }
   #burger { display: block; }
-  #collapse { display: none; order: 3; width: 100%; flex-direction: column; align-items: stretch; margin-top: 8px; }
-  #collapse.open { display: flex; }
-  .tab { border-left: 0; padding: 8px 2px; border-top: 1px solid rgb(255 255 255 / 8%); }
+  #collapse { display: none; }
+  #collapse.open { display: flex; position: fixed; z-index: 999; inset: 0; background: var(--bg); align-items: center; justify-content: center; flex-direction: column; }
+  #collapse.open .tab { display: block; border-left: 0; padding: 6px 24px; font-size: 26px; }
+  #collapse.open .ext-icon { width: 30px; height: 36px; vertical-align: -6px; }
+}
 }
 
 .recovery-paste { resize: vertical; font-family: ui-monospace, "Noto Mono", Menlo, monospace; font-size: .78rem; box-sizing: border-box; }

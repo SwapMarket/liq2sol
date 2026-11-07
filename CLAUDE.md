@@ -20,6 +20,7 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 - Commits are signed by SwapMarket (repo-local git config: user `SwapMarket`, key `01151A25AAE22F55`). Work directly on
   `main`. Commit when it makes sense, but ask before each push, because deploys are slow (user's decision, 2026-11-06).
 - Public repo: https://github.com/SwapMarket/liq2sol (`origin`, branch `main`).
+- **Licences (user's decision, 2026-11-07):** `client/` is AGPL-3.0-only (`client/LICENSE`), because it copies code from `SwapMarket/swapmarket.github.io`, which is AGPL. Everything else is MIT (`LICENSE`), so makers can modify the daemon without publishing their changes. Never copy AGPL code outside `client/`.
 - End commit messages with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ## Status (2026-11-05)

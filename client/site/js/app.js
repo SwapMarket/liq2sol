@@ -1277,6 +1277,8 @@ function navMenu() {
   const menu = $('collapse');
   const set = (open) => {
     menu.classList.toggle('open', open);
+    burger.classList.toggle('active', open);
+    document.body.classList.toggle('menu-open', open);
     burger.setAttribute('aria-expanded', String(open));
   };
   burger.addEventListener('click', () => set(!menu.classList.contains('open')));
@@ -1286,7 +1288,7 @@ function navMenu() {
 async function main() {
   navMenu();
   captureConsole();
-  log('info', `started, build ${document.querySelector('footer a')?.textContent ?? ''}, ${navigator.userAgent}`);
+  log('info', `started, build ${document.querySelector('#build')?.textContent ?? ''}, ${navigator.userAgent}`);
   await init();
   if (NETWORK.regtest) W.use_regtest(NETWORK.usdt, NETWORK.lbtc);
   endpoints();

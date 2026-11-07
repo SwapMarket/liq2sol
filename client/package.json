@@ -1,6 +1,7 @@
 {
   "name": "liq2sol-client-tools",
   "private": true,
+  "license": "AGPL-3.0-only",
   "description": "Only for vendoring libraries and running browser tests. The site itself has no build step for JavaScript.",
   "scripts": {
     "vendor": "esbuild vendor-src/walletconnect.js --bundle --format=esm --minify --target=es2020 --define:global=globalThis --outfile=site/vendor/walletconnect.js && esbuild vendor-src/qrcode.js --bundle --format=esm --minify --target=es2020 --outfile=site/vendor/qrcode.js"

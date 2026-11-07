@@ -13,7 +13,14 @@
 <nav>
   <div class="nav-inner">
     <a class="logo" href="#swap"><span>liq</span><b>2</b><span>sol</span></a>
-    <button id="burger" type="button" aria-label="Menu" aria-expanded="false" aria-controls="collapse">☰</button>
+    <!-- The burger and its styles are from SwapMarket/swapmarket.github.io, src/components/Nav.tsx and src/style/nav.scss (AGPL-3.0). -->
+    <button id="burger" type="button" aria-label="Menu" aria-expanded="false" aria-controls="collapse">
+      <svg viewBox="0 0 100 100" width="45" aria-hidden="true">
+        <path class="line top" d="m 70,33 h -40 c 0,0 -8.5,-0.149796 -8.5,8.5 0,8.649796 8.5,8.5 8.5,8.5 h 20 v -20" />
+        <path class="line middle" d="m 70,50 h -40" />
+        <path class="line bottom" d="m 30,67 h 40 c 0,0 8.5,0.149796 8.5,-8.5 0,-8.649796 -8.5,-8.5 -8.5,-8.5 h -20 v 20" />
+      </svg>
+    </button>
     <div id="collapse">
       <a class="tab" data-tab="swap" href="#swap">Swap</a>
       <a class="tab" data-tab="rescue" href="#rescue">Rescue</a>
@@ -22,9 +29,9 @@
       <a class="tab ext" href="https://github.com/SwapMarket/liq2sol/tree/main/docs" target="_blank" rel="noopener noreferrer">Docs <!-- Octicons link-external-24, MIT, github.com/primer/octicons --><svg class="ext-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15.5 2.25a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 .75.75v5.5a.75.75 0 0 1-1.5 0V4.06l-6.22 6.22a.75.75 0 1 1-1.06-1.06L19.94 3h-3.69a.75.75 0 0 1-.75-.75Z"/><path d="M2.5 4.25c0-.966.784-1.75 1.75-1.75h8.5a.75.75 0 0 1 0 1.5h-8.5a.25.25 0 0 0-.25.25v15.5c0 .138.112.25.25.25h15.5a.25.25 0 0 0 .25-.25v-8.5a.75.75 0 0 1 1.5 0v8.5a1.75 1.75 0 0 1-1.75 1.75H4.25a1.75 1.75 0 0 1-1.75-1.75V4.25Z"/></svg></a>
     </div>
   </div>
-  <span class="net" id="net"></span>
 </nav>
 <main>
+  <span class="net" id="net"></span>
   <div id="banner" class="banner" hidden></div>
   <section id="view">
     <div class="card page-loading" role="status" aria-label="Loading">
@@ -40,7 +47,7 @@
 </main>
 <footer>
   <p>No server and no custodian: your funds stay under keys only you and the chains control. This build is for test networks.</p>
-  <p>Build <a href="https://github.com/SwapMarket/liq2sol/commit/__BUILD__" target="_blank" rel="noopener noreferrer">__BUILD__</a>. A tampered page could show anything here, so compare it with the release if it matters to you.</p>
+  <p><a href="https://github.com/SwapMarket/liq2sol/tree/main/client" target="_blank" rel="noopener noreferrer">Source</a> under the AGPL-3.0. Build <a id="build" href="https://github.com/SwapMarket/liq2sol/commit/__BUILD__" target="_blank" rel="noopener noreferrer">__BUILD__</a>. A tampered page could show anything here, so compare it with the release if it matters to you.</p>
 </footer>
 </body>
 </html>

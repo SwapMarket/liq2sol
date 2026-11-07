@@ -28,10 +28,9 @@ a { color: var(--link); }
 nav { background: var(--card); border-bottom: 1px solid rgb(255 255 255 / 8%); }
 .nav-inner { max-width: 960px; margin: 0 auto; padding: 8px 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 0; justify-content: center; }
 .logo { font-size: 1.45rem; font-style: italic; font-weight: 800; color: var(--primary); text-decoration: none; margin-right: 28px; letter-spacing: -.01em; }
-.logo b { color: #f7931a; font-weight: 800; }
-/* SwapMarket's icon, from SwapMarket/swapmarket.github.io public/sm_icon.svg. */
+/* One image, so it looks the same everywhere: client/site/logo.svg. */
 .logo { display: inline-flex; align-items: center; }
-.logo-icon { width: 27px; height: 27px; margin-right: 12px; position: relative; top: 2px; }
+.logo img { display: block; height: 28px; width: auto; }
 .tab { color: var(--text); text-decoration: none; padding: 2px 14px; border-left: 1px solid rgb(255 255 255 / 15%); }
 #collapse { display: flex; align-items: center; flex-wrap: wrap; }
 .tab:hover, .tab.on { color: var(--primary); }

@@ -1,0 +1,7 @@
+# The page's WebAssembly signs with k256, because libsecp256k1 doesn't build for wasm32 here. To fix before mainnet.
+[advisories]
+ignore = [
+  # crypto-bigint 0.5, through k256: some operations aren't constant time. The page signs only with a one-swap key, in the user's
+  # own browser, so measuring it would need code running on that machine. The maker and CLI use libsecp256k1 (contracts/swapkey).
+  "RUSTSEC-2026-0387",
+]

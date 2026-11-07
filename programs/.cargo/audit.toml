@@ -1,0 +1,9 @@
+# Accepted for this workspace only, where nothing secret is ever computed. Every other workspace is audited with no exceptions.
+[advisories]
+ignore = [
+  # crypto-bigint 0.5, through k256, through solana-secp256k1-recover. On-chain the program uses Solana's syscall; k256 only runs
+  # in host builds, such as the tests, and only to recover a public key from public values. No secret key passes through it.
+  "RUSTSEC-2026-0387",
+  # ctutils 0.4, through digest and blake3, in solana-syscalls' host build. On-chain hashing is a syscall, and what it hashes is public.
+  "RUSTSEC-2026-0385",
+]

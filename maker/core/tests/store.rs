@@ -123,13 +123,14 @@ fn the_report_counts_spread_and_each_cost_once() {
     s.record_cost(&l2s.swap_id(), "ClaimLiquid", 30, 0).unwrap();
     s.record_cost(&l2s.swap_id(), "ClaimLiquid", 30, 0).unwrap();
     s.record_cost(&l2s.swap_id(), "LockSolana", 0, 5_000).unwrap();
+    s.record_cost(&l2s.swap_id(), "RentBack", 0, -2_000).unwrap();
     let r = s.report().unwrap();
     let total = |d: &str, o: &str| r.swaps.iter().find(|((_, dir, out), _)| dir == d && out == o).map(|(_, l)| *l).unwrap();
     assert_eq!(total("L2S", "Completed"), liq2sol_maker_core::store::ReportLine { swaps: 1, volume: 1_000_000, spread: 3_000 });
     assert_eq!(total("S2L", "Completed"), liq2sol_maker_core::store::ReportLine { swaps: 1, volume: 1_000_000, spread: 5_000 });
     let refund = total("L2S", "Refunded");
     assert_eq!((refund.swaps, refund.spread), (1, 0), "a refund earns nothing");
-    assert_eq!(r.costs.values().copied().fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1)), (30, 5_000), "a retry isn't a second cost");
+    assert_eq!(r.costs.values().copied().fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1)), (30, 3_000), "a retry isn't a second cost, and rent that came back counts against costs");
 }
 
 #[test]
@@ -137,4 +138,21 @@ fn a_date_comes_out_right() {
     assert_eq!(liq2sol_maker_core::store::day_of(0), "1970-01-01");
     assert_eq!(liq2sol_maker_core::store::day_of(1_793_996_585), "2026-11-06");
     assert_eq!(liq2sol_maker_core::store::day_of(951_782_400), "2000-02-29");
+}
+
+#[test]
+fn only_finished_l2s_swaps_wait_to_have_their_escrow_closed() {
+    let s = Store::open(&path("close")).unwrap();
+    let (mut done, mut open, s2l) = (terms(1), terms(2), terms(3));
+    done.direction = Direction::L2S;
+    open.direction = Direction::L2S;
+    for t in [&done, &open, &s2l] {
+        assert!(s.accept(t, &State::WatchLock).unwrap());
+    }
+    s.commit_step(&done.swap_id(), &State::Done { outcome: Outcome::Completed }, &[]).unwrap();
+    s.commit_step(&s2l.swap_id(), &State::Done { outcome: Outcome::Completed }, &[]).unwrap();
+    let ids = |s: &Store| s.escrows_to_close().unwrap().iter().map(|t| t.swap_id()).collect::<Vec<_>>();
+    assert_eq!(ids(&s), vec![done.swap_id()], "not an open swap, nor an S to L one, whose escrow the taker paid for");
+    s.mark_closed(&done.swap_id()).unwrap();
+    assert!(ids(&s).is_empty());
 }

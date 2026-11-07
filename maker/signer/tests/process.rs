@@ -194,6 +194,8 @@ fn the_signer_process_resists_a_compromised_engine() {
         regtest_assets: Some((usdt_id.clone(), lbtc_id.clone())),
         vault_owner: None,
         fee_coin_sats: FEE,
+        priority: Default::default(),
+        close_after_slots: 400_000,
     };
     let config_path = root.join("signer.json");
     std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
@@ -936,10 +938,15 @@ fn vault_cap(world: &World, config: &Config, root: &Path, private: &Path) {
     println!("    ok: the lock drew from the vault, and a refund would return there");
 
     // The signer's own limits would allow this. The chain doesn't: this is the protection against a stolen key.
+    // The signer simulates before signing, so the chain's refusal usually comes back then. Either way, it must be the cap.
     let (reply, _) = lock_once(&mut client, cap, deadline);
-    let err = world.send_solana(&solana_tx(reply)).unwrap_err();
-    // 0x177c is 6012, the program's OverWindowCap. Any other failure wouldn't prove the cap did this.
-    assert!(err.contains("0x177c"), "refused for the wrong reason: {err}");
+    let err = match reply {
+        Reply::Solana(_) => world.send_solana(&solana_tx(reply)).unwrap_err(),
+        Reply::Failed(e) => e,
+        other => panic!("expected a transaction or the chain's refusal, got {other:?}"),
+    };
+    // 6012 (0x177c) is the program's OverWindowCap. Any other failure wouldn't prove the cap did this.
+    assert!(err.contains("0x177c") || err.contains("Custom(6012)"), "refused for the wrong reason: {err}");
     println!("    ok: a lock over the window cap is refused on-chain (OverWindowCap), even with a valid signature");
     assert_eq!(world.sol.token_balance(&vault_token).unwrap(), 4 * SOL_AMOUNT, "nothing moved");
 

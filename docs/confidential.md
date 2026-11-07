@@ -145,7 +145,6 @@ Devnet also found what the local validator had hidden by timing: a lock signed r
 
 ## Not yet covered
 
-- Priority fees on Solana. The code sets none, so a claim could miss its deadline on a congested mainnet. **To fix before mainnet.**
 - Firefox and Safari, and a real wallet paying a confidential address of this form.
 - A real restart for E14, as on `main`.
 - An audit of `musig2` 0.4.1's adaptor code.

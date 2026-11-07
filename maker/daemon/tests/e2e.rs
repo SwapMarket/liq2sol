@@ -1041,6 +1041,9 @@ fn build_world(root: &Path) -> World {
         regtest_assets: assets.clone(),
         vault_owner: Some(vault_owner.pubkey().to_string()),
         fee_coin_sats: FEE,
+        priority: Default::default(),
+        // Short, so the suite sees an escrow closed for its rent.
+        close_after_slots: 30,
     };
     let signer_path = root.join("signer.json");
     std::fs::write(&signer_path, serde_json::to_string(&signer_cfg).unwrap()).unwrap();
@@ -1075,6 +1078,7 @@ fn build_world(root: &Path) -> World {
         tick_millis: 1_000,
         retry_secs: 8,
         regtest_assets: assets,
+        close_every_secs: 2,
         rfq: Some(RfqConfig {
             nostr_key: root.join("nostr.key"),
             relays: vec![relay_url.clone()],
@@ -1236,10 +1240,24 @@ fn rfq_l2s_swap(w: &mut World) -> Res<()> {
         e.amount == RFQ_RECEIVE && e.recipient == w.taker_sol.pubkey(),
         "the escrow pays the taker the quoted amount",
     )?;
+    let point = chosen.lock_point;
+    let close = |w: &mut World| match w.client.call(&Call::CloseEscrow { lock_point: point }) {
+        Ok(Reply::Failed(e)) => e,
+        other => format!("{other:?}"),
+    };
+    check(close(w).contains("still open"), "the signer won't close an open escrow")?;
     let before = w.tokens(&w.taker_sol.pubkey())?;
     w.sol.claim(&w.taker_sol, &escrow_addr, &e, solana_value(&secret).map_err(|e| e.to_string())?)?;
+    // Its record holds the revealed value the engine needs, so not straight away either.
+    check(close(w).contains("too soon"), "nor one that has only just settled")?;
     check(w.tokens(&w.taker_sol.pubkey())? == before + RFQ_RECEIVE, "the taker was paid")?;
     w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    // A while after settling, the maker closes the escrow it paid for, and its rent comes back.
+    let rent = w.sol.lamports(&escrow_addr)?;
+    let before = w.sol.lamports(&w.maker_solana)?;
+    w.wait_for("the maker closing its escrow for the rent", 180, || Ok(w.sol.escrow(&escrow_addr)?.is_none().then_some(())))?;
+    let after = w.sol.lamports(&w.maker_solana)?;
+    check(after + 50_000 > before + rent, "and the rent came back to the maker, less a fee")?;
     Ok(())
 }
 
@@ -1303,6 +1321,14 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     println!("    the claim went through the relay in pieces, and is {} bytes", serialize_hex(&claim).len() / 2);
     w.chain.broadcast(&claim)?;
     w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    // Every Solana transaction the signer builds sets a compute limit and a priority fee, so it can land on a busy network.
+    let Reply::Solana(text) = w.client.call(&Call::DepositToVault { amount: 1 })? else {
+        return Err("the signer built no transaction".into());
+    };
+    let built: solana_sdk::transaction::Transaction = bincode::deserialize(&unhex(&text)?).map_err(|e| e.to_string())?;
+    let budget = built.message.instructions.iter().filter(|ix| built.message.account_keys[ix.program_id_index as usize] == sol::COMPUTE_BUDGET).count();
+    check(budget == 2 && sol::priority_lamports(&built) > 0, "the signer sets a compute limit and a priority fee")?;
+
     // The report, as an operator would run it, after this swap and the one before it.
     let printed = Command::new(env!("CARGO_BIN_EXE_liq2sol-maker")).arg("report").arg(&w.daemon_config).output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&printed.stdout).to_string();
@@ -1553,6 +1579,18 @@ fn refund_tx(w: &World, s: &BotSwap) -> Res<(EarlyRefund, LiquidTx, Vec<simplici
 
 /// A maker who agrees to a refund must never lock, and one who has locked must never agree: either order would let the
 /// taker keep both sides. Everything else here is a request it should turn down, without that costing the real taker.
+/// The next answer about an early refund. The maker repeats its claim offer until it is answered, so those are skipped, as a taker would.
+fn early_answer(relay: &mut Relay, me: &Keys, maker: &nostr::prelude::PublicKey, negotiation: &str) -> Res<wrap::Received> {
+    let start = Instant::now();
+    loop {
+        let left = Duration::from_secs(30).saturating_sub(start.elapsed());
+        let got = wait_from(relay, me, maker, negotiation, NETWORK, left)?;
+        if !matches!(got.envelope.body, Body::ClaimOffer(_)) {
+            return Ok(got);
+        }
+    }
+}
+
 fn rfq_early_refund(w: &mut World) -> Res<()> {
     let mut s = up_to_offer(w)?;
     let id = s.swap.terms.swap_id();
@@ -1579,13 +1617,13 @@ fn rfq_early_refund(w: &mut World) -> Res<()> {
     let mut swapped = tx.clone();
     swapped.input.swap(0, 1);
     send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, ask(&swapped, &started.nonce()))?;
-    let got = wait_from(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, Duration::from_secs(20));
+    let got = early_answer(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation);
     check(got.is_err_and(|e| e.contains("declined")), "a request spending another coin first is declined")?;
     check(matches!(w.state(&id)?, State::WatchLock), "and the swap goes on")?;
 
     // The real request.
     send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, ask(&tx, &started.nonce()))?;
-    let got = wait_from(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, Duration::from_secs(20))?;
+    let got = early_answer(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation)?;
     let Body::EarlyRefundShare(share) = got.envelope.body else {
         return Err(format!("expected the maker's share, got {:?}", got.envelope.body));
     };
@@ -1629,7 +1667,7 @@ fn rfq_early_refund(w: &mut World) -> Res<()> {
         nonce: msg::hex(&nonce_bytes(&started.nonce())),
     });
     send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, late)?;
-    let got = wait_from(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, Duration::from_secs(20));
+    let got = early_answer(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation);
     check(got.is_err_and(|e| e.contains("declined")), "having locked, the maker refuses")?;
     w.sol.claim(&w.taker_sol, &escrow, &e, solana_value(&s.secret).map_err(|e| e.to_string())?)?;
     w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;

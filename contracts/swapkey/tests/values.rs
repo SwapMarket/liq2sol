@@ -36,3 +36,20 @@ fn bad_values_are_refused() {
     assert!(solana_value(&[0; 32]).is_err());
     assert!(point_of(&[0xff; 32]).is_err());
 }
+
+/// The stored inverse is checked against the generator, so a wrong constant can't slip through.
+#[test]
+fn gx_inverse_is_right() {
+    for t in [[1u8; 32], [7; 32], [0x42; 32]] {
+        assert_eq!(secret_from_solana(&solana_value(&t).unwrap()).unwrap(), t);
+    }
+    let mut one = [0u8; 32];
+    one[31] = 1;
+    let gx = solana_value(&one).unwrap();
+    assert_eq!(hex_string(&gx), "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", "s = Gx when t = 1");
+    assert_eq!(secret_from_solana(&gx).unwrap(), one, "Gx / Gx = 1");
+}
+
+fn hex_string(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}

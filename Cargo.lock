@@ -651,6 +651,7 @@ dependencies = [
  "k256",
  "rand 0.9.5",
  "secp",
+ "secp256k1 0.31.1",
  "sha2",
  "subtle",
 ]

@@ -12,10 +12,10 @@ publish = false
 [features]
 default = ["native"]
 # Blocking chain access and the Solana client. The browser client builds without it.
-native = ["dep:solana-escrow", "dep:anchor-lang", "dep:anchor-spl", "dep:solana-client", "dep:solana-sdk", "dep:solana-commitment-config", "dep:ureq", "dep:serde_json"]
+native = ["liq2sol-swapkey/secp256k1", "dep:solana-escrow", "dep:anchor-lang", "dep:anchor-spl", "dep:solana-client", "dep:solana-sdk", "dep:solana-commitment-config", "dep:ureq", "dep:serde_json"]
 
 [dependencies]
-liq2sol-swapkey = { path = "../../contracts/swapkey" }
+liq2sol-swapkey = { path = "../../contracts/swapkey", default-features = false }
 rand = "0.8"
 simplicityhl = "=0.9.0"
 getrandom = "0.2"

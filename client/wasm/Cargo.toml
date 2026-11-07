@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 liq2sol-chain = { path = "../../shared/chain", default-features = false }
 liq2sol-rfq = { path = "../../shared/rfq", default-features = false }
-liq2sol-swapkey = { path = "../../contracts/swapkey" }
+liq2sol-swapkey = { path = "../../contracts/swapkey", default-features = false, features = ["k256"] }
 simplicityhl = "=0.9.0"
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }

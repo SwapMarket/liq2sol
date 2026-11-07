@@ -6,9 +6,17 @@ description = "liq2sol confidential Liquid leg: a 2-of-2 taproot output claimed 
 license = "MIT"
 publish = false
 
+[features]
+# libsecp256k1, constant time. For anything holding long-lived keys: the maker, signer and CLI.
+default = ["secp256k1"]
+secp256k1 = ["musig2/secp256k1"]
+# Pure Rust, for the browser, where libsecp256k1 doesn't build here. k256 0.13 brings crypto-bigint 0.5, which isn't constant time
+# (RUSTSEC-2026-0387). The page signs only with a one-swap key, in the user's own browser.
+k256 = ["musig2/k256"]
+
 [dependencies]
 simplicityhl = "=0.9.0"
 serde_json = "1"
-# Pure Rust, so it builds for the browser without a C toolchain. Its adaptor code has no audit we could find.
-musig2 = { version = "=0.4.1", default-features = false, features = ["k256", "rand"] }
+# Its adaptor code has no audit we could find. The backend is chosen below.
+musig2 = { version = "=0.4.1", default-features = false, features = ["rand"] }
 rand = "0.8"

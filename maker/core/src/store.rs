@@ -82,8 +82,8 @@ pub struct ReportLine {
 pub struct Report {
     /// By day (none for swaps from before days were kept), direction and outcome.
     pub swaps: std::collections::BTreeMap<(Option<String>, String, String), ReportLine>,
-    /// By day: L-BTC sats and lamports.
-    pub costs: std::collections::BTreeMap<String, (u64, u64)>,
+    /// By day: L-BTC sats and lamports, less rent that came back.
+    pub costs: std::collections::BTreeMap<String, (u64, i64)>,
     pub open: u64,
     pub abandoned: u64,
 }
@@ -113,6 +113,7 @@ impl Store {
              CREATE TABLE IF NOT EXISTS details (swap BLOB PRIMARY KEY, body TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS seen_coins (swap BLOB PRIMARY KEY, txid TEXT NOT NULL, vout INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS finished (swap BLOB PRIMARY KEY, at_secs INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS closed (swap BLOB PRIMARY KEY);
              CREATE TABLE IF NOT EXISTS costs (
                  swap BLOB NOT NULL, kind TEXT NOT NULL, at_secs INTEGER NOT NULL,
                  lbtc_sats INTEGER NOT NULL, lamports INTEGER NOT NULL,
@@ -180,10 +181,34 @@ impl Store {
     }
 
     /// What one step cost, for the report. Counted once, because a retry sends the same step again.
-    pub fn record_cost(&self, swap: &[u8; 32], kind: &str, lbtc_sats: u64, lamports: u64) -> Result<()> {
+    /// Finished L→S swaps whose escrow, which we paid for, hasn't been closed for its rent yet.
+    pub fn escrows_to_close(&self) -> Result<Vec<Terms>> {
+        let mut query = self.conn.prepare(
+            "SELECT terms, state FROM swaps WHERE swap NOT IN (SELECT swap FROM closed)",
+        )?;
+        let rows = query.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = vec![];
+        for row in rows {
+            let (terms, state) = row?;
+            let terms: Terms = from_json(&terms)?;
+            if terms.direction == Direction::L2S && matches!(from_json::<State>(&state)?, State::Done { .. }) {
+                out.push(terms);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Its escrow is closed, or was never there.
+    pub fn mark_closed(&self, swap: &[u8; 32]) -> Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO closed (swap) VALUES (?1)", params![swap.as_slice()])?;
+        Ok(())
+    }
+
+    /// Negative lamports are money back, such as rent.
+    pub fn record_cost(&self, swap: &[u8; 32], kind: &str, lbtc_sats: u64, lamports: i64) -> Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO costs (swap, kind, at_secs, lbtc_sats, lamports) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![swap.as_slice(), kind, now_secs() as i64, lbtc_sats as i64, lamports as i64],
+            params![swap.as_slice(), kind, now_secs() as i64, lbtc_sats as i64, lamports],
         )?;
         Ok(())
     }
@@ -228,7 +253,7 @@ impl Store {
             let (at, sats, lamports) = row?;
             let line = report.costs.entry(day_of(at as u64)).or_default();
             line.0 += sats as u64;
-            line.1 += lamports as u64;
+            line.1 += lamports;
         }
         Ok(report)
     }

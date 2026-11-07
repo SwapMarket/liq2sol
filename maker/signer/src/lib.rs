@@ -74,6 +74,30 @@ pub struct Config {
     /// What each fee coin holds. Only the relay floor limits it: a claim needs about 26 sats, and a refund 29, at 0.1 sat/vB.
     #[serde(default = "default_fee_coin")]
     pub fee_coin_sats: u64,
+    /// Solana priority fees, in micro-lamports per compute unit. Without them a claim could miss its deadline on a busy network.
+    #[serde(default)]
+    pub priority: PriorityFees,
+    /// How long after settling, in slots, an escrow we paid for may be closed for its rent. The record holds the value a
+    /// taker revealed, which the engine reads to claim on Liquid, so it stays for about a day, long after that claim.
+    #[serde(default = "default_close_after")]
+    pub close_after_slots: u64,
+}
+
+fn default_close_after() -> u64 {
+    400_000
+}
+
+/// The page uses the same bounds, in `client/site/js/config.js`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PriorityFees {
+    pub floor: u64,
+    pub cap: u64,
+}
+
+impl Default for PriorityFees {
+    fn default() -> Self {
+        Self { floor: 1_000, cap: 2_000_000 }
+    }
 }
 
 fn default_fee_coin() -> u64 {
@@ -123,6 +147,10 @@ impl SwapTerms {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Call {
     Identity,
+    /// Close one of our settled escrows for its rent.
+    CloseEscrow {
+        lock_point: LockPoint,
+    },
     /// L→S: sign the taker's early refund, and never lock this swap.
     EarlyRefund {
         terms: SwapTerms,
@@ -320,6 +348,8 @@ pub struct Signer {
     swap_seed: [u8; 32],
     vault_owner: Option<Pubkey>,
     fee_coin_sats: u64,
+    priority: PriorityFees,
+    close_after_slots: u64,
     sessions: HashMap<[u8; 32], OpenSession>,
 }
 
@@ -390,6 +420,8 @@ impl Signer {
             swap_seed,
             vault_owner: cfg.vault_owner.as_deref().map(parse_pubkey).transpose()?,
             fee_coin_sats: cfg.fee_coin_sats,
+            priority: cfg.priority,
+            close_after_slots: cfg.close_after_slots,
             sessions: HashMap::new(),
         })
     }
@@ -531,7 +563,7 @@ impl Signer {
     }
 
     fn solana_reply(&self, ixs: &[solana_sdk::instruction::Instruction]) -> Outcome {
-        let tx = self.sol.build(ixs, &self.solana, &[])?;
+        let tx = self.sol.build_prioritized(ixs, &self.solana, &[], self.priority.floor, self.priority.cap)?;
         Ok(Reply::Solana(hex(&bincode::serialize(&tx).map_err(|e| e.to_string())?)))
     }
 
@@ -860,6 +892,23 @@ impl Signer {
         Ok(reply)
     }
 
+    /// Close an escrow we paid for, for its rent. Only once settled, and only well after, since its record is how the engine
+    /// learns the secret it claims with. Nothing else is at stake: the rent comes back to us, and the program checks the rest.
+    fn close_escrow(&self, lock_point: LockPoint) -> Outcome {
+        let address = escrow_pda(&self.escrow_initiator(), &solana_point(&lock_point)?);
+        let escrow = self.escrow(&address)?.ok_or("the escrow is not there")?;
+        if escrow.rent_payer != self.solana.pubkey() {
+            return Err("we didn't pay this escrow's rent".into());
+        }
+        if escrow.state == EscrowState::Open {
+            return Err("the escrow is still open".into());
+        }
+        if self.sol.slot()? < escrow.settled_slot.saturating_add(self.close_after_slots) {
+            return Err("too soon to close: its record is kept for a while after settling".into());
+        }
+        self.solana_reply(&[sol::close_ix(&self.solana.pubkey(), &address, &escrow)])
+    }
+
     fn extend(&self, taker_solana: &str, lock_point: LockPoint, new_deadline: u64) -> Outcome {
         let address = escrow_pda(&parse_pubkey(taker_solana)?, &solana_point(&lock_point)?);
         let escrow = self.escrow(&address)?.ok_or("the escrow is not there")?;
@@ -915,6 +964,7 @@ impl Signer {
             }
             Call::RefundLiquid { terms } => self.refund_liquid(terms),
             Call::RefundSolana { lock_point } => self.refund_solana(*lock_point),
+            Call::CloseEscrow { lock_point } => self.close_escrow(*lock_point),
             Call::DepositToVault { amount } => self.deposit_to_vault(*amount),
             Call::Extend { taker_solana, lock_point, new_deadline } => {
                 self.extend(taker_solana, *lock_point, *new_deadline)

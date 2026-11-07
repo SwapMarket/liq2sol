@@ -383,6 +383,12 @@ fn gx() -> Result<Scalar, Error> {
         .map_err(|e| Error::Keys(e.to_string()))
 }
 
+/// `1 / Gx mod n`, computed once, because the constant-time backend has no inverse. Gx is public, so nothing secret is involved.
+/// `gx_inverse_is_right` checks it.
+fn gx_inverse() -> Result<Scalar, Error> {
+    Scalar::from_hex("1dd887b3eaf153260a95e8b9fd31f60ac115d26ccbe1f572c0b8d7a6dec520fe").map_err(|e| Error::Keys(e.to_string()))
+}
+
 /// What a claim reveals on Solana for this secret: `s = t * Gx mod n`.
 pub fn solana_value(secret: &[u8; 32]) -> Result<[u8; 32], Error> {
     let t = Scalar::from_slice(secret).map_err(|e| Error::Keys(e.to_string()))?;
@@ -392,7 +398,7 @@ pub fn solana_value(secret: &[u8; 32]) -> Result<[u8; 32], Error> {
 /// The secret, from what a claim revealed on Solana: `t = s / Gx mod n`.
 pub fn secret_from_solana(revealed: &[u8; 32]) -> Result<[u8; 32], Error> {
     let s = Scalar::from_slice(revealed).map_err(|e| Error::Keys(e.to_string()))?;
-    Ok((s * gx()?.invert()).serialize())
+    Ok((s * gx_inverse()?).serialize())
 }
 
 /// The point as the Solana program stores it: x then y.

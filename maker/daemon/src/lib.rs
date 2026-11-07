@@ -18,7 +18,7 @@ use liq2sol_chain::esplora::{Esplora, Rpc};
 use liq2sol_chain::liquid::{
     exact_secret_coin, is_key_path_spend, published_signature, usdt, use_network, NetworkConfig, LIQUID_MAINNET_GENESIS,
 };
-use liq2sol_chain::sol::{ata, escrow_pda, Sol, MAINNET_GENESIS};
+use liq2sol_chain::sol::{self, ata, escrow_pda, Sol, MAINNET_GENESIS};
 use liq2sol_maker_core::engine::{
     self, Action, Direction, EscrowState, EscrowView, HtlcView, Outcome, Page, State, Terms, View,
 };
@@ -49,6 +49,9 @@ pub struct Config {
     pub regtest_assets: Option<(String, String)>,
     /// Quotes over Nostr. Without this, swaps only enter through `accept`.
     pub rfq: Option<rfq::RfqConfig>,
+    /// How often to look for settled escrows to close for their rent.
+    #[serde(default = "default_close_every")]
+    pub close_every_secs: u64,
 }
 
 /// The full terms of one swap, and how to reach its taker.
@@ -71,7 +74,7 @@ pub fn accept(store: &Store, terms: &Terms, details: &Details) -> Result<bool, S
     Ok(added)
 }
 
-/// Solana's base fee. The maker sets no priority fee, and rent on a lock's accounts comes back, so neither is a cost here.
+/// Solana's base fee. The priority fee is read from each transaction. Rent on a lock's accounts comes back, so it isn't a cost.
 const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
 
 /// Where a top-up's cost is filed: under its transaction, since it belongs to no swap.
@@ -102,8 +105,13 @@ pub struct Maker {
     last_sent: HashMap<([u8; 32], String), Instant>,
     last_paged: HashMap<([u8; 32], String), Instant>,
     last_top_up: Option<Instant>,
+    last_close: Option<Instant>,
     /// The way to takers. Without it no L→S swap can get its adapter signature, so none will lock.
     pub outbox: Option<rfq::Outbox>,
+}
+
+fn default_close_every() -> u64 {
+    600
 }
 
 /// How often to look at the fee coin pool. It is several chain reads, and a pool lasts many swaps.
@@ -169,6 +177,7 @@ impl Maker {
             last_sent: HashMap::new(),
             last_paged: HashMap::new(),
             last_top_up: None,
+            last_close: None,
             outbox: None,
         })
     }
@@ -377,12 +386,52 @@ impl Maker {
         };
         let tx: SolanaTx = bincode::deserialize(&unhex(&hex)?).map_err(|e| e.to_string())?;
         self.sol.send_signed(&tx).map(|_| ())?;
-        self.note_cost(swap, kind, 0, LAMPORTS_PER_SIGNATURE * tx.signatures.len() as u64);
+        self.note_cost(swap, kind, 0, (LAMPORTS_PER_SIGNATURE * tx.signatures.len() as u64 + sol::priority_lamports(&tx)) as i64);
         Ok(())
     }
 
     /// For the report, so a failure here must not stop a swap.
-    fn note_cost(&self, swap: &[u8; 32], kind: &str, lbtc_sats: u64, lamports: u64) {
+    /// Close settled escrows we paid for, and count the rent that comes back. The signer refuses any it shouldn't close yet.
+    fn close_settled_escrows(&mut self) {
+        if self.last_close.is_some_and(|t| t.elapsed() < Duration::from_secs(self.cfg.close_every_secs)) {
+            return;
+        }
+        self.last_close = Some(Instant::now());
+        let swaps = match self.store.escrows_to_close() {
+            Ok(swaps) => swaps,
+            Err(e) => return eprintln!("could not list escrows to close: {e}"),
+        };
+        for terms in swaps {
+            let id = terms.swap_id();
+            let address = match solana_point_of(&terms.lock_point.0) {
+                Ok(point) => escrow_pda(&self.identity.initiator, &point),
+                Err(_) => continue,
+            };
+            let rent = match self.sol.escrow(&address) {
+                Ok(None) => {
+                    let _ = self.store.mark_closed(&id);
+                    continue;
+                }
+                Ok(Some(_)) => self.sol.lamports(&address).unwrap_or(0),
+                Err(_) => continue,
+            };
+            match self.signer.call(&Call::CloseEscrow { lock_point: terms.lock_point }) {
+                Ok(reply @ Reply::Solana(_)) => match self.send_solana(&id, "CloseEscrow", reply) {
+                    Ok(()) => {
+                        self.note_cost(&id, "RentBack", 0, -(rent as i64));
+                        let _ = self.store.mark_closed(&id);
+                        println!("{} escrow closed, {rent} lamports of rent back", hex(&id));
+                    }
+                    Err(e) => eprintln!("{} could not close its escrow: {}", hex(&id), e.chars().take(200).collect::<String>()),
+                },
+                // Not yet: settled too recently, which is most of the time.
+                Ok(Reply::Failed(e)) if e.contains("too soon") => {}
+                other => eprintln!("{} could not close its escrow: {other:?}", hex(&id)),
+            }
+        }
+    }
+
+    fn note_cost(&self, swap: &[u8; 32], kind: &str, lbtc_sats: u64, lamports: i64) {
         if let Err(e) = self.store.record_cost(swap, kind, lbtc_sats, lamports) {
             eprintln!("could not record a cost: {e}");
         }
@@ -432,7 +481,12 @@ impl Maker {
             (Action::RequestAdaptor, Direction::L2S) => self.offer_claim(details),
             (Action::LockSolana { deadline_slot }, Direction::L2S) => {
                 let reply = self.signer.call(&Call::LockSolana { terms: t.clone(), deadline_slot: *deadline_slot })?;
-                self.send_solana(&id, &kind, reply)
+                self.send_solana(&id, &kind, reply)?;
+                // Ours until the escrow is closed for it, which the report counts as money back.
+                if let Ok(rent) = self.sol.escrow_rent() {
+                    self.note_cost(&id, "EscrowRent", 0, rent as i64);
+                }
+                Ok(())
             }
             (Action::LockLiquid | Action::RebroadcastLock, Direction::S2L) => {
                 // The signer returns the same bytes every time, so this can't pay twice. They are kept here too, so
@@ -554,6 +608,7 @@ impl Maker {
                 eprintln!("{}: {}", hex(&terms.swap_id()), e.chars().take(300).collect::<String>());
             }
         }
+        self.close_settled_escrows();
         Ok(())
     }
 }
@@ -590,7 +645,7 @@ pub fn report(config_path: &Path) -> Result<(), String> {
     println!("{:<12} {:<4} {:<10} {:>6} {:>14} {:>12}", "total", "", "", totals.0, money(totals.1), money(totals.2));
     println!();
     println!("{:<12} {:>12} {:>14}", "day (UTC)", "L-BTC sats", "SOL");
-    let mut spent = (0u64, 0u64);
+    let mut spent = (0u64, 0i64);
     for (day, (sats, lamports)) in &r.costs {
         println!("{day:<12} {sats:>12} {:>14.9}", *lamports as f64 / 1e9);
         spent = (spent.0 + sats, spent.1 + lamports);
@@ -598,8 +653,8 @@ pub fn report(config_path: &Path) -> Result<(), String> {
     println!("{:<12} {:>12} {:>14.9}", "total", spent.0, spent.1 as f64 / 1e9);
     println!();
     println!("{} open, {} never started.", r.open, r.abandoned);
-    println!("Spread is on completed swaps, in USDT. Costs are close estimates, by when they were sent: SOL from each transaction's signatures,");
-    println!("without rent, which comes back. Swaps are by when they finished. Swaps from before this was recorded show as earlier, with no costs.");
+    println!("Spread is on completed swaps, in USDT. Costs are close estimates, by when they were sent: SOL from each transaction's fees, and each");
+    println!("escrow's rent until closing it brings that back. Swaps are by when they finished. Swaps from before this was recorded show as earlier.");
     Ok(())
 }
 

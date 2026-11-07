@@ -1,0 +1,54 @@
+# Checks every Rust workspace's lockfile against the RustSec advisory database, and its licences and sources with cargo-deny, on each push and weekly, since advisories appear
+# for code that hasn't changed. Accepted advisories are listed, with reasons, in a workspace's .cargo/audit.toml.
+name: Audit dependencies
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_AUDIT_VERSION: 0.22.0
+  CARGO_DENY_VERSION: 0.18.3
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: [., cli, client/wasm, maker, programs, shared/chain, shared/rfq]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Reuse cargo-audit
+        id: tool
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ env.CARGO_AUDIT_VERSION }}
+      - name: Install cargo-audit
+        if: steps.tool.outputs.cache-hit != 'true'
+        run: cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+      - name: Audit ${{ matrix.workspace }}
+        working-directory: ${{ matrix.workspace }}
+        # Unmaintained crates are reported but don't fail the run. Known vulnerabilities do.
+        run: cargo audit
+      - name: Reuse cargo-deny
+        id: deny
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}-${{ env.CARGO_DENY_VERSION }}
+      - name: Install cargo-deny
+        if: steps.deny.outputs.cache-hit != 'true'
+        run: cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
+      - name: Check licences and sources in ${{ matrix.workspace }}
+        run: cargo deny --manifest-path "${{ matrix.workspace }}/Cargo.toml" check bans licenses sources --config "$GITHUB_WORKSPACE/deny.toml"

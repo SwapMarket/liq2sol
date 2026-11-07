@@ -10,7 +10,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-liq2sol-swapkey = { path = "../swapkey" }
+liq2sol-swapkey = { path = "../swapkey", default-features = false, features = ["k256"] }
 simplicityhl = "=0.9.0"
 wasm-bindgen = "0.2"
 rand = "0.8"

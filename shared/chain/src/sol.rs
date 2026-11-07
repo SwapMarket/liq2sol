@@ -23,6 +23,50 @@ const TOKEN_PROGRAM: Pubkey = anchor_spl::token::ID;
 
 pub type Res<T> = Result<T, String>;
 
+/// Solana's compute budget program, which sets a transaction's compute limit and its priority fee.
+pub const COMPUTE_BUDGET: Pubkey = Pubkey::from_str_const("ComputeBudget111111111111111111111111111111");
+
+/// The page's choice too: the 75th percentile of recent fees, kept between a floor and a cap, in micro-lamports per unit.
+pub fn priority_price(recent: &[u64], floor: u64, cap: u64) -> u64 {
+    let mut fees = recent.to_vec();
+    fees.sort_unstable();
+    let p75 = fees.get(fees.len() * 3 / 4).copied().unwrap_or(0);
+    p75.clamp(floor, cap.max(floor))
+}
+
+/// 30% above what a simulation used, for state that changes before it lands. Solana's default when nothing was reported.
+pub fn compute_limit(used: Option<u64>) -> u32 {
+    used.map_or(200_000, |u| (u.saturating_mul(13) / 10).saturating_add(2_000).min(1_400_000) as u32)
+}
+
+/// Set the compute limit, then the price per unit.
+pub fn budget_ixs(limit: u32, micro_lamports: u64) -> [Instruction; 2] {
+    let mut set_limit = vec![2];
+    set_limit.extend_from_slice(&limit.to_le_bytes());
+    let mut set_price = vec![3];
+    set_price.extend_from_slice(&micro_lamports.to_le_bytes());
+    [
+        Instruction { program_id: COMPUTE_BUDGET, accounts: vec![], data: set_limit },
+        Instruction { program_id: COMPUTE_BUDGET, accounts: vec![], data: set_price },
+    ]
+}
+
+/// The most a transaction's priority fee can cost, from its own compute budget instructions, in lamports, rounded up.
+pub fn priority_lamports(tx: &Transaction) -> u64 {
+    let (mut limit, mut price) = (200_000u128, 0u128);
+    for ix in &tx.message.instructions {
+        if tx.message.account_keys.get(ix.program_id_index as usize) != Some(&COMPUTE_BUDGET) {
+            continue;
+        }
+        match ix.data.split_first() {
+            Some((2, rest)) if rest.len() == 4 => limit = u32::from_le_bytes(rest.try_into().unwrap_or_default()).into(),
+            Some((3, rest)) if rest.len() == 8 => price = u64::from_le_bytes(rest.try_into().unwrap_or_default()).into(),
+            _ => {}
+        }
+    }
+    (limit * price).div_ceil(1_000_000) as u64
+}
+
 pub struct Sol {
     pub rpc: RpcClient,
 }
@@ -52,6 +96,13 @@ impl Sol {
         self.rpc.get_genesis_hash().map(|h| h.to_string()).map_err(|e| e.to_string())
     }
 
+    /// What an escrow account's rent comes to, from the cluster's current rate.
+    pub fn escrow_rent(&self) -> Res<u64> {
+        self.rpc
+            .get_minimum_balance_for_rent_exemption(8 + <Escrow as anchor_lang::Space>::INIT_SPACE)
+            .map_err(|e| e.to_string())
+    }
+
     pub fn escrow(&self, address: &Pubkey) -> Res<Option<Escrow>> {
         match self.rpc.get_account_with_commitment(address, CommitmentConfig::finalized()) {
             Ok(r) => match r.value {
@@ -79,6 +130,28 @@ impl Sol {
         let mut all: Vec<&Keypair> = vec![payer];
         all.extend_from_slice(signers);
         Ok(Transaction::new_signed_with_payer(ixs, Some(&payer.pubkey()), &all, hash))
+    }
+
+    /// With a compute limit just above what a simulation used, and a priority fee from what recently landed on the same
+    /// accounts, between `floor` and `cap` micro-lamports per unit. Fails if the simulation does, so nothing doomed is signed.
+    pub fn build_prioritized(&self, ixs: &[Instruction], payer: &Keypair, signers: &[&Keypair], floor: u64, cap: u64) -> Res<Transaction> {
+        let probe = self.build(ixs, payer, signers)?;
+        let sim = self.rpc.simulate_transaction(&probe).map_err(|e| e.to_string())?.value;
+        if let Some(e) = sim.err {
+            return Err(format!("simulation failed: {e:?}\n{:#?}", sim.logs));
+        }
+        let mut accounts: Vec<Pubkey> = ixs.iter().flat_map(|ix| ix.accounts.iter().filter(|m| m.is_writable).map(|m| m.pubkey)).collect();
+        accounts.sort();
+        accounts.dedup();
+        // Without recent fees, the floor still applies.
+        let recent: Vec<u64> = self
+            .rpc
+            .get_recent_prioritization_fees(&accounts)
+            .map(|fees| fees.iter().map(|f| f.prioritization_fee).collect())
+            .unwrap_or_default();
+        let mut all = budget_ixs(compute_limit(sim.units_consumed), priority_price(&recent, floor, cap)).to_vec();
+        all.extend_from_slice(ixs);
+        self.build(&all, payer, signers)
     }
 
     /// Send, confirm at `finalized`, and refuse to send anything that fails simulation.
@@ -359,6 +432,14 @@ pub fn release_ix(recipient: &Pubkey, address: &Pubkey, escrow: &Escrow) -> Inst
     }
     .to_account_metas(None);
     let data = solana_escrow::instruction::Release {}.data();
+    Instruction { program_id: solana_escrow::id(), accounts, data }
+}
+
+/// Close a settled escrow and return its rent to whoever paid it.
+pub fn close_ix(closer: &Pubkey, address: &Pubkey, escrow: &Escrow) -> Instruction {
+    let accounts =
+        solana_escrow::accounts::Close { closer: *closer, escrow: *address, rent_payer: escrow.rent_payer }.to_account_metas(None);
+    let data = solana_escrow::instruction::Close {}.data();
     Instruction { program_id: solana_escrow::id(), accounts, data }
 }
 

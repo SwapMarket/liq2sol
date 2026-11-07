@@ -144,13 +144,18 @@ recommended.
 Metrics are written to local logs, plus an optional outbound push. A second machine should run a dead-man's switch that
 pages if the daemon stops reporting, because downtime during a reveal window is what costs money.
 
+## 6b. Solana priority fees
+
+Every Solana transaction the signer builds is simulated first. Its compute limit is set 30% above what the simulation used, and its price is the 75th percentile of recent fees on the accounts it writes, between `priority.floor` and `priority.cap` micro-lamports per unit in the signer's config (defaults 1,000 and 2,000,000, as the page uses). A transaction that fails simulation isn't signed. The earnings report counts the priority fee.
+
 ## 6a. Earnings report
 
 `liq2sol-maker report <config>` prints each day's swaps, volume and USDT spread by direction and outcome, and the L-BTC and SOL the maker sent. Liquid costs come from each transaction's fee output, plus the fee coin given to the taker on S→L. Solana costs are 5,000 lamports per signature, without rent, which comes back. Each step counts once however often it is retried. Costs are recorded when a transaction is accepted for sending, so one that never lands is still counted, and these figures are close estimates. Wallet balances have the final word.
 
 ## 7. Dependencies and operations
 
-- Dependencies are pinned and minimal, with `cargo-deny` and `cargo-audit` in CI.
+- Dependencies are pinned and minimal. `.github/workflows/audit.yml` runs `cargo-audit` on every workspace, on each push and weekly, and `cargo-deny` for licences and sources (`deny.toml`). The only accepted advisories are in `programs/`, with their reasons in `programs/.cargo/audit.toml`.
+- MuSig2 signing uses libsecp256k1, not `k256`: `k256` 0.13 pulls in `crypto-bigint` 0.5, which has non-constant-time operations (RUSTSEC-2026-0387).
 - `#![forbid(unsafe_code)]` in the daemon's own crates.
 - Runs under systemd with sandboxing: `NoNewPrivileges`, `ProtectSystem=strict`, a private `/tmp`, syscall filter.
 - Parsers for Nostr, Esplora and RPC data are fuzzed, because all of it is attacker-reachable input.

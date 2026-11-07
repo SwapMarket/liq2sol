@@ -802,6 +802,22 @@ function toast(text) {
   toast.timer = setTimeout(() => { el.hidden = true; }, 2500);
 }
 
+// A long address may only break between groups of 8, with invisible break points, so the last line is never a lone character, and
+// selecting or copying it gives the address unchanged.
+function addressText(text) {
+  if (text.length < 24 || /\s/.test(text)) return [text];
+  const groups = text.match(/.{1,8}/g);
+  // A short remainder joins the group before it.
+  if (groups.at(-1).length < 4) {
+    const last = groups.pop();
+    groups[groups.length - 1] += last;
+  }
+  const parts = [];
+  for (const g of groups) parts.push(g, h('wbr'));
+  parts.pop();
+  return parts;
+}
+
 // A value to pay. It copies just the value, without the asset's name.
 function copyable(cls, shown, value, name) {
   return h('button', {
@@ -816,7 +832,7 @@ function copyable(cls, shown, value, name) {
         fail(new Error(`Could not copy the ${name.toLowerCase()}, so please copy it by hand.`));
       }
     },
-  }, shown);
+  }, addressText(shown));
 }
 
 async function qrView(text) {
@@ -841,22 +857,52 @@ function act(id, fn) {
   };
 }
 
-function refundLiquidView(s) {
-  const input = h('input', { class: 'input refund-to', placeholder: 'tlq1… confidential address' });
+// What was typed for each swap's refund. The page redraws every few seconds, and a new input would otherwise come back empty.
+const refundTo = new Map();
+
+function refundAddressInput(s) {
+  return h('input', {
+    class: 'input refund-to', placeholder: 'tlq1… confidential address', value: refundTo.get(s.id) ?? '',
+    oninput: (e) => refundTo.set(s.id, e.target.value),
+  });
+}
+
+// Whether the fee coin has arrived, so it's clear when a refund can go.
+function feeCoinStatus(s) {
+  const line = h('p', { class: 'note fee-status' }, 'Checking for the fee coin…');
+  esplora[0].readCoins(s.info.plain_fee_address, s.info.fee_script, s.secrets.blinding_key).then((coins) => {
+    const fee = coins.filter((c) => c.is_lbtc && BigInt(c.amount) >= BigInt(NETWORK.refundFeeCoinSats));
+    const ready = fee.find((c) => c.confirmations >= 1);
+    line.textContent = ready ? `Fee coin received: ${ready.amount} sats, confirmed. Ready.`
+      : fee.length ? `Fee coin seen: ${fee[0].amount} sats. Waiting for a confirmation, about a minute.`
+        : 'No fee coin yet.';
+    line.classList.toggle('good-text', !!ready);
+  }).catch(() => { line.textContent = 'Couldn’t check for the fee coin just now.'; });
+  return line;
+}
+
+function feeCoinParts(s) {
   return [
-    h('p', { class: 'note' }, `The refund needs a fee coin. From a Liquid wallet, send at least ${NETWORK.refundFeeCoinSats} sats (${(NETWORK.refundFeeCoinSats / 1e8).toFixed(8)} L-BTC) to this address. If your wallet refuses that, send its minimum: Aqua's is 100 sats. All of it pays the network fee, so don't send more than you need to.`),
-    h('div', { class: 'addr fee-address' }, s.info.fee_address),
+    h('p', { class: 'note' }, `This needs a fee coin. From a Liquid wallet, send at least ${NETWORK.refundFeeCoinSats} sats (${(NETWORK.refundFeeCoinSats / 1e8).toFixed(8)} L-BTC) to this address, and wait for a confirmation. Aqua won't send less than 100 sats, which works too:`),
+    copyable('fee-address', s.info.fee_address, s.info.fee_address, 'Address'),
+    feeCoinStatus(s),
+  ];
+}
+
+function refundLiquidView(s) {
+  const input = refundAddressInput(s);
+  return [
+    ...feeCoinParts(s),
     h('label', { class: 'field' }, h('span', {}, 'Where to send your refund'), input),
     h('button', { class: 'btn refund', onclick: act(s.id, (fresh) => engine.refundOnLiquid(fresh, input.value.trim())) }, 'Refund'),
   ];
 }
 
 function earlyRefundView(s) {
-  const input = h('input', { class: 'input refund-to', placeholder: 'tlq1… confidential address' });
+  const input = refundAddressInput(s);
   return [
     h('p', { class: 'note' }, 'If the maker hasn’t locked, it can agree to refund you now, instead of after the timed refund. If it says no or doesn’t answer, nothing changes.'),
-    h('p', { class: 'note' }, `This needs a fee coin. From a Liquid wallet, send at least ${NETWORK.refundFeeCoinSats} sats (${(NETWORK.refundFeeCoinSats / 1e8).toFixed(8)} L-BTC) to this address, and wait for a confirmation:`),
-    h('div', { class: 'addr fee-address' }, s.info.fee_address),
+    ...feeCoinParts(s),
     h('label', { class: 'field' }, h('span', {}, 'Where to send your refund'), input),
     h('button', { class: 'btn early-go', onclick: act(s.id, (fresh) => engine.askEarlyRefund(fresh, input.value.trim())) }, 'Ask the maker'),
     h('button', { class: 'btn quiet', onclick: act(s.id, (fresh) => engine.set(fresh, { state: 'await_maker', status: '' })) }, 'Keep waiting for the maker'),
@@ -1052,6 +1098,48 @@ function explorerLinks(s) {
   return box;
 }
 
+// What each swap's escrow still holds in rent for this taker. It can be reclaimed once the maker has collected.
+const rentCache = new Map();
+
+async function unclaimedRent(s) {
+  if (s.direction !== 'S2L' || !['done', 'refunded'].includes(s.state)) return 0n;
+  // Nothing yet usually means the maker hasn't collected, which settles the escrow, so look again sooner.
+  const cached = rentCache.get(s.id);
+  if (cached && Date.now() - cached.at < (cached.lamports > 0n ? 60_000 : 10_000)) return cached.lamports;
+  const e = await engine.closable(s);
+  const lamports = e ? await solana.lamports(s.escrow_address) : 0n;
+  rentCache.set(s.id, { lamports, at: Date.now() });
+  return lamports;
+}
+
+const sol = (lamports) => `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
+
+// S→L locks pay about 0.002 SOL of rent into the escrow record. Once settled, the wallet that paid can have it back.
+function reclaimButton(s) {
+  const box = h('div', { class: 'reclaim-box' });
+  if (s.direction !== 'S2L' || !['done', 'refunded'].includes(s.state)) return box;
+  engine.closable(s).then((e) => {
+    if (!e) return;
+    box.append(h('button', {
+      class: 'btn quiet reclaim',
+      onclick: async (ev) => {
+        ev.target.disabled = true;
+        try {
+          if (!wallet) await connectWallet();
+          await engine.reclaimRent(s);
+          rentCache.set(s.id, { lamports: 0n, at: Date.now() });
+          toast('Rent reclaimed.');
+          box.replaceChildren();
+        } catch (err) {
+          fail(err);
+          ev.target.disabled = false;
+        }
+      },
+    }, 'Reclaim the rent'));
+  }).catch(() => {});
+  return box;
+}
+
 // Which history rows are open, so the page refreshing itself doesn't close them.
 const expanded = new Set();
 
@@ -1059,15 +1147,26 @@ function historyView() {
   const all = Object.values(loadSwaps()).sort((a, b) => b.created_at - a.created_at);
   if (!all.length) return h('div', { class: 'card' }, h('h2', {}, 'History'), h('p', { class: 'sub' }, 'Swaps from this browser appear here.'));
   const fact = (name, value) => h('div', {}, h('dt', {}, name), h('dd', {}, value));
+  const rents = [];
+  const total = h('p', { class: 'note history-rent-total', hidden: true });
   const items = all.map((s) => {
     const [from, to] = names[s.direction];
     const vetted = vettedMaker(NETWORK.name, s.maker);
+    const rentNote = h('span', { class: 'history-rent', hidden: true });
+    rents.push(unclaimedRent(s).then((lamports) => {
+      if (lamports > 0n) {
+        rentNote.textContent = `${sol(lamports)} rent to reclaim`;
+        rentNote.hidden = false;
+      }
+      return lamports;
+    }).catch(() => 0n));
     const details = h('dl', { class: 'facts history-details', hidden: !expanded.has(s.id) },
       fact('Created', new Date(s.created_at * 1000).toLocaleString()),
       fact('Price', h('span', { class: 'history-price', title: `${from} paid for each ${to} received` }, swapPrice(s))),
       fact('Maker', h('span', { class: 'mono history-maker', title: s.maker }, short(s.maker),
         vetted && h('span', { class: 'vetted', title: 'Vetted by SwapMarket', 'aria-label': 'Vetted by SwapMarket' }, ' ✓'))),
       fact('Explorers', explorerLinks(s)),
+      reclaimButton(s),
       h('div', { class: 'history-actions' },
         h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = s.order ?? s.id; location.hash = '#swap'; render(); } }, 'Open'),
         FINISHED.includes(s.state) && h('button', { class: 'btn quiet', onclick: () => { removeSwap(s.id); expanded.delete(s.id); render(); } }, 'Forget')));
@@ -1081,15 +1180,23 @@ function historyView() {
       },
     },
     h('span', { class: 'history-swap' },
+      rentNote,
       h('span', { class: 'nowrap' }, `${show(s.direction === 'L2S' ? BigInt(s.terms.liquid_amount) / 100n : s.terms.solana_amount)} ${from}`), ' ',
       h('span', { class: 'nowrap' }, `→ ${to}`)),
     h('span', { class: 'mono history-state' }, s.state),
     h('span', { class: 'history-date' }, new Date(s.created_at * 1000).toLocaleDateString(undefined, { dateStyle: 'short' })));
     return h('div', { class: 'history-item' }, summary, details);
   });
-  return h('div', { class: 'list history' },
+  Promise.all(rents).then((all) => {
+    const sum = all.reduce((a, b) => a + b, 0n);
+    if (sum > 0n) {
+      total.textContent = `${sol(sum)} of rent can come back to your wallet. Open a swap marked below to reclaim it.`;
+      total.hidden = false;
+    }
+  });
+  return [total, h('div', { class: 'list history' },
     h('div', { class: 'history-head' }, ['Swap', 'Status', 'Date'].map((t) => h('span', {}, t))),
-    items);
+    items)];
 }
 
 // Support material, Boltz-style: copy it, save it, or clear it. It only leaves this browser if the user sends it.
@@ -1249,7 +1356,7 @@ function render() {
   if (tab === 'rescue') {
     view.append(rescueView());
   } else if (tab === 'history') {
-    view.append(historyView());
+    view.append(...[historyView()].flat());
   } else if (tab === 'faucet' && NETWORK.faucet) {
     view.append(faucetView());
   } else if (ui.openOrder && orderOf(ui.openOrder).length) {

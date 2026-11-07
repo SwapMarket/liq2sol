@@ -79,6 +79,8 @@ fn instructions_match() {
 
     let refund = refund_ix(&program, &to_key(&address), &to_key(&e.refund_token), &to_key(&c));
     assert_eq!(refund, native(&sol::refund_ix(&address, &e)));
+    let close = close_ix(&program, &to_key(&c), &to_key(&address), &to_key(&e.rent_payer));
+    assert_eq!(close, native(&sol::close_ix(&c, &address, &e)));
 }
 
 #[test]

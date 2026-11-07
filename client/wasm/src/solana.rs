@@ -177,6 +177,11 @@ pub fn claim_ix(
     }
 }
 
+/// Close a settled escrow, returning its rent to whoever paid it.
+pub fn close_ix(program: &Key, closer: &Key, address: &Key, rent_payer: &Key) -> Ix {
+    Ix { program: *program, accounts: vec![Meta { key: *closer, signer: true, writable: false }, w(*address), w(*rent_payer)], data: anchor_data("close") }
+}
+
 pub fn refund_ix(program: &Key, address: &Key, refund_token: &Key, rent_payer: &Key) -> Ix {
     Ix {
         program: *program,

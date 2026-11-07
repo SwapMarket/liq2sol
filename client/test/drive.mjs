@@ -408,6 +408,14 @@ async function l2s() {
   await page.locator('.pay-address').waitFor();
   await page.screenshot({ path: path.join(shots, 'pay.png') });
   const address = await page.locator('.pay-address').innerText();
+  if ((await page.locator('.pay-address').evaluate((e) => e.textContent)) !== address.replace(/\s/g, '')) throw new Error('the address shows altered');
+  const lastLine = await page.locator('.pay-address').evaluate((e) => {
+    const r = document.createRange();
+    r.selectNodeContents(e);
+    const rects = [...r.getClientRects()];
+    return rects.at(-1).width / rects[0].width;
+  });
+  if (lastLine < 0.1) throw new Error('a lone character on the address\'s last line');
   for (const [cls, name] of [['.pay-amount', 'Amount'], ['.pay-address', 'Address']]) {
     await page.locator(cls).click();
     await page.locator('#toast', { hasText: `${name} copied` }).waitFor({ timeout: 2000 });
@@ -473,6 +481,24 @@ async function s2l() {
   const got = await receivedAt(to);
   if (got !== Number(swap.terms.liquid_amount)) throw new Error(`received ${got} units, expected ${swap.terms.liquid_amount}`);
   step('the wallet unblinded exactly the agreed amount at the address it gave');
+  // The lock's rent comes back to the wallet that paid it, once the maker has claimed.
+  const rentBefore = (await solanaRpc('getBalance', [ownerAddress, { commitment: 'confirmed' }])).value;
+  await page.locator('.tab[data-tab="history"]').click();
+  const item = page.locator('.history-item').first();
+  // The maker collects on Solana after the page's Liquid claim, and only that settles the escrow.
+  await item.locator('.history-rent', { hasText: 'SOL rent to reclaim' }).waitFor({ timeout: 120000 });
+  await page.locator('.history-rent-total', { hasText: 'SOL of rent can come back' }).waitFor({ timeout: 10000 });
+  await item.locator('.history-row').click();
+  await item.locator('.reclaim').click({ timeout: 30000 });
+  await page.locator('#toast', { hasText: 'Rent reclaimed' }).waitFor({ timeout: 30000 });
+  for (let i = 0; i < 40 && (await solanaRpc('getAccountInfo', [swap.escrow_address, { commitment: 'confirmed', encoding: 'base64' }])).value; i++) await new Promise((r) => setTimeout(r, 500));
+  if ((await solanaRpc('getAccountInfo', [swap.escrow_address, { commitment: 'confirmed', encoding: 'base64' }])).value) throw new Error('the escrow is still there');
+  const rentAfter = (await solanaRpc('getBalance', [ownerAddress, { commitment: 'confirmed' }])).value;
+  if (rentAfter <= rentBefore) throw new Error(`no rent came back: ${rentBefore} -> ${rentAfter}`);
+  await new Promise((r) => setTimeout(r, 6000));
+  if (await item.locator('.history-rent').isVisible() || await page.locator('.history-rent-total').isVisible()) throw new Error('rent still shown after reclaiming it');
+  await page.locator('.tab[data-tab="swap"]').click();
+  step('the lock\'s rent comes back to the wallet from the history');
   await checkFinishedRestore(file);
   step('restoring a finished swap from its file shows it finished, and never offers to lock again');
   await checkClosedLock(file);
@@ -656,7 +682,10 @@ async function pageLoading() {
   if (await page.locator('#amount').count()) throw new Error('the form appeared before it could work');
   const link = page.locator('#build');
   if ((await link.getAttribute('target')) !== '_blank') throw new Error('the build link stays in this tab');
-  if (!(await link.getAttribute('href')).includes('/commit/')) throw new Error('the build link isn\'t to a commit');
+  // A deploy stamps the commit. This copy isn't stamped, so it should say so, and link to the repo.
+  const label = await link.innerText();
+  const href = await link.getAttribute('href');
+  if (!(label === 'local' ? href === 'https://github.com/SwapMarket/liq2sol' : href.endsWith(`/commit/${label}`))) throw new Error(`the build link: ${label} ${href}`);
   release();
   await page.locator('#amount').waitFor({ timeout: 15000 });
   if (await page.locator('.page-loading').count()) throw new Error('the placeholder stayed');
@@ -833,8 +862,13 @@ async function cancelling() {
   await page.unroute('**/address/*/txs');
   step('a swap the chain shows as paid can\'t be cancelled, nor one the page can\'t check');
 
-  await confirm(page);
-  await page.locator('.swap-card[data-state="fund"]').waitFor({ state: 'detached', timeout: 10000 });
+  // A request already in flight can still meet the failure the test just lifted, so try again as a person would.
+  for (let i = 0; i < 3 && await page.locator('.swap-card[data-state="fund"]').count(); i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    await confirm(page);
+    await page.locator('.swap-card[data-state="fund"]').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
+  }
+  await page.locator('.swap-card[data-state="fund"]').waitFor({ state: 'detached', timeout: 1000 });
   await page.locator('.tab[data-tab="history"]').click();
   const row = page.locator('.history-item', { hasText: 'cancelled' });
   await row.waitFor({ timeout: 5000 });
@@ -893,6 +927,14 @@ async function early() {
   await walletCli('generatetoaddress', '1', await walletCli('getnewaddress'));
   const to = await walletCli('getnewaddress');
   await page.locator('.refund-to').fill(to);
+  await page.locator('.fee-address').click();
+  await page.locator('#toast', { hasText: 'Address copied' }).waitFor({ timeout: 2000 });
+  if ((await page.evaluate(() => navigator.clipboard.readText())) !== fee) throw new Error('the fee address copied wrong');
+  await page.locator('.fee-status', { hasText: 'Ready' }).waitFor({ timeout: 60000 });
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await new Promise((r) => setTimeout(r, 2500));
+  if ((await page.locator('.refund-to').inputValue()) !== to) throw new Error('the refund address was lost when the page redrew');
+  step('the refund form keeps the address through redraws, copies the fee address, and says when the fee coin is ready');
   holding = false;
   // The fee coin can take a moment to show up.
   for (let i = 0; i < 20; i++) {
@@ -915,7 +957,9 @@ async function early() {
 
 async function solanaRpc(method, params) {
   const res = await fetch(env.SOLANA_RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
-  return (await res.json()).result;
+  const body = await res.json();
+  if (body.error) throw new Error(`${method}(${JSON.stringify(params).slice(0, 120)}): ${JSON.stringify(body.error).slice(0, 200)}`);
+  return body.result;
 }
 
 function freshWallet() {

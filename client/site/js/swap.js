@@ -380,6 +380,27 @@ export class Engine {
     this.set(s, { state: 'refunding', status: 'Refund sent.' });
   }
 
+  // ---- Rent back, once a swap we locked for is settled ----
+
+  // The escrow if it is settled and this wallet paid its rent, which the program gives back to the payer.
+  async closable(s) {
+    if (s.direction !== 'S2L' || !s.escrow_address) return null;
+    const e = await this.solana.escrow(s.escrow_address, 'confirmed');
+    return e && e.state !== 'Open' && e.rent_payer === s.solana_owner ? e : null;
+  }
+
+  async reclaimRent(s) {
+    const wallet = this.getWallet();
+    if (!wallet || wallet.address !== s.solana_owner) throw new Error('Connect the Solana wallet that locked this swap.');
+    const e = await this.closable(s);
+    if (!e) throw new Error('There is no rent to reclaim for this swap.');
+    const fee = await this.solana.priorityFee([s.escrow_address], NETWORK.priorityFloor, NETWORK.priorityCap);
+    const unsigned = W.build_close_tx(NETWORK.programId, wallet.address, s.escrow_address, e.rent_payer, await this.solana.blockhash(), BigInt(fee));
+    const signed = await wallet.sign(hexToBytes(unsigned));
+    await this.solana.simulate(signed);
+    await this.solana.send(signed);
+  }
+
   // ---- L to S refund ----
 
   async tickRefund(s) {

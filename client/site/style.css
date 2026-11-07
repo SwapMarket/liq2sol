@@ -29,6 +29,9 @@ nav { background: var(--card); border-bottom: 1px solid rgb(255 255 255 / 8%); }
 .nav-inner { max-width: 960px; margin: 0 auto; padding: 8px 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 0; justify-content: center; }
 .logo { font-size: 1.45rem; font-style: italic; font-weight: 800; color: var(--primary); text-decoration: none; margin-right: 28px; letter-spacing: -.01em; }
 .logo b { color: #f7931a; font-weight: 800; }
+/* SwapMarket's icon, from SwapMarket/swapmarket.github.io public/sm_icon.svg. */
+.logo { display: inline-flex; align-items: center; }
+.logo-icon { width: 30px; height: 30px; margin-right: 8px; }
 .tab { color: var(--text); text-decoration: none; padding: 2px 14px; border-left: 1px solid rgb(255 255 255 / 15%); }
 #collapse { display: flex; align-items: center; flex-wrap: wrap; }
 .tab:hover, .tab.on { color: var(--primary); }
@@ -166,6 +169,9 @@ footer p { margin: 4px 0; }
 .skeleton.short { width: 55%; height: 22px; }
 
 .copy { display: block; width: 100%; color: inherit; text-align: left; cursor: pointer; }
+/* Long addresses break only where addressText allows, between groups of 8. */
+.addr.copy { overflow-wrap: normal; word-break: normal; text-wrap: balance; }
+.good-text { color: var(--ok); }
 .copy:hover, .copy:focus-visible { outline: 1px solid var(--primary); }
 .copy::after { content: "⧉"; float: right; margin-left: 8px; color: var(--dim); }
 #toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 10; padding: 8px 16px; border-radius: 12px; background: var(--ok-bg); color: #d3f5d3; font-size: .9rem; box-shadow: 0 4px 16px rgb(0 0 0 / 40%); }
@@ -215,3 +221,5 @@ body.menu-open { overflow: hidden; }
 .recovery-paste { resize: vertical; font-family: ui-monospace, "Noto Mono", Menlo, monospace; font-size: .78rem; box-sizing: border-box; }
 .paste-box { margin-top: 10px; }
 .nowrap { white-space: nowrap; }
+.history-rent { display: block; font-size: .74rem; color: var(--primary); }
+.history-rent-total { max-width: 480px; margin: 0 auto 10px; text-align: center; color: var(--primary); }

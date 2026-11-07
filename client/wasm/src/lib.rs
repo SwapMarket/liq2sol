@@ -663,6 +663,7 @@ pub fn parse_escrow(data_hex: &str) -> Result<String, String> {
 }
 
 const LOCK_UNITS: u32 = 120_000;
+const CLOSE_UNITS: u32 = 30_000;
 const CLAIM_UNITS: u32 = 100_000;
 const REFUND_UNITS: u32 = 60_000;
 
@@ -740,6 +741,14 @@ pub fn build_claim_tx(
 
 /// S→L: take back our funds after the deadline. Anyone may send this, and it can only pay the initiator.
 #[allow(clippy::too_many_arguments)]
+/// Close a settled escrow for its rent, paid and signed by the wallet that paid the rent.
+#[wasm_bindgen]
+pub fn build_close_tx(program: &str, closer: &str, escrow: &str, rent_payer: &str, blockhash: &str, micro_lamports: u64) -> Result<String, String> {
+    let payer = solana::key(closer)?;
+    let ix = solana::close_ix(&solana::key(program)?, &payer, &solana::key(escrow)?, &solana::key(rent_payer)?);
+    finish_tx(&payer, vec![ix], CLOSE_UNITS, micro_lamports, blockhash)
+}
+
 #[wasm_bindgen]
 pub fn build_refund_tx(
     program: &str,

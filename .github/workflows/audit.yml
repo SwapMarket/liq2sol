@@ -39,8 +39,10 @@ jobs:
         run: cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
       - name: Audit ${{ matrix.workspace }}
         working-directory: ${{ matrix.workspace }}
-        # Unmaintained crates are reported but don't fail the run. Known vulnerabilities do.
-        run: cargo audit
+        # Unmaintained crates are reported but don't fail the run. Known vulnerabilities do. The root workspace holds
+        # contracts/swapkey-wasm, a browser build that uses k256 as the page does (client/wasm/.cargo/audit.toml says why).
+        run: |
+          if [ "${{ matrix.workspace }}" = "." ]; then cargo audit --ignore RUSTSEC-2026-0387; else cargo audit; fi
       - name: Reuse cargo-deny
         id: deny
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

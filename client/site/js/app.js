@@ -486,6 +486,21 @@ const toInput = h('input', {
   oninput: (e) => { ui.to = e.target.value; updateForm(); },
 });
 
+// A plain down arrow, as swapmarket.github.io's direction button has.
+function arrowDown() {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', 'M8 15.5 15.5 8H11V.5H5V8H.5z');
+  path.setAttribute('fill', 'currentColor');
+  svg.append(path);
+  return svg;
+}
+
 // The form stays on the page too, and updateForm changes only what differs.
 const form = {
   receive: h('input', { class: 'amount', readOnly: true, placeholder: '0' }),
@@ -509,7 +524,7 @@ form.el = h('div', { class: 'card' },
   h('p', { class: 'sub' }, 'Trustless and confidential. No server holds anything.'),
   form.links,
   h('div', { class: 'row' }, form.fromCoin, amountInput, clearAmount),
-  h('button', { class: 'flip', title: 'Swap direction', 'aria-label': 'Swap direction', onclick: () => { ui.direction = ui.direction === 'L2S' ? 'S2L' : 'L2S'; ui.selected = null; updateForm(); } }, '⇅'),
+  h('button', { class: 'flip', title: 'Swap direction', 'aria-label': 'Swap direction', onclick: () => { ui.direction = ui.direction === 'L2S' ? 'S2L' : 'L2S'; ui.selected = null; updateForm(); } }, arrowDown()),
   h('div', { class: 'row to' }, form.toCoin, form.receive),
   form.address, form.wallet, form.facts, form.unfilled, form.go);
 

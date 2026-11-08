@@ -18,9 +18,9 @@ use liq2sol_chain::esplora::{Esplora, Rpc};
 use liq2sol_chain::liquid::{
     exact_secret_coin, is_key_path_spend, published_signature, usdt, use_network, NetworkConfig, LIQUID_MAINNET_GENESIS,
 };
-use liq2sol_chain::sol::{self, ata, escrow_pda, Sol, MAINNET_GENESIS};
+use liq2sol_chain::sol::{self, ata, escrow_pda, Settled, Sol, MAINNET_GENESIS};
 use liq2sol_maker_core::engine::{
-    self, Action, Direction, EscrowState, EscrowView, HtlcView, Outcome, Page, State, Terms, View,
+    self, Absence, Action, Closed, Direction, EscrowState, EscrowView, HtlcView, Outcome, Page, State, Terms, View,
 };
 use liq2sol_maker_core::store::Store;
 use liq2sol_maker_core::LockPoint;
@@ -317,17 +317,21 @@ impl Maker {
         })
     }
 
-    fn escrow_view(&self, swap: &SwapTerms) -> Result<Option<EscrowView>, String> {
-        let Some(e) = self.sol.escrow(&self.escrow_address(swap)?)? else {
-            return Ok(None);
+    /// The escrow, and while claiming, how it was settled if it is gone.
+    fn escrow_view(&self, id: &[u8; 32], swap: &SwapTerms, claiming: bool) -> Result<(Option<EscrowView>, Option<Closed>), String> {
+        let address = self.escrow_address(swap)?;
+        let (read_at, escrow) = self.sol.escrow_at(&address)?;
+        let Some(e) = escrow else {
+            return Ok((None, if claiming { self.closed(id, &address, read_at)? } else { None }));
         };
+        self.store.see_escrow(id, read_at, e.deadline_slot).map_err(|e| e.to_string())?;
         let recipient_ok = match swap.direction {
             Direction::L2S => Some(e.recipient) == Pubkey::from_str(&swap.taker_solana).ok(),
             Direction::S2L => e.recipient == self.identity.solana,
         };
         let point = solana_point_of(&swap.lock_point.0).map_err(|e| e.to_string())?;
         let restarted = e.close_on_restart && self.sol.last_restart_slot()? > e.created_slot;
-        Ok(Some(EscrowView {
+        Ok((Some(EscrowView {
             state: match e.state {
                 solana_escrow::state::EscrowState::Open => EscrowState::Open,
                 solana_escrow::state::EscrowState::Claimed => EscrowState::Claimed,
@@ -341,7 +345,26 @@ impl Maker {
             extended: e.extended,
             restarted,
             revealed: e.revealed,
-        }))
+        }), None))
+    }
+
+    /// S→L: the taker pays the escrow's rent, so it may close the escrow as soon as it settles, before we read the claim.
+    fn closed(&self, id: &[u8; 32], address: &Pubkey, read_at: u64) -> Result<Option<Closed>, String> {
+        let seen = match engine::absence(self.store.escrow_seen(id).map_err(|e| e.to_string())?, read_at) {
+            Absence::Behind => return Ok(None),
+            Absence::BeforeDeadline => return Ok(Some(Closed::BeforeDeadline)),
+            Absence::AskHistory { seen } => seen,
+        };
+        // A refund was possible, so only the escrow's history can tell.
+        Ok(match self.sol.settled_by(address) {
+            Ok(Some(Settled::Claimed)) => Some(Closed::Claimed),
+            Ok(Some(Settled::Refunded)) => Some(Closed::Refunded),
+            // We never release after locking, so this needs a human too.
+            Ok(Some(Settled::Released)) => Some(Closed::Unknown),
+            Ok(None) | Err(_) if seen => Some(Closed::Unknown),
+            // Never seen here, perhaps from before this was recorded: it may not exist yet, so keep claiming.
+            Ok(None) | Err(_) => None,
+        })
     }
 
     fn view(
@@ -351,12 +374,14 @@ impl Maker {
         tip: u32,
         tip_age: u64,
         rollback: bool,
+        claiming: bool,
     ) -> Result<View, String> {
         let slot = self.sol.slot()?;
         if slot != self.last_slot.0 {
             self.last_slot = (slot, Instant::now());
         }
         let (htlc, coin_disagrees) = self.coin_view(terms, swap, tip)?;
+        let (escrow, escrow_closed) = self.escrow_view(&terms.swap_id(), swap, claiming)?;
         let adaptor_held = match self.signer.call(&Call::AdaptorHeld { swap_id: terms.swap_id() })? {
             Reply::Held(held) => held,
             reply => return Err(format!("signer: {reply:?}")),
@@ -375,7 +400,8 @@ impl Maker {
             maker_token_ok: self.sol.token_usable(&ata(&self.identity.solana))?,
             adaptor_held,
             htlc,
-            escrow: self.escrow_view(swap)?,
+            escrow,
+            escrow_closed,
             open_exposure: self.open_exposure(terms)?,
         })
     }
@@ -549,7 +575,8 @@ impl Maker {
         let hash = terms.swap_id();
         let body = self.store.details(&hash).map_err(|e| e.to_string())?.ok_or("a swap with no details")?;
         let details: Details = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        let view = self.view(terms, &details.terms, tip, tip_age, rollback)?;
+        let claiming = terms.direction == Direction::S2L && matches!(state, State::Claiming { .. });
+        let view = self.view(terms, &details.terms, tip, tip_age, rollback, claiming)?;
         let (next, actions) = engine::step(&self.cfg.engine, terms, state, &view);
 
         // Hold back repeats of an action already sent recently. A first send always goes out.

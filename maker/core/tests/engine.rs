@@ -44,6 +44,7 @@ fn view() -> View {
         adaptor_held: true,
         htlc: HtlcView::Absent,
         escrow: None,
+        escrow_closed: None,
         open_exposure: 0,
     }
 }
@@ -332,6 +333,45 @@ fn s2l_pages_when_an_unclaimed_secret_nears_the_deadline() {
 }
 
 #[test]
+fn s2l_a_closed_escrow_settles_the_claim_by_how_it_closed() {
+    let t = terms(Direction::S2L);
+    let s = State::Claiming { secret: P };
+    let closed = |c| View { escrow_closed: c, ..view() };
+    let done = |o| State::Done { outcome: o };
+    // No account and nothing known about it: an RPC that hasn't seen the escrow yet looks the same, so keep claiming.
+    assert_eq!(run(&t, &s, &closed(None)), (s.clone(), vec![Action::ClaimSolana { secret: P }]));
+    assert_eq!(run(&t, &s, &closed(Some(Closed::BeforeDeadline))), (done(Outcome::Completed), vec![]));
+    assert_eq!(run(&t, &s, &closed(Some(Closed::Claimed))), (done(Outcome::Completed), vec![]));
+    assert_eq!(
+        run(&t, &s, &closed(Some(Closed::Refunded))),
+        (done(Outcome::Lost), vec![Action::Page(Page::Lost)])
+    );
+    // Neither claim nor refund can be told apart: wake a human, and stop sending claims that can't land.
+    let (s2, a) = run(&t, &s, &closed(Some(Closed::Unknown)));
+    assert_eq!(s2, s);
+    assert!(matches!(a.as_slice(), [Action::Page(Page::Impossible(_))]));
+    // A live escrow always wins over what was said about a closed one.
+    let open = View { escrow: Some(taker_escrow()), escrow_closed: Some(Closed::Claimed), ..view() };
+    assert_eq!(run(&t, &s, &open), (s.clone(), vec![Action::ClaimSolana { secret: P }]));
+    // The taker's late claim on Liquid also leads here, after we refunded, with the escrow already closed.
+    let late = View { htlc: HtlcView::SpentByClaim { secret: P, confirmed: true }, ..closed(Some(Closed::BeforeDeadline)) };
+    assert_eq!(run(&t, &State::Refunding, &late).0, done(Outcome::Completed));
+}
+
+#[test]
+fn an_absent_escrow_means_claimed_only_when_read_after_it_was_seen_and_before_its_deadline() {
+    // Seen open at slot 500, with its deadline at 9,000.
+    let seen = Some((500, 9_000));
+    assert_eq!(absence(seen, 400), Absence::Behind, "a node behind the one that saw it");
+    assert_eq!(absence(seen, 500), Absence::Behind, "the same slot can't show it closing");
+    assert_eq!(absence(seen, 501), Absence::BeforeDeadline);
+    assert_eq!(absence(seen, 8_999), Absence::BeforeDeadline);
+    // From the deadline on, a refund could have settled it.
+    assert_eq!(absence(seen, 9_000), Absence::AskHistory { seen: true });
+    assert_eq!(absence(None, 5_000), Absence::AskHistory { seen: false });
+}
+
+#[test]
 fn s2l_refund_timing_and_a_late_claim_racing_it() {
     let t = terms(Direction::S2L);
     let e = Some(taker_escrow());
@@ -448,6 +488,7 @@ fn any_view() -> impl Strategy<Value = View> {
         any::<bool>(),
         any_escrow(),
         0u64..6_000_000_000,
+        0u8..5,
     )
         .prop_map(
             |(
@@ -464,6 +505,7 @@ fn any_view() -> impl Strategy<Value = View> {
                 flag,
                 escrow,
                 open_exposure,
+                closed,
             )| View {
                 liquid_tip,
                 liquid_tip_age_secs,
@@ -481,6 +523,13 @@ fn any_view() -> impl Strategy<Value = View> {
                     _ => HtlcView::SpentByRefund { confirmed: flag },
                 },
                 escrow,
+                escrow_closed: match closed {
+                    0 => None,
+                    1 => Some(Closed::BeforeDeadline),
+                    2 => Some(Closed::Claimed),
+                    3 => Some(Closed::Refunded),
+                    _ => Some(Closed::Unknown),
+                },
                 open_exposure,
             },
         )

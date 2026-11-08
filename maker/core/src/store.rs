@@ -114,6 +114,7 @@ impl Store {
              CREATE TABLE IF NOT EXISTS seen_coins (swap BLOB PRIMARY KEY, txid TEXT NOT NULL, vout INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS finished (swap BLOB PRIMARY KEY, at_secs INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS closed (swap BLOB PRIMARY KEY);
+             CREATE TABLE IF NOT EXISTS escrow_seen (swap BLOB PRIMARY KEY, slot INTEGER NOT NULL, deadline INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS costs (
                  swap BLOB NOT NULL, kind TEXT NOT NULL, at_secs INTEGER NOT NULL,
                  lbtc_sats INTEGER NOT NULL, lamports INTEGER NOT NULL,
@@ -337,6 +338,26 @@ impl Store {
             .conn
             .query_row("SELECT txid, vout FROM seen_coins WHERE swap = ?1", params![swap.as_slice()], |r| {
                 Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?)
+    }
+
+    /// Note an escrow seen open, at the slot it was read at. Both only go up: a deadline only moves later.
+    pub fn see_escrow(&self, swap: &[u8; 32], slot: u64, deadline: u64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO escrow_seen (swap, slot, deadline) VALUES (?1, ?2, ?3)
+             ON CONFLICT (swap) DO UPDATE SET slot = max(slot, excluded.slot), deadline = max(deadline, excluded.deadline)",
+            params![swap.as_slice(), slot as i64, deadline as i64],
+        )?;
+        Ok(())
+    }
+
+    /// The last slot an escrow was seen at, and the latest deadline seen on it.
+    pub fn escrow_seen(&self, swap: &[u8; 32]) -> Result<Option<(u64, u64)>> {
+        Ok(self
+            .conn
+            .query_row("SELECT slot, deadline FROM escrow_seen WHERE swap = ?1", params![swap.as_slice()], |r| {
+                Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64))
             })
             .optional()?)
     }

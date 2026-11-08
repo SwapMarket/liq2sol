@@ -700,11 +700,19 @@ fn s2l_with_crashes(w: &mut World) -> Res<()> {
 
     taker_claims(w, &s, &coin)?;
     w.kill_daemon();
-    std::thread::sleep(Duration::from_secs(4));
-    w.start_daemon();
-    w.wait_state(&s.id, "completion after the restart", 180, done(Outcome::Completed))?;
+    // While the daemon is down, its claim lands and the taker, who paid the rent, closes the escrow at once. The restarted
+    // daemon finds no escrow at all, and must still see that it was paid, not keep claiming.
     let e = w.sol.escrow(&s.escrow)?.ok_or("no escrow")?;
-    check(e.state == EscrowState::Claimed, "the escrow is claimed")?;
+    if e.state == EscrowState::Open {
+        w.sol.claim(&w.taker_sol, &s.escrow, &e, revealed(&s))?;
+    }
+    let e = w.wait_for("the claim to finalize", 60, || {
+        Ok(w.sol.escrow(&s.escrow)?.filter(|e| e.state == EscrowState::Claimed))
+    })?;
+    w.sol.send(&[sol::close_ix(&w.taker_sol.pubkey(), &s.escrow, &e)], &w.taker_sol, &[&w.taker_sol])?;
+    w.wait_for("the close to finalize", 60, || Ok(w.sol.escrow(&s.escrow)?.is_none().then_some(())))?;
+    w.start_daemon();
+    w.wait_state(&s.id, "completion after the restart, with the escrow gone", 180, done(Outcome::Completed))?;
     w.wait_for("the proceeds to be swept into the vault, back under the cap", 90, || {
         Ok((w.sol.token_balance(&w.vault_token)? == vault_before + SOL_AMOUNT).then_some(()))
     })?;

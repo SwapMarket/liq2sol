@@ -139,6 +139,39 @@ pub struct EscrowView {
     pub revealed: [u8; 32],
 }
 
+/// How a closed escrow was settled, as far as the daemon can tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Closed {
+    /// Gone before the deadline we last saw. A deadline only moves later, and we only lock on escrows that don't close on a
+    /// restart, and never release one after locking, so only a claim can have settled it.
+    BeforeDeadline,
+    /// Its history shows a claim.
+    Claimed,
+    /// Its history shows a refund.
+    Refunded,
+    /// Gone after the deadline, and its history doesn't say how, or can't be read.
+    Unknown,
+}
+
+/// What an escrow's absence alone says, given the last slot it was seen open at and its latest deadline then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Absence {
+    /// Read from a node no further on than the one that saw it, which may just not have it yet. Says nothing.
+    Behind,
+    /// Closed before the deadline, so claimed: see `Closed::BeforeDeadline`.
+    BeforeDeadline,
+    /// Only its history can tell. `seen` says whether it was ever seen open here.
+    AskHistory { seen: bool },
+}
+
+pub fn absence(seen: Option<(u64, u64)>, read_at: u64) -> Absence {
+    match seen {
+        Some((seen_at, _)) if read_at <= seen_at => Absence::Behind,
+        Some((_, deadline)) if read_at < deadline => Absence::BeforeDeadline,
+        seen => Absence::AskHistory { seen: seen.is_some() },
+    }
+}
+
 /// What is known about the swap's Liquid coin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HtlcView {
@@ -176,6 +209,8 @@ pub struct View {
     pub adaptor_held: bool,
     pub htlc: HtlcView,
     pub escrow: Option<EscrowView>,
+    /// S→L, while claiming: how an escrow that is no longer there was settled. The taker pays its rent, so may close it at once.
+    pub escrow_closed: Option<Closed>,
     /// Open exposure in this direction, excluding this swap.
     pub open_exposure: u64,
 }
@@ -412,6 +447,16 @@ fn step_s2l(cfg: &Config, terms: &Terms, state: &State, v: &View) -> (State, Vec
             Some(e) if e.state == EscrowState::Claimed => (State::Done { outcome: Outcome::Completed }, vec![]),
             Some(e) if e.state == EscrowState::Refunded => {
                 (State::Done { outcome: Outcome::Lost }, vec![Action::Page(Page::Lost)])
+            }
+            None if matches!(v.escrow_closed, Some(Closed::BeforeDeadline | Closed::Claimed)) => {
+                (State::Done { outcome: Outcome::Completed }, vec![])
+            }
+            None if v.escrow_closed == Some(Closed::Refunded) => {
+                (State::Done { outcome: Outcome::Lost }, vec![Action::Page(Page::Lost)])
+            }
+            None if v.escrow_closed == Some(Closed::Unknown) => {
+                let page = Page::Impossible("the escrow was closed after its deadline, and its history doesn't say how".into());
+                (state.clone(), vec![Action::Page(page)])
             }
             escrow => {
                 let mut actions = vec![Action::ClaimSolana { secret: *secret }];

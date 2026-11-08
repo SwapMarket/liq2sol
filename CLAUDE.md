@@ -70,6 +70,8 @@ Details and sources are in the docs. These are recorded because older assumption
 - **Nothing in the Settings logs may hold a secret.** People paste them into chats. `js/logs.js` scrubs them, and the browser test checks after a real swap.
 - **A refund's fee coin can be any amount from 30 sats.** Aqua won't send under 100, and the Blockstream wallet sends 30.
 - **The signer never reuses a coin it has signed away.** A retried lock must send the same bytes, so a reused coin could never land.
+- **In S→L the taker may close the escrow as soon as it settles,** since it paid the rent, so the daemon can find no escrow at all
+  after its claim. Gone before the last deadline seen means claimed; after it, the daemon reads the escrow's history (`docs/maker.md` section 3).
 - **Kind 21059 wrappers carry the real time.** Relays drop ephemeral events more than a few seconds old.
 - **The second Solana endpoint is Helius, using an optional key the taker provides** (user's decision, 2026-11-05). Never
   ship a key in the static app.

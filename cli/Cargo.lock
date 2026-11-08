@@ -2388,6 +2388,7 @@ dependencies = [
  "solana-commitment-config",
  "solana-escrow",
  "solana-sdk",
+ "solana-transaction-status-client-types",
  "ureq",
 ]
 

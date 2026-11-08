@@ -94,6 +94,13 @@ All of these must pass, or the maker abandons the swap. The taker can then refun
 4. The maker's Solana token account exists and isn't frozen.
 5. Both chains healthy, and under the caps.
 
+**S→L, after claiming:** the taker pays the escrow's rent, so it may close the escrow as soon as it settles, before the daemon
+reads the claim. The daemon notes the latest slot it saw the escrow open at, and its deadline then. An escrow missing at a later
+slot, before that deadline, was claimed: a refund needs the deadline, a deadline only moves later, these escrows never close on
+a restart, and the maker never releases after locking. A read no later than that slot says nothing, since a node that is behind
+may not have the escrow yet. Missing from the deadline on, the escrow's recent history tells a claim from a refund, by the
+instruction's tag. If the history doesn't say, the daemon pages a human.
+
 ## 4. Exposure limits
 
 These limit the damage from the risks contracts can't remove.

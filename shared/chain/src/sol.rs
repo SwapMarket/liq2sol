@@ -2,9 +2,12 @@
 
 use std::str::FromStr;
 
-use anchor_lang::{prelude::Pubkey, AccountDeserialize, InstructionData, ToAccountMetas};
+use anchor_lang::{prelude::Pubkey, AccountDeserialize, Discriminator, InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address;
-use solana_client::rpc_client::RpcClient;
+use solana_client::{
+    rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClient},
+    rpc_config::RpcTransactionConfig,
+};
 use solana_commitment_config::CommitmentConfig;
 use solana_escrow::{
     state::Escrow, ESCROW_SEED, ESCROW_VAULT_SEED, MAKER_VAULT_SEED, MAKER_VAULT_TOKEN_SEED, USDT_MINT,
@@ -13,8 +16,9 @@ use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     signature::{Keypair, Signature},
     signer::Signer,
-    transaction::Transaction,
+    transaction::{Transaction, VersionedTransaction},
 };
+use solana_transaction_status_client_types::UiTransactionEncoding;
 
 pub const MAINNET_GENESIS: &str = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 const MINT_LEN: usize = 82;
@@ -22,6 +26,38 @@ const ATA_PROGRAM: Pubkey = anchor_spl::associated_token::ID;
 const TOKEN_PROGRAM: Pubkey = anchor_spl::token::ID;
 
 pub type Res<T> = Result<T, String>;
+
+/// How far back an escrow's history is read: a swap's escrow sees a handful of transactions, so this is plenty.
+const HISTORY_LIMIT: usize = 25;
+
+/// The instruction that settled an escrow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Settled {
+    Claimed,
+    Refunded,
+    Released,
+}
+
+/// Whether this transaction settled the escrow at `address`, and how. Only top-level calls to the escrow program count, which
+/// is how every client of ours sends them.
+pub fn settled_in(tx: &VersionedTransaction, address: &Pubkey) -> Option<Settled> {
+    let keys = tx.message.static_account_keys();
+    tx.message.instructions().iter().find_map(|ix| {
+        if keys.get(usize::from(ix.program_id_index)) != Some(&solana_escrow::id())
+            || !ix.accounts.iter().any(|&i| keys.get(usize::from(i)) == Some(address))
+        {
+            return None;
+        }
+        let tag = ix.data.get(..8)?;
+        [
+            (solana_escrow::instruction::Claim::DISCRIMINATOR, Settled::Claimed),
+            (solana_escrow::instruction::Refund::DISCRIMINATOR, Settled::Refunded),
+            (solana_escrow::instruction::Release::DISCRIMINATOR, Settled::Released),
+        ]
+        .into_iter()
+        .find_map(|(d, s)| (d == tag).then_some(s))
+    })
+}
 
 /// Solana's compute budget program, which sets a transaction's compute limit and its priority fee.
 pub const COMPUTE_BUDGET: Pubkey = Pubkey::from_str_const("ComputeBudget111111111111111111111111111111");
@@ -104,13 +140,45 @@ impl Sol {
     }
 
     pub fn escrow(&self, address: &Pubkey) -> Res<Option<Escrow>> {
-        match self.rpc.get_account_with_commitment(address, CommitmentConfig::finalized()) {
-            Ok(r) => match r.value {
-                Some(a) => Escrow::try_deserialize(&mut &a.data[..]).map(Some).map_err(|e| e.to_string()),
-                None => Ok(None),
-            },
-            Err(e) => Err(e.to_string()),
+        self.escrow_at(address).map(|(_, e)| e)
+    }
+
+    /// An escrow, with the slot the node read it at. An account that isn't there yet and one already closed look the same,
+    /// so only that slot can tell them apart.
+    pub fn escrow_at(&self, address: &Pubkey) -> Res<(u64, Option<Escrow>)> {
+        let r = self.rpc.get_account_with_commitment(address, CommitmentConfig::finalized()).map_err(|e| e.to_string())?;
+        let escrow = match r.value {
+            Some(a) => Some(Escrow::try_deserialize(&mut &a.data[..]).map_err(|e| e.to_string())?),
+            None => None,
+        };
+        Ok((r.context.slot, escrow))
+    }
+
+    /// How a closed escrow was settled, from its recent history. `None` if no settling transaction is found; free endpoints
+    /// may keep little history.
+    pub fn settled_by(&self, address: &Pubkey) -> Res<Option<Settled>> {
+        let config = GetConfirmedSignaturesForAddress2Config {
+            limit: Some(HISTORY_LIMIT),
+            commitment: Some(CommitmentConfig::finalized()),
+            ..Default::default()
+        };
+        let signatures = self.rpc.get_signatures_for_address_with_config(address, config).map_err(|e| e.to_string())?;
+        for s in signatures.iter().filter(|s| s.err.is_none()) {
+            let signature = Signature::from_str(&s.signature).map_err(|e| e.to_string())?;
+            let config = RpcTransactionConfig {
+                encoding: Some(UiTransactionEncoding::Base64),
+                commitment: Some(CommitmentConfig::finalized()),
+                max_supported_transaction_version: Some(0),
+            };
+            let tx = self.rpc.get_transaction_with_config(&signature, config).map_err(|e| e.to_string())?;
+            if tx.transaction.meta.as_ref().is_some_and(|m| m.err.is_some()) {
+                continue;
+            }
+            if let Some(settled) = tx.transaction.transaction.decode().and_then(|t| settled_in(&t, address)) {
+                return Ok(Some(settled));
+            }
         }
+        Ok(None)
     }
 
     pub fn token_balance(&self, address: &Pubkey) -> Res<u64> {

@@ -156,3 +156,22 @@ fn only_finished_l2s_swaps_wait_to_have_their_escrow_closed() {
     s.mark_closed(&done.swap_id()).unwrap();
     assert!(ids(&s).is_empty());
 }
+
+#[test]
+fn an_escrow_seen_keeps_its_latest_slot_and_deadline_across_a_restart() {
+    let p = path("escrow-seen");
+    let id = terms(1).swap_id();
+    {
+        let s = Store::open(&p).unwrap();
+        assert_eq!(s.escrow_seen(&id).unwrap(), None);
+        s.see_escrow(&id, 500, 9_000).unwrap();
+        // An older read, from a node that is behind, can't wind either back.
+        s.see_escrow(&id, 400, 8_000).unwrap();
+        assert_eq!(s.escrow_seen(&id).unwrap(), Some((500, 9_000)));
+        // An extension moves the deadline later.
+        s.see_escrow(&id, 600, 12_000).unwrap();
+    }
+    let s = Store::open(&p).unwrap();
+    assert_eq!(s.escrow_seen(&id).unwrap(), Some((600, 12_000)));
+    assert_eq!(s.escrow_seen(&terms(2).swap_id()).unwrap(), None);
+}

@@ -25,16 +25,19 @@ start_all() {
   local since
   since=$(date '+%Y-%m-%d %H:%M:%S')
   for m in $running; do systemctl start "liq2sol-signer@$m" "liq2sol-maker@$m"; done
-  # A maker that started says so within a minute, unless a chain API is slow.
+  # A maker says so once both chains answer. It retries every 30 seconds, and makers sharing an IP can meet a public
+  # API's rate limit, so this waits a few minutes. Interrupting it is safe: everything is already installed and started.
   for m in $running; do
-    for _ in $(seq 60); do
+    echo "waiting for maker $m to say it is running (Ctrl-C is safe)"
+    for _ in $(seq 180); do
       journalctl -u "liq2sol-maker@$m" --since "$since" -q | grep -q 'maker running' && break
       sleep 1
     done
     if journalctl -u "liq2sol-maker@$m" --since "$since" -q | grep -q 'maker running'; then
       echo "maker $m is running"
     else
-      echo "maker $m hasn't said it is running yet. Check: journalctl -u liq2sol-maker@$m -u liq2sol-signer@$m" >&2
+      echo "maker $m hasn't said it is running yet. Its last lines:" >&2
+      journalctl -u "liq2sol-maker@$m" --since "$since" -q -n 5 --no-pager >&2 || true
     fi
   done
 }

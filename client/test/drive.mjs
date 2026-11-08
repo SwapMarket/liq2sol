@@ -439,12 +439,11 @@ async function l2s() {
   await setHelius('');
   await page.locator('.one-endpoint').waitFor({ timeout: 5000 });
   step('Settings opens from the claim page, and a second endpoint set there takes effect at once');
-  await page.locator('.claim').click();
-  await page.locator('#banner:not([hidden])').waitFor({ timeout: 8000 });
+  if (!(await page.locator('.claim').isDisabled())) throw new Error('Claim is on with one endpoint and no consent');
   if (await state(page) !== 'ready_claim') throw new Error('claimed with one endpoint and no consent');
-  step('with one Solana endpoint and no consent, the secret stays hidden');
+  step('with one Solana endpoint and the box unticked, Claim stays off and the secret stays hidden');
   await page.locator('.one-endpoint').check();
-  await page.locator('.claim').click();
+  await page.locator('.claim:not([disabled])').click({ timeout: 5000 });
   await waitState(page, 'done');
   await page.screenshot({ path: path.join(shots, 'done.png') });
   step('claimed on Solana');
@@ -921,7 +920,12 @@ async function early() {
   holding = true;
   await pay(await page.locator('.pay-address').innerText(), amountSats(env.AMOUNT), env.USDT);
   await page.locator('.early-refund').waitFor({ timeout: 120000 });
+  // The page's answer to the claim offer never reached the maker, so it can't lock. The cancel goes out at once.
+  holding = false;
   await page.locator('.early-refund').click();
+  await page.locator('.swap-card[data-state="early_form"] .maker-cancelled').waitFor({ timeout: 60000 });
+  step('the maker cancelled at once, before any fee coin or address');
+  if (!(await page.locator('.early-go').isDisabled())) throw new Error('the refund can be asked for with no fee coin');
   const fee = await page.locator('.fee-address').innerText();
   await pay(fee, 30, env.LBTC);
   await walletCli('generatetoaddress', '1', await walletCli('getnewaddress'));
@@ -934,15 +938,8 @@ async function early() {
   await page.locator('body').click({ position: { x: 5, y: 5 } });
   await new Promise((r) => setTimeout(r, 2500));
   if ((await page.locator('.refund-to').inputValue()) !== to) throw new Error('the refund address was lost when the page redrew');
-  step('the refund form keeps the address through redraws, copies the fee address, and says when the fee coin is ready');
-  holding = false;
-  // The fee coin can take a moment to show up.
-  for (let i = 0; i < 20; i++) {
-    await page.locator('.early-go').click();
-    await page.locator('.swap-card:not([data-state="early_form"])').waitFor({ timeout: 2000 }).catch(() => {});
-    if (await state(page) !== 'early_form') break;
-    await page.locator('.refund-to').fill(to);
-  }
+  step('the refund form keeps the address through redraws, copies the fee address, and turns on once the fee coin is confirmed');
+  await page.locator('.early-go:not([disabled])').click({ timeout: 10000 });
   step('asked for a refund before the maker locked');
   await page.locator('.swap-card[data-state="refunded"]').waitFor({ timeout: 120000 });
   const swap = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps')))[0]);
@@ -1052,10 +1049,17 @@ async function wrong() {
   await page.locator('.history-item').first().locator('.history-row').click();
   await page.getByRole('button', { name: 'Open' }).first().click();
   await waitState(page, 'refund', 10000);
+  const note = await page.locator('.refund-asset:not([hidden])').innerText({ timeout: 15000 });
+  if (!note.includes(`${(paid / 1e8).toFixed(8).replace(/\.?0+$/, '')} USDt`) || !note.includes('not the swap')) throw new Error(`the refund says: ${note}`);
+  step('the refund says it sends back the coin that arrived, not the swap\'s amount');
+  if (!(await page.locator('.refund').isDisabled())) throw new Error('Refund is on with no fee coin');
   await pay(await page.locator('.fee-address').innerText(), 30, env.LBTC);
+  // The suite mines every 3 seconds and its stand-in Esplora sees only confirmed coins, so an unconfirmed fee coin can't be caught here.
   await walletCli('generatetoaddress', '1', await walletCli('getnewaddress'));
   const back = await walletCli('getnewaddress');
   await page.locator('.fee-status', { hasText: 'Ready' }).waitFor({ timeout: 60000 });
+  await page.locator('.refund:not([disabled])').waitFor({ timeout: 10000 });
+  step('Refund is off with no fee coin, and on once it is confirmed');
   await page.locator('.refund-to').fill(back);
   await page.locator('.refund').click();
   await waitState(page, 'refunded', 120000);

@@ -1655,7 +1655,17 @@ fn rfq_early_refund(w: &mut World) -> Res<()> {
     check(got.is_err_and(|e| e.contains("declined")), "a request spending another coin first is declined")?;
     check(matches!(w.state(&id)?, State::WatchLock), "and the swap goes on")?;
 
-    // The real request.
+    // Cancelling comes first: the maker promises never to lock before the taker has a fee coin or an address.
+    let cancel = Body::CancelAsk(msg::CancelAsk { lock_point: lock_point.clone() });
+    stranger.send(cancel.clone())?;
+    check(stranger.answer(QUIET)?.is_none(), "a stranger can't cancel")?;
+    check(matches!(w.state(&id)?, State::WatchLock), "and the swap goes on")?;
+    send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, cancel)?;
+    let got = early_answer(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation)?;
+    check(matches!(got.envelope.body, Body::Cancelled(_)), "the maker cancels")?;
+    w.wait_state(&id, "the maker dropping the swap", 30, |state| matches!(state, State::Abandoned))?;
+
+    // The refund, asked for afterwards.
     send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, ask(&tx, &started.nonce()))?;
     let got = early_answer(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation)?;
     let Body::EarlyRefundShare(share) = got.envelope.body else {
@@ -1703,6 +1713,10 @@ fn rfq_early_refund(w: &mut World) -> Res<()> {
     send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, late)?;
     let got = early_answer(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation);
     check(got.is_err_and(|e| e.contains("declined")), "having locked, the maker refuses")?;
+    let cancel = Body::CancelAsk(msg::CancelAsk { lock_point: s.offer.lock_point.clone() });
+    send_body(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation, NETWORK, cancel)?;
+    let got = early_answer(&mut s.relay, &s.me, &w.maker_nostr, &s.negotiation);
+    check(got.is_err_and(|e| e.contains("declined")), "and won't cancel either")?;
     w.sol.claim(&w.taker_sol, &escrow, &e, solana_value(&s.secret).map_err(|e| e.to_string())?)?;
     w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;
     Ok(())

@@ -203,6 +203,7 @@ pub fn read_coins(tx_hex: &str, script: &str, blinding_key: &str) -> Result<Stri
                     "amount": s.value.to_string(),
                     "is_usdt": s.asset == usdt(),
                     "is_lbtc": s.asset == lbtc(),
+                    "asset": s.asset.to_string(),
                     "hidden": !o.asset.is_explicit() && !o.value.is_explicit(),
                 })
             })

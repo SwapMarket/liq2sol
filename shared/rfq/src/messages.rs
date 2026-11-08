@@ -152,6 +152,21 @@ pub struct ClaimAnswer {
     pub share: String,
 }
 
+/// L→S, taker to maker: please never lock this swap. The refund itself comes later, as an `EarlyRefundAsk`, once the
+/// taker has a fee coin and an address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelAsk {
+    pub lock_point: String,
+}
+
+/// L→S, maker to taker: it has promised never to lock this swap, and will sign the refund when asked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cancelled {
+    pub lock_point: String,
+}
+
 /// L→S, taker to maker: please agree to this refund before you lock. Agreeing means never locking this swap.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -225,6 +240,8 @@ pub enum Body {
     EarlyRefundAsk(EarlyRefundAsk),
     EarlyRefundShare(EarlyRefundShare),
     ReleaseAsk(ReleaseAsk),
+    CancelAsk(CancelAsk),
+    Cancelled(Cancelled),
 }
 
 /// Every private message. `id` is 32 random bytes in hex, set by the taker and repeated throughout a negotiation.

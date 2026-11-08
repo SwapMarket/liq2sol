@@ -890,9 +890,13 @@ function refundAddressInput(s) {
   });
 }
 
-// Whether the fee coin has arrived, so it's clear when a refund can go.
-function feeCoinStatus(s) {
+// Whether each swap's fee coin is confirmed, so a redraw doesn't flash its button off while it looks again.
+const feeReady = new Map();
+
+// Whether the fee coin has arrived. The button that needs it stays off until it is confirmed.
+function feeCoinStatus(s, button) {
   const line = h('p', { class: 'note fee-status' }, 'Checking for the fee coin…');
+  button.disabled = !feeReady.get(s.id);
   esplora[0].readCoins(s.info.plain_fee_address, s.info.fee_script, s.secrets.blinding_key).then((coins) => {
     const fee = coins.filter((c) => c.is_lbtc && BigInt(c.amount) >= BigInt(NETWORK.refundFeeCoinSats));
     const ready = fee.find((c) => c.confirmations >= 1);
@@ -900,35 +904,68 @@ function feeCoinStatus(s) {
       : fee.length ? `Fee coin seen: ${fee[0].amount} sats. Waiting for a confirmation, about a minute.`
         : 'No fee coin yet.';
     line.classList.toggle('good-text', !!ready);
+    feeReady.set(s.id, !!ready);
+    button.disabled = !ready;
   }).catch(() => { line.textContent = 'Couldn’t check for the fee coin just now.'; });
   return line;
 }
 
-function feeCoinParts(s) {
+function feeCoinParts(s, button) {
   return [
     h('p', { class: 'note' }, `This needs a fee coin. From a Liquid wallet, send at least ${NETWORK.refundFeeCoinSats} sats (${(NETWORK.refundFeeCoinSats / 1e8).toFixed(8)} L-BTC) to this address, and wait for a confirmation. Aqua won't send less than 100 sats, which works too:`),
     copyable('fee-address', s.info.fee_address, s.info.fee_address, 'Address'),
-    feeCoinStatus(s),
+    feeCoinStatus(s, button),
   ];
+}
+
+const KNOWN_ASSETS = { [NETWORK.lbtc]: { ticker: 'L-BTC', name: 'Liquid Bitcoin', precision: 8 } };
+
+// What the refund sends back, when it isn't the swap's own USDt. The registry's name is the issuer's to choose, so its
+// domain and the asset id go with it.
+function refundCoinNote(s) {
+  const line = h('p', { class: 'warn refund-asset', hidden: true });
+  esplora[0].readCoins(s.info.plain_address, s.info.script, s.secrets.blinding_key).then(async (coins) => {
+    // The same coin refundOnLiquid takes.
+    const coin = coins[0];
+    if (!coin || (coin.is_usdt && coin.amount === s.terms.liquid_amount)) return;
+    const meta = KNOWN_ASSETS[coin.asset] ?? (coin.is_usdt ? { ticker: 'USDt', precision: 8 } : await esplora[0].asset(coin.asset).catch(() => ({})));
+    const precision = Number.isInteger(meta.precision) ? meta.precision : 0;
+    const amount = precision ? (Number(coin.amount) / 10 ** precision).toFixed(precision).replace(/\.?0+$/, '') : coin.amount;
+    const named = meta.ticker || meta.name
+      ? `${amount} ${meta.ticker ?? ''}${meta.name ? ` (${meta.name}${meta.entity?.domain ? `, issued by ${meta.entity.domain}` : ''})` : ''}`
+      : `${amount} units of an unregistered asset`;
+    line.textContent = coin.is_usdt
+      ? `This refunds ${named}, not the swap's ${liquidUnits(s.terms.liquid_amount)} L-USDt.`
+      : `This refunds ${named}. Asset ${coin.asset}.`;
+    line.hidden = false;
+  }).catch(() => {});
+  return line;
 }
 
 function refundLiquidView(s) {
   const input = refundAddressInput(s);
+  const button = h('button', { class: 'btn refund', onclick: act(s.id, (fresh) => engine.refundOnLiquid(fresh, input.value.trim())) }, 'Refund');
   return [
-    ...feeCoinParts(s),
+    refundCoinNote(s),
+    ...feeCoinParts(s, button),
     h('label', { class: 'field' }, h('span', {}, 'Where to send your refund'), input),
-    h('button', { class: 'btn refund', onclick: act(s.id, (fresh) => engine.refundOnLiquid(fresh, input.value.trim())) }, 'Refund'),
+    button,
   ];
 }
 
 function earlyRefundView(s) {
   const input = refundAddressInput(s);
+  const button = h('button', { class: 'btn early-go', onclick: act(s.id, (fresh) => engine.askEarlyRefund(fresh, input.value.trim())) }, s.maker_cancelled ? 'Get my refund' : 'Ask the maker');
   return [
-    h('p', { class: 'note' }, 'If the maker hasn’t locked, it can agree to refund you now, instead of after the timed refund. If it says no or doesn’t answer, nothing changes.'),
-    ...feeCoinParts(s),
+    s.maker_cancelled
+      ? h('p', { class: 'good maker-cancelled' }, `The maker cancelled, and won’t lock. Your coin can come back now, or by itself from block ${s.terms.lock_height.toLocaleString('en-US')}.`)
+      : h('p', { class: 'note' }, 'If the maker hasn’t locked, it can agree to refund you now, instead of after the timed refund. If it says no or doesn’t answer, nothing changes.'),
+    ...feeCoinParts(s, button),
     h('label', { class: 'field' }, h('span', {}, 'Where to send your refund'), input),
-    h('button', { class: 'btn early-go', onclick: act(s.id, (fresh) => engine.askEarlyRefund(fresh, input.value.trim())) }, 'Ask the maker'),
-    h('button', { class: 'btn quiet', onclick: act(s.id, (fresh) => engine.set(fresh, { state: 'await_maker', status: '' })) }, 'Keep waiting for the maker'),
+    button,
+    s.status && h('p', { class: 'note early-status' }, s.status),
+    // Once the maker has cancelled, there is nothing to wait for.
+    !s.maker_cancelled && h('button', { class: 'btn quiet', onclick: act(s.id, (fresh) => engine.set(fresh, { state: 'await_maker', status: '' })) }, 'Keep waiting for the maker'),
   ];
 }
 
@@ -963,7 +1000,10 @@ function swapBody(s) {
           ? `Your coin has ${s.coin?.confirmations ?? 0} confirmations. Waiting for the maker to sign and lock on Solana.`
           : (s.status || 'Waiting for the maker to lock on Liquid.')),
         s.direction === 'L2S' && s.status && h('p', { class: 'note early-status' }, s.status),
-        s.direction === 'L2S' && s.coin && h('button', { class: 'btn quiet early-refund', onclick: act(s.id, (fresh) => engine.set(fresh, { state: 'early_form', status: '' })) }, 'Ask for a refund now'),
+        s.direction === 'L2S' && s.coin && h('button', {
+          class: 'btn quiet early-refund', title: 'If the maker hasn’t locked, it can cancel now, and you get your coin back without waiting. If it says no, nothing changes.',
+          onclick: act(s.id, (fresh) => engine.askCancel(fresh)),
+        }, 'Ask for a refund now'),
         s.direction === 'S2L' && !s.maker_locked && h('button', {
           class: 'btn quiet early-refund', title: 'If the maker hasn’t locked, it can give your Solana lock back now. If it says no, nothing changes.',
           onclick: act(s.id, (fresh) => engine.askRelease(fresh)),
@@ -973,17 +1013,26 @@ function swapBody(s) {
       return earlyRefundView(s);
     case 'early_asked':
     case 'release_asked':
-      return h('p', { class: 'status spin' }, 'Asking the maker to agree to a refund…');
-    case 'ready_claim':
+      return h('p', { class: 'status spin' }, 'Asking the maker to cancel…');
+    case 'early_signing':
+      return h('p', { class: 'status spin' }, 'Asking the maker to sign the refund…');
+    case 'ready_claim': {
+      // With one endpoint, the claim waits for the box. The engine refuses without it too.
+      const consented = () => !!secondSolana() || !!settings.allowOneEndpoint;
+      const claim = h('button', { class: 'btn claim', disabled: !wallet || !consented(), onclick: act(s.id, (fresh) => engine.claimOnSolana(fresh)) }, 'Claim on Solana');
       return [
         h('p', { class: 'good' }, `The maker locked ${show(s.terms.solana_amount)} ${to} for you.`),
         !secondSolana() && h('label', { class: 'check' },
-          h('input', { type: 'checkbox', class: 'one-endpoint', checked: !!settings.allowOneEndpoint, onchange: (e) => { settings.allowOneEndpoint = e.target.checked; saveSettings(settings); } }),
-          'Only one Solana endpoint is set, so a lying endpoint could fool this page into revealing the secret. Claim anyway. Add a free Helius key in Settings to check two.'),
+          h('input', {
+            type: 'checkbox', class: 'one-endpoint', checked: !!settings.allowOneEndpoint,
+            onchange: (e) => { settings.allowOneEndpoint = e.target.checked; saveSettings(settings); claim.disabled = !wallet || !consented(); },
+          }),
+          'I accept that with only one Solana endpoint this page could be fooled into revealing the secret. (Add a free Helius.dev key in Settings to check two endpoints.)'),
         walletView(),
-        h('button', { class: 'btn claim', disabled: !wallet, onclick: act(s.id, (fresh) => engine.claimOnSolana(fresh)) }, 'Claim on Solana'),
+        claim,
         s.status && h('p', { class: 'status' }, s.status),
       ];
+    }
     case 'signing':
       return h('p', { class: 'status spin' }, s.status || 'Signing the claim together with the maker…');
     case 'claiming':

@@ -1,5 +1,6 @@
 # Builds the maker for Debian when a version tag is pushed, and publishes it as a pre-release with checksums.
 # It builds in Debian 12, because a binary needs a glibc no newer than the machine it runs on. Actions are pinned to exact commits.
+# x86-64, and arm64 for a Raspberry Pi 4 or 5 with a 64-bit OS, each built natively on its own kind of runner.
 name: Release the maker
 
 on:
@@ -11,7 +12,14 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     container: rust:1.99.1-bookworm
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -23,19 +31,26 @@ jobs:
       - name: Build
         working-directory: maker
         run: cargo build --release --locked
+      - name: Check the binaries start on this architecture
+        working-directory: maker
+        run: |
+          for b in liq2sol-maker liq2sol-signer; do
+            out=$(target/release/$b /nonexistent/config.json 2>&1 || true)
+            echo "$b: $out"
+            echo "$out" | grep -q "stopped:"
+          done
       - name: Package
         run: |
-          name="liq2sol-maker-${GITHUB_REF_NAME}-x86_64-linux"
+          name="liq2sol-maker-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux"
+          test "$(uname -m)" = "${{ matrix.arch }}"
           mkdir -p "dist/$name"
           cp maker/target/release/liq2sol-signer maker/target/release/liq2sol-maker deploy/* LICENSE "dist/$name/"
           cd dist
           tar czf "$name.tar.gz" "$name"
           rm -r "$name"
-          sha256sum "$name.tar.gz" > SHA256SUMS
-          cat SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release
+          name: release-${{ matrix.arch }}
           path: dist/
           if-no-files-found: error
 
@@ -47,11 +62,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: release
+          pattern: release-*
+          merge-multiple: true
           path: dist
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --prerelease --title "$GITHUB_REF_NAME" \
-            --notes "The liq2sol maker, for x86-64 Debian 12 or later. Test networks only: both programs refuse mainnet. Installation is in README.md inside the archive. SHA256SUMS.asc, SwapMarket's signature, is added by hand after this."
+            --notes "The liq2sol maker, for Debian 12 or later: x86_64, and aarch64 for a Raspberry Pi 4 or 5 with a 64-bit OS. Test networks only: both programs refuse mainnet. Installation is in README.md inside the archive. SHA256SUMS.asc, SwapMarket's signature, is added by hand after this."

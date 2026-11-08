@@ -32,7 +32,7 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
   all built and tested, including failure scenarios, signer attacks and mutation checks.
 - **Live:** the page at https://swapmarket.github.io/liq2sol/, deployed by `.github/workflows/pages.yml`, with a faucet tab on test builds.
   The escrow is on devnet at `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU` (key `programs/.keys/escrow-confidential-program.json`).
-  Maker releases (`v0.0x`) are built by `.github/workflows/release.yml` from signed tags, for Debian, and run on the user's VPS. After each build, `scripts/sign-release.sh <tag>` adds `SHA256SUMS.asc`; makers' `deploy/update.sh` installs nothing unsigned.
+  Maker releases (`v0.0x`) are built by `.github/workflows/release.yml` from signed tags, for Debian on x86_64 and aarch64 (Raspberry Pi 4 or 5, 64-bit OS), and run on the user's VPS. After each build, `scripts/sign-release.sh <tag>` adds `SHA256SUMS.asc`; makers' `deploy/update.sh` installs nothing unsigned.
 - **Next:** real wallets on real phones, Firefox and Safari, then the mainnet blockers: maker priority fees, `cargo-deny` and `cargo-audit` in
   CI, a `musig2` audit, release hardening and offline recovery (`docs/client.md` section 6, `docs/confidential.md` "Not yet covered").
 

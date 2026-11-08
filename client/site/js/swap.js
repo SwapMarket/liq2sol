@@ -149,10 +149,14 @@ export class Engine {
       return;
     }
     // The maker locked first, so it won't agree now, and the swap carries on as normal.
-    if ((s.state === 'early_form' || s.state === 'early_asked') && escrow) s.state = 'await_maker';
+    if (['early_form', 'early_asked', 'early_signing'].includes(s.state) && escrow) s.state = 'await_maker';
     if (s.state === 'early_asked' && now() - s.early_asked_at > EARLY_REFUND_WAIT_SECS) {
       s.state = 'await_maker';
       s.status = 'The maker did not answer. Nothing has changed, and the timed refund still protects you.';
+    }
+    if (s.state === 'early_signing' && now() - s.early_asked_at > EARLY_REFUND_WAIT_SECS) {
+      s.state = 'early_form';
+      s.status = 'The maker did not answer. Ask again, or wait for the timed refund.';
     }
     if (s.state === 'fund' || s.state === 'await_maker') {
       const coins = await this.exactCoins(this.esplora[0], s);
@@ -183,7 +187,8 @@ export class Engine {
       const refunded = escrow?.state === 'Refunded';
       // Only an empty address expires. A coin of the wrong asset or amount is still the taker's, and comes back by refund.
       if (s.state === 'fund' && tip >= s.terms.lock_height) s.state = (await this.esplora[0].utxos(s.info.plain_address)).length ? 'refund' : 'expired';
-      else if (makerGone || refunded || tip >= s.terms.lock_height) s.state = 'refund_wait';
+      // A maker that cancelled won't lock, so an early refund stays on offer until the timed one opens.
+      else if (tip >= s.terms.lock_height || ((makerGone || refunded) && !s.maker_cancelled)) s.state = 'refund_wait';
     }
     if (s.state === 'refund_wait' && tip >= s.terms.lock_height) s.state = 'refund';
     if (s.state === 'refund' || s.state === 'refunding') await this.tickRefund(s);
@@ -193,6 +198,8 @@ export class Engine {
 
   async answerPendingOffer(s) {
     const offer = this.pendingOffers.get(s.id);
+    // Asking to cancel, or cancelled: the answer is what would let the maker lock.
+    if (!['fund', 'await_maker'].includes(s.state) || s.maker_cancelled) return;
     if (!offer || !s.coin || s.answered === offer.nonce) return;
     // Marked first, because a tick and an arriving message can both get here while this waits on the network.
     s.answered = offer.nonce;
@@ -439,6 +446,13 @@ export class Engine {
 
   // ---- An early refund, if the maker agrees ----
 
+  // First the maker promises never to lock. The fee coin and the address can come afterwards, without a race.
+  async askCancel(s) {
+    if (s.direction !== 'L2S' || s.state !== 'await_maker' || !s.coin) return;
+    this.send(s, { type: 'cancel-ask', body: { lock_point: s.secrets.lock_point } });
+    this.set(s, { state: 'early_asked', early_asked_at: now(), status: '' });
+  }
+
   // Only ever a request. Whatever the maker does, the timed refund is still there.
   async askEarlyRefund(s, toAddress) {
     if (s.state !== 'early_form') return;
@@ -453,18 +467,18 @@ export class Engine {
     }));
     this.earlyRefunds.set(s.id, session);
     this.send(s, { type: 'early-refund-ask', body: { lock_point: s.secrets.lock_point, tx: session.tx, nonce: session.nonce } });
-    this.set(s, { state: 'early_asked', early_asked_at: now(), status: '' });
+    this.set(s, { state: 'early_signing', early_asked_at: now(), status: '' });
   }
 
   async onEarlyRefundShare(s, body) {
     const session = this.earlyRefunds.get(s.id);
-    if (s.state !== 'early_asked' || !session) return;
+    if (s.state !== 'early_signing' || !session) return;
     this.earlyRefunds.delete(s.id);
     let hex;
     try {
       hex = session.finish(body.nonce, body.share);
     } catch (e) {
-      this.set(s, { state: 'await_maker', status: `The maker's answer didn't check out, so nothing was sent: ${e.message ?? e}` });
+      this.set(s, { state: 'early_form', status: `The maker's answer didn't check out, so nothing was sent: ${e.message ?? e}` });
       return;
     }
     // Saved first, so the refund is watched and sent again whatever happens to this send.
@@ -493,6 +507,11 @@ export class Engine {
       this.onSessionNonce(s, body.nonce);
     } else if (type === 'early-refund-share' && s.direction === 'L2S') {
       await this.onEarlyRefundShare(s, body);
+    } else if (type === 'cancelled' && s.direction === 'L2S' && s.state === 'early_asked') {
+      this.set(s, { state: 'early_form', maker_cancelled: true, status: '' });
+    } else if (type === 'rfq-reject' && s.state === 'early_signing') {
+      this.earlyRefunds.delete(s.id);
+      this.set(s, { state: 'early_form', status: 'The maker didn’t sign the refund. Check the fee coin and ask again, or wait for the timed refund.' });
     } else if (type === 'rfq-reject' && (s.state === 'early_asked' || s.state === 'release_asked')) {
       this.earlyRefunds.delete(s.id);
       this.set(s, { state: 'await_maker', status: 'The maker can’t refund early now. Nothing has changed, and the timed refund still protects you.' });

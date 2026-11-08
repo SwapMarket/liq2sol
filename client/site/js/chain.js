@@ -30,6 +30,9 @@ export class Esplora {
     return this.cache.get(txid);
   }
 
+  // The registry's entry for an asset: name, ticker, precision and the issuer's domain. Absent for unregistered ones.
+  asset = async (id) => JSON.parse(await http(`${this.base}/asset/${id}`));
+
   broadcast = (hex) => http(`${this.base}/tx`, { method: 'POST', body: hex }).then((t) => t.trim());
   outspend = async (txid, vout) => JSON.parse(await http(`${this.base}/tx/${txid}/outspend/${vout}`));
   status = async (txid) => JSON.parse(await http(`${this.base}/tx/${txid}/status`));

@@ -151,6 +151,10 @@ pub enum Call {
     CloseEscrow {
         lock_point: LockPoint,
     },
+    /// L→S: never lock this swap, so its refund can be signed later. Nothing is signed now.
+    Cancel {
+        terms: SwapTerms,
+    },
     /// L→S: sign the taker's early refund, and never lock this swap.
     EarlyRefund {
         terms: SwapTerms,
@@ -672,6 +676,19 @@ impl Signer {
     /// L→S: agree to the taker's refund. We sign only input 0, with this swap's own key, so nothing else of ours can be
     /// spent, and where the coin goes is the taker's business. The refusal to ever lock is durable before the share leaves.
     /// A fresh nonce each time, because the taker may lose its session and ask again.
+    /// The same promise an early refund makes, made before the taker has what the refund needs.
+    fn cancel(&mut self, t: &SwapTerms) -> Outcome {
+        let id = t.swap_id();
+        if t.direction != Direction::L2S {
+            return Err(Refusal::UnknownSwap.into());
+        }
+        let request = Request::EarlyRefund { swap_id: id };
+        let record = self.check(&request)?;
+        self.commit(&id, &request, &record, None)?;
+        self.sessions.remove(&id);
+        Ok(Reply::Nothing)
+    }
+
     fn early_refund(&mut self, t: &SwapTerms, tx: &str, taker_nonce: &str) -> Outcome {
         let id = t.swap_id();
         if t.direction != Direction::L2S {
@@ -973,6 +990,7 @@ impl Signer {
             Call::StoreAdaptor { terms, taker_nonce, taker_share } => {
                 self.store_adaptor(terms, taker_nonce, taker_share)
             }
+            Call::Cancel { terms } => self.cancel(terms),
             Call::EarlyRefund { terms, tx, taker_nonce } => self.early_refund(terms, tx, taker_nonce),
             Call::LockSolana { terms, deadline_slot } => self.lock_solana(terms, *deadline_slot),
             Call::LockLiquid { terms } => self.lock_liquid(terms),

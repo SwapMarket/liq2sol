@@ -1,14 +1,14 @@
 # Running a test maker on Debian
 
-For an x86-64 machine with Debian 12 or later. This release is for Liquid testnet and Solana devnet only, and both programs refuse to start on mainnet.
+For Debian 12 or later, on x86-64, or on arm64 such as a Raspberry Pi 4 or 5 with Raspberry Pi OS 64-bit (Bookworm). A 32-bit OS won't do. This release is for Liquid testnet and Solana devnet only, and both programs refuse to start on mainnet.
 
 ## Install
 
 ```sh
 # Check the download first: SHA256SUMS is signed by SwapMarket, and lists the archive's checksum.
 gpgv --keyring ./release-key.gpg SHA256SUMS.asc SHA256SUMS   # release-key.gpg from the repo's deploy/ folder
-sha256sum -c SHA256SUMS
-tar xzf liq2sol-maker-*-x86_64-linux.tar.gz
+sha256sum -c --ignore-missing SHA256SUMS
+tar xzf liq2sol-maker-*-linux.tar.gz
 cd liq2sol-maker-*/
 
 sudo useradd --system --home /var/lib/liq2sol --shell /usr/sbin/nologin liq2sol
@@ -86,7 +86,7 @@ It downloads the release, checks it against its `SHA256SUMS`, stops every runnin
 
 It installs nothing unless the release's `SHA256SUMS` is signed by the key in `/opt/liq2sol/release-key.gpg`, SwapMarket's `E7947F8DBC700926D8A8175101151A25AAE22F55`. Releases are built on GitHub and signed by hand afterwards, so a new one can be unsigned for a while, and the script says so. Neither a GitHub account nor its build machines hold the key, so neither can ship something this accepts.
 
-A machine with v0.05 or earlier has neither the script nor the key. Get both, check the key's fingerprint against the one above (`gpg --show-keys release-key.gpg`, on any machine), and run it once:
+A machine with v0.05 or earlier has neither the script nor the key. Get both, check the key file (`sha256sum release-key.gpg` must print `28846ef1fcfac9b8b1b5c7b34bf14844db01488436f98928f3a70b2507dbd8b1`, or `gpg --show-keys release-key.gpg` the fingerprint above), and run it once:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/SwapMarket/liq2sol/main/deploy/update.sh

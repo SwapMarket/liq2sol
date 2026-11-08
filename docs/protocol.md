@@ -455,13 +455,17 @@ maker's registered Liquid address directly, with no swap lock on Liquid and no t
 
 Before the maker locks on Solana, the taker can ask for its coin back without waiting for the lock height.
 
-1. The taker builds a refund of its coin to an address of its choosing, paying the fee from its own fee coin, and sends `early-refund-ask` with the unsigned transaction and a MuSig2 nonce.
-2. The signer refuses if it has ever signed a lock for this swap. Otherwise it records durably that it never will, reads the spent outputs from the chain, signs input 0 with this swap's own key and a fresh nonce, and the maker answers `early-refund-share`.
-3. The taker checks the share, finishes the signature, signs its fee coin and publishes.
+1. The taker sends `cancel-ask` with the lock point, as soon as it decides. It needs nothing else yet, so the maker can't lock while the taker finds a fee coin.
+2. The signer refuses if it has ever signed a lock for this swap. Otherwise it records durably that it never will, and the maker answers `cancelled`. From then on the taker answers no claim offer, which is what a lock would need.
+3. The taker builds a refund of its coin to an address of its choosing, paying the fee from its own fee coin, and sends `early-refund-ask` with the unsigned transaction and a MuSig2 nonce.
+4. The signer checks the same rule again, reads the spent outputs from the chain, signs input 0 with this swap's own key and a fresh nonce, and the maker answers `early-refund-share`.
+5. The taker checks the share, finishes the signature, signs its fee coin and publishes.
+
+A taker may skip the cancel and send `early-refund-ask` directly. It makes the same promise.
 
 The spend is a key-path signature, the same shape as a claim. It doesn't show that a refund happened.
 
-A maker that refuses or stays silent changes nothing, and the timed refund remains. So this helps with an honest maker, and is no defence against griefing.
+A maker that refuses or stays silent changes nothing, and the timed refund remains. So this helps with an honest maker, and is no defence against griefing. A maker that cancels and then won't sign the refund leaves the taker with the timed refund, which it would have had anyway.
 
 ## Early refund (S→L)
 

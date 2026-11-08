@@ -65,7 +65,9 @@ if [ "$current" = "$tag" ]; then
 fi
 echo "updating from $current to $tag"
 
-name="liq2sol-maker-$tag-x86_64-linux"
+arch=$(uname -m)
+case "$arch" in x86_64|aarch64) ;; *) echo "no release for $arch: a Raspberry Pi needs a 64-bit OS" >&2; exit 1 ;; esac
+name="liq2sol-maker-$tag-$arch-linux"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cd "$work"
@@ -74,7 +76,9 @@ curl -fsSLO "https://github.com/$repo/releases/download/$tag/SHA256SUMS"
 # The signature is added by hand after the release is built, so a new release can lack it for a while.
 curl -fsSLO "https://github.com/$repo/releases/download/$tag/SHA256SUMS.asc" || { echo "$tag isn't signed yet. Try again later." >&2; exit 1; }
 gpgv --keyring "$key" SHA256SUMS.asc SHA256SUMS || { echo "$tag's signature doesn't check out against $key, so nothing was installed" >&2; exit 1; }
-sha256sum -c SHA256SUMS
+# The list covers every architecture, and this machine downloaded only its own.
+sha256sum -c --ignore-missing SHA256SUMS
+grep -q " $name.tar.gz\$" SHA256SUMS || { echo "SHA256SUMS doesn't list $name.tar.gz" >&2; exit 1; }
 tar xzf "$name.tar.gz"
 if [ ! -x "$name/liq2sol-maker" ] || [ ! -x "$name/liq2sol-signer" ]; then
   echo "the archive is missing a binary" >&2

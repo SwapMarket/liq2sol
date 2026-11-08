@@ -220,6 +220,7 @@ impl Handler {
             Body::ClaimAnswer(a) => self.on_claim_answer(&got.sender, &id, a),
             Body::EarlyRefundAsk(a) => self.on_early_refund(&got.sender, &id, a, now),
             Body::ReleaseAsk(a) => self.on_release(&got.sender, &id, a, now),
+            Body::CancelAsk(a) => self.on_cancel(&got.sender, &id, a, now),
             Body::SessionOpen(o) => self.on_session_open(&got.sender, &id, o, now),
             Body::TakerShare(s) => self.on_taker_share(&got.sender, &id, s, now),
             // A taker has no business sending these, and a reject has nothing to free up in this version.
@@ -229,7 +230,8 @@ impl Handler {
             | Body::ClaimOffer(_)
             | Body::SessionNonce(_)
             | Body::MakerShare(_)
-            | Body::EarlyRefundShare(_) => None,
+            | Body::EarlyRefundShare(_)
+            | Body::Cancelled(_) => None,
         }
     }
 
@@ -371,6 +373,26 @@ impl Handler {
             other => eprintln!("rfq: claim answer refused: {other:?}"),
         }
         None
+    }
+
+    /// L→S. The signer promises never to lock, or refuses because it already has. The refund is signed later, on request.
+    fn on_cancel(&mut self, sender: &PublicKey, id: &str, a: CancelAsk, now: u64) -> Option<Event> {
+        let terms = self.swap_for(sender, id, &a.lock_point)?;
+        let swap = terms.lock_point.id();
+        let body = match self.signer.call(&Call::Cancel { terms }) {
+            Ok(Reply::Nothing) => {
+                if let Err(e) = self.store.commit_step(&swap, &engine::State::Abandoned, &[]) {
+                    eprintln!("rfq: couldn't mark {} abandoned: {e}", a.lock_point);
+                }
+                println!("{} cancelled, at the taker's request", a.lock_point);
+                Body::Cancelled(Cancelled { lock_point: a.lock_point })
+            }
+            other => {
+                eprintln!("rfq: cancel refused: {other:?}");
+                Body::RfqReject(Reject { reason: "this maker can't cancel now".into() })
+            }
+        };
+        self.reply(sender, id, body, now).ok().map(|(e, _)| e)
     }
 
     /// L→S. The signer decides, and if it agrees it has already promised never to lock.

@@ -2,6 +2,8 @@
 # Update the maker on this machine to the newest release, or to the one named, and restart every maker that was running.
 # Usage: sudo ./update.sh [vX.YY]      sudo ./update.sh --rollback
 # Configs, keys and databases are never touched. The binaries it replaces are kept in /opt/liq2sol/previous.
+# A release is installed only if its SHA256SUMS carries a signature by the release key already on this machine, in
+# /opt/liq2sol/release-key.gpg. On a first run, that is the copy beside this script.
 set -euo pipefail
 
 repo=SwapMarket/liq2sol
@@ -49,6 +51,10 @@ if [ "${1:-}" = --rollback ]; then
 fi
 
 command -v curl >/dev/null || { echo "needs curl: apt install curl" >&2; exit 1; }
+command -v gpgv >/dev/null || { echo "needs gpgv: apt install gpgv" >&2; exit 1; }
+key="$opt/release-key.gpg"
+[ -f "$key" ] || key="$(cd "$(dirname "$0")" && pwd)/release-key.gpg"
+[ -f "$key" ] || { echo "no release key: put release-key.gpg in $opt or beside this script" >&2; exit 1; }
 # Releases are pre-releases, which GitHub's "latest" skips, so ask for the newest of any kind.
 tag=${1:-$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=1" | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')}
 [[ "$tag" =~ ^v[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: '$tag'" >&2; exit 1; }
@@ -65,7 +71,9 @@ trap 'rm -rf "$work"' EXIT
 cd "$work"
 curl -fsSLO "https://github.com/$repo/releases/download/$tag/$name.tar.gz"
 curl -fsSLO "https://github.com/$repo/releases/download/$tag/SHA256SUMS"
-# This catches a damaged download. Both files come from the same place, so it doesn't prove who built them.
+# The signature is added by hand after the release is built, so a new release can lack it for a while.
+curl -fsSLO "https://github.com/$repo/releases/download/$tag/SHA256SUMS.asc" || { echo "$tag isn't signed yet. Try again later." >&2; exit 1; }
+gpgv --keyring "$key" SHA256SUMS.asc SHA256SUMS || { echo "$tag's signature doesn't check out against $key, so nothing was installed" >&2; exit 1; }
 sha256sum -c SHA256SUMS
 tar xzf "$name.tar.gz"
 if [ ! -x "$name/liq2sol-maker" ] || [ ! -x "$name/liq2sol-signer" ]; then
@@ -85,6 +93,8 @@ install -m 644 "$name/liq2sol-signer@.service" "$name/liq2sol-maker@.service" "$
 install -d "$opt/examples"
 install -m 644 "$name/signer.example.json" "$name/maker.example.json" "$name/README.md" "$opt/examples/"
 [ -f "$name/update.sh" ] && install -m 755 "$name/update.sh" "$opt/update.sh"
+# Signed by the key we trust, so a new key it carries is trusted next time.
+[ -f "$name/release-key.gpg" ] && install -m 644 "$name/release-key.gpg" "$opt/release-key.gpg"
 echo "$tag" > "$opt/VERSION"
 trap - ERR
 start_all

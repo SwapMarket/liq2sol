@@ -5,7 +5,8 @@ For an x86-64 machine with Debian 12 or later. This release is for Liquid testne
 ## Install
 
 ```sh
-# Check the download first, against SHA256SUMS from the same release.
+# Check the download first: SHA256SUMS is signed by SwapMarket, and lists the archive's checksum.
+gpgv --keyring ./release-key.gpg SHA256SUMS.asc SHA256SUMS   # release-key.gpg from the repo's deploy/ folder
 sha256sum -c SHA256SUMS
 tar xzf liq2sol-maker-*-x86_64-linux.tar.gz
 cd liq2sol-maker-*/
@@ -13,6 +14,7 @@ cd liq2sol-maker-*/
 sudo useradd --system --home /var/lib/liq2sol --shell /usr/sbin/nologin liq2sol
 sudo install -d /opt/liq2sol
 sudo install -m 755 liq2sol-signer liq2sol-maker update.sh /opt/liq2sol/
+sudo install -m 644 release-key.gpg /opt/liq2sol/
 sudo install -m 644 liq2sol-signer@.service liq2sol-maker@.service /etc/systemd/system/
 
 # One folder per maker. `first` can be any name.
@@ -82,7 +84,15 @@ sudo /opt/liq2sol/update.sh --rollback
 
 It downloads the release, checks it against its `SHA256SUMS`, stops every running maker and its signer, installs the binaries and service files, and starts them again, then waits for each to say `maker running`. Configs, keys and databases are left alone. The old binaries are kept in `/opt/liq2sol/previous` for `--rollback`, and the new example configs go to `/opt/liq2sol/examples`, to show any new settings. A swap in progress carries on after the restart.
 
-The checksum only catches a damaged download: it comes from the same place as the archive. The first time, copy the script in from the archive: `sudo install -m 755 update.sh /opt/liq2sol/`.
+It installs nothing unless the release's `SHA256SUMS` is signed by the key in `/opt/liq2sol/release-key.gpg`, SwapMarket's `E7947F8DBC700926D8A8175101151A25AAE22F55`. Releases are built on GitHub and signed by hand afterwards, so a new one can be unsigned for a while, and the script says so. Neither a GitHub account nor its build machines hold the key, so neither can ship something this accepts.
+
+A machine with v0.05 or earlier has neither the script nor the key. Get both, check the key's fingerprint against the one above (`gpg --show-keys release-key.gpg`, on any machine), and run it once:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/SwapMarket/liq2sol/main/deploy/update.sh
+curl -fsSLO https://raw.githubusercontent.com/SwapMarket/liq2sol/main/deploy/release-key.gpg
+sudo bash update.sh
+```
 
 ## Back up
 

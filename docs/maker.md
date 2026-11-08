@@ -158,7 +158,7 @@ recommended.
 | Failed signer policy checks | Any, page |
 | Elements or Agave security release | Manual subscription. The September 2026 fix was public 5 days before the exploit, so patch fast. |
 
-Metrics are written to local logs, plus an optional outbound push. A second machine should run a dead-man's switch that
+Pages go to `pages.log`, and with `page_to` set also to the operator as NIP-17 private messages from the maker's Nostr key (`deploy/README.md`). Low balances page too: USDT on either chain below the largest trade, or gas for fewer than 10 swaps. Metrics are written to local logs. A second machine should run a dead-man's switch that
 pages if the daemon stops reporting, because downtime during a reveal window is what costs money.
 
 ## 6b. Solana priority fees

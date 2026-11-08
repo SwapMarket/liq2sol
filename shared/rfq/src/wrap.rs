@@ -101,6 +101,63 @@ pub fn unwrap(me: &Keys, event: &Event) -> Result<Received, WrapError> {
     Ok(Received { sender: seal.pubkey, rumor_id, envelope })
 }
 
+/// NIP-17's kinds: a chat message, and the gift wrap a person's Nostr app reads. Unlike our own wrapper this one is stored, so
+/// a phone that was offline still gets it.
+pub const DM_KIND: u16 = 14;
+pub const GIFT_WRAP_KIND: u16 = 1059;
+
+/// A NIP-17 private message to a person: a kind 14 rumor naming `to`, sealed by `sender`, wrapped by a throwaway key. Both
+/// outer timestamps are randomized up to two days back, as NIP-17 asks. No copy goes to the sender, which NIP-17 allows.
+pub fn private_message(sender: &Keys, to: &PublicKey, text: &str, now: u64) -> Result<Event, WrapError> {
+    let mut rumor = UnsignedEvent::new(
+        sender.public_key(),
+        Timestamp::from(now),
+        Kind::from(DM_KIND),
+        vec![Tag::public_key(*to)],
+        text,
+    );
+    rumor.ensure_id();
+    let sealed =
+        nip44::encrypt(sender.secret_key(), to, rumor.as_json(), Version::V2).map_err(|_| WrapError::CannotDecrypt)?;
+    let seal = EventBuilder::new(Kind::from(SEAL_KIND), sealed)
+        .custom_created_at(tweaked(now, random_byte()))
+        .finalize(sender)
+        .map_err(|_| WrapError::BadSeal)?;
+    let throwaway = Keys::generate();
+    let wrapped = nip44::encrypt(throwaway.secret_key(), to, seal.as_json(), Version::V2)
+        .map_err(|_| WrapError::CannotDecrypt)?;
+    EventBuilder::new(Kind::from(GIFT_WRAP_KIND), wrapped)
+        .tag(Tag::public_key(*to))
+        .custom_created_at(tweaked(now, random_byte()))
+        .finalize(&throwaway)
+        .map_err(|_| WrapError::BadEvent)
+}
+
+/// Open a NIP-17 private message addressed to `me`: who sent it, and its text. The same checks as `unwrap`.
+pub fn open_private_message(me: &Keys, event: &Event) -> Result<(PublicKey, String), WrapError> {
+    if event.kind != Kind::from(GIFT_WRAP_KIND) {
+        return Err(WrapError::NotAWrap);
+    }
+    event.verify().map_err(|_| WrapError::BadEvent)?;
+    let seal_json =
+        nip44::decrypt(me.secret_key(), &event.pubkey, &event.content).map_err(|_| WrapError::CannotDecrypt)?;
+    let seal = Event::from_json(&seal_json).map_err(|_| WrapError::BadSeal)?;
+    if seal.kind != Kind::from(SEAL_KIND) {
+        return Err(WrapError::BadSeal);
+    }
+    seal.verify().map_err(|_| WrapError::BadSeal)?;
+    let rumor_json =
+        nip44::decrypt(me.secret_key(), &seal.pubkey, &seal.content).map_err(|_| WrapError::CannotDecrypt)?;
+    let rumor = UnsignedEvent::from_json(&rumor_json).map_err(|_| WrapError::BadRumor)?;
+    if rumor.pubkey != seal.pubkey {
+        return Err(WrapError::Spoofed);
+    }
+    if rumor.kind != Kind::from(DM_KIND) {
+        return Err(WrapError::BadRumor);
+    }
+    Ok((seal.pubkey, rumor.content))
+}
+
 /// A maker's public offer, addressable and expiring so a dead maker disappears from clients.
 pub fn offer_event(maker: &Keys, offer: &Offer, now: u64, ttl_secs: u64) -> Result<Event, WrapError> {
     let content = serde_json::to_string(offer).map_err(|_| WrapError::Malformed)?;

@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod balances;
+pub mod pager;
 pub mod rfq;
 
 use std::collections::HashMap;
@@ -49,6 +51,11 @@ pub struct Config {
     pub regtest_assets: Option<(String, String)>,
     /// Quotes over Nostr. Without this, swaps only enter through `accept`.
     pub rfq: Option<rfq::RfqConfig>,
+    /// Pages also go to the operator as Nostr private messages. Without this, only the page file has them.
+    #[serde(default)]
+    pub page_to: Option<pager::PageTo>,
+    #[serde(default)]
+    pub balance_alarms: balances::BalanceAlarms,
     /// How often to look for settled escrows to close for their rent.
     #[serde(default = "default_close_every")]
     pub close_every_secs: u64,
@@ -108,6 +115,11 @@ pub struct Maker {
     last_close: Option<Instant>,
     /// The way to takers. Without it no L→S swap can get its adapter signature, so none will lock.
     pub outbox: Option<rfq::Outbox>,
+    /// Where pages go out as private messages, when `page_to` is set.
+    pub pager: Option<std::sync::mpsc::Sender<String>>,
+    last_balance_check: Option<Instant>,
+    /// Each low-balance alarm that holds, and when it last paged.
+    low: HashMap<&'static str, Instant>,
 }
 
 fn default_close_every() -> u64 {
@@ -179,6 +191,9 @@ impl Maker {
             last_top_up: None,
             last_close: None,
             outbox: None,
+            pager: None,
+            last_balance_check: None,
+            low: HashMap::new(),
         })
     }
 
@@ -191,6 +206,14 @@ impl Maker {
         self.last_paged.insert(key, Instant::now());
         let line = format!("{} PAGE {} {page:?}\n", now_secs(), hex(hash));
         eprint!("{line}");
+        if let Some(pager) = &self.pager {
+            let what = match page {
+                Page::LowBalance(what) => what.clone(),
+                other => format!("{other:?}"),
+            };
+            let on = if *hash == [0; 32] { String::new() } else { format!(", on swap {}", hex(hash)) };
+            let _ = pager.send(format!("liq2sol maker: {what}{on}"));
+        }
         use std::io::Write;
         let written = std::fs::OpenOptions::new()
             .create(true)
@@ -636,7 +659,36 @@ impl Maker {
             }
         }
         self.close_settled_escrows();
+        self.check_balances();
         Ok(())
+    }
+
+    /// Page when a wallet can't fill the largest trade, or pay for a few more swaps. Once when it starts, then now and then.
+    fn check_balances(&mut self) {
+        let a = self.cfg.balance_alarms.clone();
+        if self.last_balance_check.is_some_and(|t| t.elapsed() < Duration::from_secs(a.every_secs)) {
+            return;
+        }
+        self.last_balance_check = Some(Instant::now());
+        let holdings = match self.signer.call(&Call::Balances) {
+            Ok(Reply::Balances { liquid_usdt, liquid_lbtc_sats, solana_usdt, sol_lamports, .. }) => {
+                balances::Holdings { liquid_usdt, liquid_lbtc_sats, solana_usdt, sol_lamports }
+            }
+            other => {
+                eprintln!("could not read our balances: {other:?}");
+                return;
+            }
+        };
+        let max_trade = self.cfg.rfq.as_ref().map_or(u64::MAX, |r| r.max_sol_units).min(self.cfg.engine.max_per_swap);
+        let alarms = balances::low(&holdings, max_trade, &a);
+        self.low.retain(|name, _| alarms.iter().any(|(n, _)| n == name));
+        for (name, what) in alarms {
+            if self.low.get(name).is_some_and(|t| t.elapsed() < Duration::from_secs(a.repeat_secs)) {
+                continue;
+            }
+            self.low.insert(name, Instant::now());
+            self.page(&[0; 32], &Page::LowBalance(what));
+        }
     }
 }
 
@@ -653,7 +705,37 @@ fn load_config(path: &Path) -> Result<Config, String> {
     if let Some(rfq) = cfg.rfq.as_mut() {
         rfq.nostr_key = base.join(&rfq.nostr_key);
     }
+    if let Some(page_to) = &cfg.page_to {
+        page_to.check()?;
+    }
     Ok(cfg)
+}
+
+/// Pages are sent by the maker's own Nostr key, so the operator's app shows which maker it is. Without one, a fresh key.
+fn page_keys(cfg: &Config) -> Result<nostr::prelude::Keys, String> {
+    match &cfg.rfq {
+        Some(rfq) => rfq::load_keys(&rfq.nostr_key),
+        None => Ok(nostr::prelude::Keys::generate()),
+    }
+}
+
+/// Send one test page, and say what each relay answered.
+pub fn test_page(config_path: &Path) -> Result<(), String> {
+    let cfg = load_config(config_path)?;
+    let page_to = cfg.page_to.as_ref().ok_or("no page_to in the config")?;
+    let keys = page_keys(&cfg)?;
+    println!("sending a test page from {}", keys.public_key().to_hex());
+    let mut delivered = false;
+    for (url, outcome) in pager::send(&keys, page_to, "liq2sol maker: a test page. Pages will arrive like this.") {
+        match outcome {
+            Ok(()) => {
+                delivered = true;
+                println!("{url}: accepted");
+            }
+            Err(e) => println!("{url}: {e}"),
+        }
+    }
+    if delivered { Ok(()) } else { Err("no relay accepted the page".into()) }
 }
 
 /// What this maker has earned and spent, from its own records. Read-only in effect, and safe while the maker runs.
@@ -722,6 +804,10 @@ pub fn run(config_path: &Path) -> Result<(), String> {
         maker.outbox = Some(outbox);
         println!("maker answering quotes as {}", pubkey.to_hex());
     }
+    if let Some(page_to) = cfg.page_to.clone() {
+        maker.pager = Some(pager::start(page_keys(&cfg)?, page_to));
+        println!("pages also go to {} as Nostr private messages", cfg.page_to.as_ref().map_or("", |p| p.nostr.as_str()));
+    }
     println!("maker running");
     loop {
         if let Err(e) = maker.tick() {
@@ -740,12 +826,31 @@ pub fn run(config_path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn loaded(folder: &str, edit: impl Fn(&str) -> String) -> Config {
+    fn try_loaded(folder: &str, edit: impl Fn(&str) -> String) -> Result<Config, String> {
         let dir = std::env::temp_dir().join(format!("liq2sol-config-{}-{folder}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("maker.json");
         std::fs::write(&path, edit(include_str!("../../../deploy/maker.example.json"))).unwrap();
-        load_config(&path).unwrap()
+        load_config(&path)
+    }
+
+    fn loaded(folder: &str, edit: impl Fn(&str) -> String) -> Config {
+        try_loaded(folder, edit).unwrap()
+    }
+
+    #[test]
+    fn page_to_is_optional_but_checked_when_set() {
+        assert_eq!(loaded("no-pager", str::to_string).page_to, None);
+        let with = |nostr: &str, relays: &str| {
+            let page_to = format!("{{\"page_to\": {{\"nostr\": \"{nostr}\", \"relays\": {relays}}},");
+            move |s: &str| s.replacen('{', &page_to, 1)
+        };
+        // NIP-19's own example key.
+        let npub = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg";
+        let cfg = loaded("pager", with(npub, "[\"wss://relay.example\"]"));
+        assert_eq!(cfg.page_to.unwrap().check().unwrap().to_hex(), "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e");
+        assert!(try_loaded("pager-bad-key", with("npub1notakey", "[\"wss://relay.example\"]")).is_err(), "a bad key stops the maker");
+        assert!(try_loaded("pager-no-relay", with(npub, "[]")).is_err(), "and so does nowhere to send");
     }
 
     #[test]

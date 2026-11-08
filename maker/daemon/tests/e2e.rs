@@ -239,6 +239,8 @@ struct World {
     relay: MockRelay,
     relay_url: String,
     maker_nostr: nostr::prelude::PublicKey,
+    /// The operator, who gets pages as Nostr private messages, on the mock relay.
+    operator: nostr::prelude::Keys,
 }
 
 impl World {
@@ -902,6 +904,20 @@ fn rollback_stops_everything(w: &mut World) -> Res<()> {
     w.wait_for("the daemon to raise the rollback alarm", 60, || {
         Ok(std::fs::read_to_string(&w.pages).ok().filter(|t| t.contains("Rollback")))
     })?;
+    w.wait_for("a low-balance alarm to reach the operator too", 60, || {
+        Ok(w.relay.stored(wrap::GIFT_WRAP_KIND).iter().find_map(|e| {
+            wrap::open_private_message(&w.operator, e)
+                .ok()
+                .filter(|(from, text)| *from == w.maker_nostr && text.contains("enough for fewer than 1000000000 swaps"))
+        }))
+    })?;
+    w.wait_for("the alarm to reach the operator as a private message from the maker", 60, || {
+        Ok(w.relay.stored(wrap::GIFT_WRAP_KIND).iter().find_map(|e| {
+            wrap::open_private_message(&w.operator, e)
+                .ok()
+                .filter(|(from, text)| *from == w.maker_nostr && text.contains("Rollback"))
+        }))
+    })?;
     check(w.store.rollback().map_err(|e| e.to_string())?, "the alarm is latched")?;
     check(w.chain.spender(&coin.coin.outpoint)?.is_none(), "the claim is gone, so the coin looks unspent")?;
     let bot = w.bot.keys.clone();
@@ -1072,7 +1088,14 @@ fn build_world(root: &Path) -> World {
     // `RFQ_RELAY` runs the swaps through a real relay. The attack scenario always stays on the mock.
     let public_relay = std::env::var("RFQ_RELAY").ok();
     let relay_url = public_relay.clone().unwrap_or_else(|| relay.url());
+    let operator = nostr::prelude::Keys::generate();
     let cfg = Config {
+        // More gas than any test wallet holds, so the alarm always fires, and the check below sees it arrive.
+        balance_alarms: liq2sol_maker::balances::BalanceAlarms { gas_swaps: 1_000_000_000, ..Default::default() },
+        page_to: Some(liq2sol_maker::pager::PageTo {
+            nostr: operator.public_key().to_hex(),
+            relays: vec![relay.url()],
+        }),
         db: db.clone(),
         signer_socket: socket.clone(),
         pages: pages.clone(),
@@ -1153,6 +1176,7 @@ fn build_world(root: &Path) -> World {
         relay,
         relay_url,
         maker_nostr,
+        operator,
     };
     world.start_daemon();
     world

@@ -580,3 +580,50 @@ fn an_offer_cannot_claim_someone_elses_key() {
     assert_ne!(changed.content, real.content, "the edit took");
     assert!(read_offer(&changed, NET, NOW).is_none(), "a real signature over other terms");
 }
+
+/// `forge`, wrapped as a NIP-17 gift wrap.
+fn forge_dm(seal_signer: &Keys, rumor_author: PublicKey, to: &PublicKey, kind: u16, content: &str) -> Event {
+    let mut rumor = UnsignedEvent::new(rumor_author, Timestamp::from(NOW), Kind::from(kind), Vec::<Tag>::new(), content);
+    rumor.ensure_id();
+    let sealed = nip44::encrypt(seal_signer.secret_key(), to, rumor.as_json(), Version::V2).unwrap();
+    let seal = EventBuilder::new(Kind::from(SEAL_KIND), sealed).finalize(seal_signer).unwrap();
+    let throwaway = Keys::generate();
+    let wrapped = nip44::encrypt(throwaway.secret_key(), to, seal.as_json(), Version::V2).unwrap();
+    EventBuilder::new(Kind::from(GIFT_WRAP_KIND), wrapped).tag(Tag::public_key(*to)).finalize(&throwaway).unwrap()
+}
+
+#[test]
+fn a_private_message_follows_nip17_and_only_its_recipient_can_read_it() {
+    let (maker, operator, stranger) = (Keys::generate(), Keys::generate(), Keys::generate());
+    let event = private_message(&maker, &operator.public_key(), "PAGE Rollback", NOW).unwrap();
+    // Outside: a stored gift wrap to the operator, from a throwaway key, at a time up to two days back.
+    assert_eq!(event.kind, Kind::from(GIFT_WRAP_KIND));
+    assert_ne!(event.pubkey, maker.public_key(), "the wrap doesn't show who sent it");
+    assert_eq!(event.tags.public_keys().collect::<Vec<_>>(), vec![operator.public_key()]);
+    let at = event.created_at.as_secs();
+    assert!((NOW - 2 * 86_400..=NOW).contains(&at), "randomized into the past, never the future");
+    // Inside: the seal, then a kind 14 rumor that names the operator, as Nostr apps expect.
+    let seal = Event::from_json(nip44::decrypt(operator.secret_key(), &event.pubkey, &event.content).unwrap()).unwrap();
+    assert_eq!(seal.kind, Kind::from(SEAL_KIND));
+    assert!(seal.created_at.as_secs() <= NOW);
+    let rumor =
+        UnsignedEvent::from_json(nip44::decrypt(operator.secret_key(), &seal.pubkey, &seal.content).unwrap()).unwrap();
+    assert_eq!(rumor.kind, Kind::from(DM_KIND));
+    assert_eq!(rumor.created_at.as_secs(), NOW, "the message itself keeps the real time");
+    assert_eq!(rumor.tags.public_keys().collect::<Vec<_>>(), vec![operator.public_key()]);
+    assert_eq!(open_private_message(&operator, &event), Ok((maker.public_key(), "PAGE Rollback".to_string())));
+    assert_eq!(open_private_message(&stranger, &event), Err(WrapError::CannotDecrypt));
+}
+
+#[test]
+fn a_private_message_with_a_forged_author_or_kind_is_refused() {
+    let (mallory, maker, operator) = (Keys::generate(), Keys::generate(), Keys::generate());
+    let to = operator.public_key();
+    let forged = forge_dm(&mallory, maker.public_key(), &to, DM_KIND, "all is well");
+    assert_eq!(open_private_message(&operator, &forged), Err(WrapError::Spoofed), "the rumor claims to be the maker");
+    let wrong = forge_dm(&maker, maker.public_key(), &to, 1, "a note");
+    assert_eq!(open_private_message(&operator, &wrong), Err(WrapError::BadRumor));
+    // Our own swap wrapper is not a private message.
+    let (ours, _) = wrap(&maker, &to, &sample(), NOW).unwrap();
+    assert_eq!(open_private_message(&operator, &ours), Err(WrapError::NotAWrap));
+}

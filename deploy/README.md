@@ -60,6 +60,31 @@ journalctl -u liq2sol-maker@first -f
 
 It is running when the log says `maker answering quotes as <key>`, followed by `maker running`. `/var/lib/liq2sol/first/pages.log` holds what an operator needs to see, such as a rollback alarm. Watch it.
 
+## Pages on your phone
+
+Pages can also reach you as Nostr private messages (NIP-17), which apps such as Amethyst, 0xchat and Primal show. Add this to the top level of `maker.json`, with your own key and the DM relays your app reads (its kind 10050 list, in the app's relay settings):
+
+```json
+"page_to": { "nostr": "npub1…", "relays": ["wss://relay.example"] },
+```
+
+Then check it, and restart the maker:
+
+```sh
+sudo -u liq2sol /opt/liq2sol/liq2sol-maker test-page /var/lib/liq2sol/first/maker.json
+sudo systemctl restart liq2sol-maker@first
+```
+
+Messages come from the maker's own Nostr key, so name it in your app. `pages.log` stays the record: a message no relay takes is lost.
+
+The maker also pages when its wallets run low: SOL-USDT or L-USDt below the largest trade it offers, or SOL or L-BTC for fewer than 10 swaps. It pages once when that starts, then every 6 hours while it lasts. To change these, add any of:
+
+```json
+"balance_alarms": { "gas_swaps": 10, "lamports_per_swap": 3000000, "lbtc_sats_per_swap": 200, "every_secs": 600, "repeat_secs": 21600 },
+```
+
+One swap ties up about 0.003 SOL, mostly escrow rent that comes back when the escrow closes, and spends up to about 150 sats of L-BTC.
+
 ## Several makers on one machine
 
 Each maker is a folder under `/var/lib/liq2sol`, with its own keys, configs and databases. Paths in a config are relative to that config, so the example configs work unchanged in any folder. To add `second`, repeat the folder steps with that name, set its prices, and give it its own `solana.json`. Its other keys are generated. Then start `liq2sol-signer@second` and `liq2sol-maker@second`.

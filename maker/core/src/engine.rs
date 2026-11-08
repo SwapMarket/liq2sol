@@ -260,6 +260,8 @@ pub enum Page {
     Lost,
     /// An on-chain value that should be impossible, such as a revealed value that doesn't open the point.
     Impossible(String),
+    /// A wallet is too low to fill the largest trade, or to pay for a few more swaps.
+    LowBalance(String),
 }
 
 fn required_confirmations(cfg: &Config, terms: &Terms) -> u32 {

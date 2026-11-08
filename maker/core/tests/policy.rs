@@ -417,3 +417,23 @@ fn after_locking_on_liquid_we_never_release() {
     apply(&m, &lock_liquid()).unwrap();
     assert_eq!(apply(&m, &Request::Release { swap_id: hash() }), Err(Refusal::ReleaseAfterLock));
 }
+
+#[test]
+fn address_indexes_are_kept_per_swap_and_survive_a_restart() {
+    let dir = std::env::temp_dir().join(format!("liq2sol-addresses-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("signer.db");
+    let _ = std::fs::remove_file(&path);
+    let (a, b) = ([1u8; 32], [2u8; 32]);
+    {
+        let ledger = SignerLedger::open(&path).unwrap();
+        assert_eq!(ledger.address_index(Some(&a)).unwrap(), 1, "index 0 is the wallet's own and never handed out");
+        assert_eq!(ledger.address_index(None).unwrap(), 2);
+        assert_eq!(ledger.address_index(Some(&a)).unwrap(), 1, "a swap asking again gets its own index back");
+        assert_eq!(ledger.address_index(None).unwrap(), 3, "without a swap, each call is new");
+    }
+    let ledger = SignerLedger::open(&path).unwrap();
+    assert_eq!(ledger.address_index(Some(&a)).unwrap(), 1, "remembered across a restart");
+    assert_eq!(ledger.address_index(Some(&b)).unwrap(), 4);
+    assert_eq!(ledger.address_indexes().unwrap(), vec![1, 2, 3, 4]);
+}

@@ -176,22 +176,26 @@ impl Esplora {
         }
     }
 
-    /// (txid, vout, confirmed height) of each unspent output at an address.
-    fn unspent(&self, address: &Address) -> Res<Vec<(Txid, u32, Option<u32>)>> {
+    /// (txid, vout, confirmed height) of each unspent output at any of these addresses. A node reads them all in one
+    /// scan. An API is asked once per address, so a list is only for a node: an API would see every address come from one IP.
+    fn unspent(&self, addresses: &[Address]) -> Res<Vec<(Txid, u32, Option<u32>)>> {
         let parse = |t: &Json| Txid::from_str(t.as_str().unwrap_or_default()).map_err(|e| e.to_string());
         match self {
             Esplora::Http(u) => {
-                let body = get(&format!("{u}/address/{address}/utxo"))?;
-                let list: Vec<Json> = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-                list.iter()
-                    .map(|c| {
+                let mut all = vec![];
+                for address in addresses {
+                    let body = get(&format!("{u}/address/{address}/utxo"))?;
+                    let list: Vec<Json> = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+                    for c in &list {
                         let height = c["status"]["block_height"].as_u64().map(|h| h as u32);
-                        Ok((parse(&c["txid"])?, c["vout"].as_u64().ok_or("utxo vout")? as u32, height))
-                    })
-                    .collect()
+                        all.push((parse(&c["txid"])?, c["vout"].as_u64().ok_or("utxo vout")? as u32, height));
+                    }
+                }
+                Ok(all)
             }
             Esplora::Node(n) => {
-                let desc = format!("[\"addr({address})\"]");
+                let descs: Vec<String> = addresses.iter().map(|a| format!("addr({a})")).collect();
+                let desc = serde_json::to_string(&descs).map_err(|e| e.to_string())?;
                 // A node runs one scan at a time, and a maker's daemon and signer share a node, so wait for a turn.
                 let mut tries = 0;
                 let found = loop {
@@ -257,12 +261,18 @@ impl Esplora {
 impl Esplora {
     /// Every unspent output paying this address's script, blinded or not. The blinding key has no effect on the script.
     pub fn outputs(&self, address: &Address) -> Res<Vec<Coin>> {
-        let plain = address.to_unconfidential();
+        self.outputs_at(std::slice::from_ref(address))
+    }
+
+    /// Unspent outputs at any of these addresses, each checked against the script it claims to pay.
+    fn outputs_at(&self, addresses: &[Address]) -> Res<Vec<Coin>> {
+        let plain: Vec<Address> = addresses.iter().map(Address::to_unconfidential).collect();
+        let scripts: Vec<_> = plain.iter().map(Address::script_pubkey).collect();
         let mut coins = vec![];
         for (txid, vout, height) in self.unspent(&plain)? {
             let tx = self.tx(&txid)?;
             let out = tx.output.get(vout as usize).ok_or("utxo vout range")?.clone();
-            if out.script_pubkey == plain.script_pubkey() {
+            if scripts.contains(&out.script_pubkey) {
                 coins.push(Coin { outpoint: OutPoint::new(txid, vout), out, height });
             }
         }
@@ -271,10 +281,19 @@ impl Esplora {
 
     /// The outputs at this address that we can read.
     pub fn secret_coins(&self, address: &Address, blinding: &SecretKey) -> Res<Vec<SecretCoin>> {
+        self.secret_coins_at(&[(address.clone(), *blinding)])
+    }
+
+    /// The outputs we can read at any of these addresses, each with its own blinding key.
+    pub fn secret_coins_at(&self, wallets: &[(Address, SecretKey)]) -> Res<Vec<SecretCoin>> {
+        let addresses: Vec<Address> = wallets.iter().map(|(a, _)| a.clone()).collect();
         Ok(self
-            .outputs(address)?
+            .outputs_at(&addresses)?
             .into_iter()
-            .filter_map(|coin| read_output(&coin.out, blinding).map(|secrets| SecretCoin { coin, secrets }))
+            .filter_map(|coin| {
+                let (_, blinding) = wallets.iter().find(|(a, _)| a.script_pubkey() == coin.out.script_pubkey)?;
+                read_output(&coin.out, blinding).map(|secrets| SecretCoin { coin, secrets })
+            })
             .collect())
     }
 }

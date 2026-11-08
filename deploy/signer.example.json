@@ -23,5 +23,6 @@
  },
  "regtest_assets": null,
  "vault_owner": null,
- "fee_coin_sats": 30
+ "fee_coin_sats": 30,
+ "fresh_addresses": false
 }

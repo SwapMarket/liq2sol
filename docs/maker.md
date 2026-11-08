@@ -52,6 +52,16 @@ needed.
   - Requests are handled one at a time so policy checks can't race, and read outside that lock so a stalled client blocks nobody.
 - Per-swap Liquid keys are derived as SHA-256 of a domain tag, a seed and the swap id, rather than BIP-32. A restored seed
   can still spend every open swap.
+- **Fresh addresses (`fresh_addresses` in the signer's config, off by default).** Without it, every claim, refund, piece of
+  change and fee coin goes back to the one wallet address, so anyone can link the maker's activity on-chain, though amounts
+  stay hidden. With it, each goes to a new address. Index 0 is the wallet's own keys, still the address to fund. Index `i`
+  has its own spend and blinding keys, SHA-256 of a domain tag, the wallet or blinding key, and `i`. The ledger records each
+  index before anything pays it, and a swap keeps its index, so a retried claim or refund pays the same address. The signer
+  reads all its addresses in one `scantxoutset` call.
+  - It refuses to start with it on unless `liquid` is our own node. Over a public API, one IP asking about every address
+    would link them anyway.
+  - The ledger is now needed to find coins at the new addresses, as well as for the rules it always kept. Back it up with the keys.
+  - The list only grows, about one index per swap. A scan's cost is mostly reading the UTXO set, so this matters little for now.
 - **Limits of this separation.** It needs a separate OS user to mean much, because the same user can read the key files. Root on
   the host defeats it. The signer also trusts its own chain source, so a lying node or RPC could feed it false evidence, which is
   why a maker should run its own node.

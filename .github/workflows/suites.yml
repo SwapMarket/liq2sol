@@ -1,0 +1,239 @@
+# The suites that need real chains: the daemon's scenarios, the browser against the real daemon, the signer attack suite and
+# the CLI's failure scenarios. Each scenario runs in its own job, with its own Elements regtest node and Solana test
+# validator, so the whole set takes about as long as the slowest one.
+#
+# No secret is involved. The programs load at their fixed ids with `--bpf-program`, so their keypairs stay off GitHub, and
+# the stand-in USDT mint is preloaded with an authority made in the job (scripts/ci-mint-account.py). Every download is
+# pinned by checksum, and actions are pinned to exact commits.
+name: Test against real chains
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - maker/**
+      - shared/**
+      - contracts/**
+      - programs/**
+      - client/**
+      - cli/**
+      - scripts/ci-mint-account.py
+      - .github/workflows/suites.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: suites-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: 1.99.1
+  WASM_PACK_VERSION: 0.13.1
+  AGAVE_VERSION: 4.1.2
+  AGAVE_SHA256: 5991d027a686eb419a709a479178b33eb83501e8a2bfbf599a81a286bfcbf770
+  ELEMENTS_VERSION: 23.3.4
+  # As listed in the release's signed SHA256SUMS.asc.
+  ELEMENTS_SHA256: a758151ace3f21008ab162067ffce9e0e526a1b5d55995e2c30d9cd7ccda41a0
+  ESCROW_ID: EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU
+  FAUCET_ID: GAcP2avhVggTqeHSEoKGmGXw4wpJCTasRBjbUfrC1Xpu
+  MINT: 8BXimW8mCEfhdD1fhv9aoCfQgSj3KxFc52jMAbLvaFwi
+  SOLANA_RPC: http://127.0.0.1:8899
+
+jobs:
+  programs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Reuse the programs if nothing in them changed
+        id: built
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            programs/target/deploy/solana_escrow.so
+            programs/target/deploy/devnet_faucet.so
+          key: programs-${{ env.AGAVE_VERSION }}-${{ hashFiles('programs/**', '!programs/target/**') }}
+      - name: Install Agave
+        if: steps.built.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o agave.tar.bz2 "https://github.com/anza-xyz/agave/releases/download/v$AGAVE_VERSION/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
+          echo "$AGAVE_SHA256  agave.tar.bz2" | sha256sum -c
+          tar xjf agave.tar.bz2 -C "$HOME"
+          echo "$HOME/solana-release/bin" >> "$GITHUB_PATH"
+      # SBPF v3, because the test validator refuses to load v0 (SIMD-0500).
+      - name: Build both programs
+        if: steps.built.outputs.cache-hit != 'true'
+        working-directory: programs
+        run: |
+          cargo build-sbf --arch v3 --manifest-path solana-escrow/Cargo.toml
+          cargo build-sbf --arch v3 --manifest-path devnet-faucet/Cargo.toml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: programs
+          path: |
+            programs/target/deploy/solana_escrow.so
+            programs/target/deploy/devnet_faucet.so
+          if-no-files-found: error
+
+  # Once, for every job: the binaries and test binaries keep the paths they were built at, which are the same on every runner.
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            maker/target
+            cli/target
+          key: suites-build-${{ env.RUST_VERSION }}-${{ hashFiles('maker/Cargo.lock', 'cli/Cargo.lock') }}
+          restore-keys: suites-build-${{ env.RUST_VERSION }}-
+      - name: Reuse wasm-pack
+        id: wasm-pack
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ env.WASM_PACK_VERSION }}
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_VERSION"
+          sudo apt-get update -q
+          sudo apt-get install -yq clang llvm
+      - name: Install wasm-pack
+        if: steps.wasm-pack.outputs.cache-hit != 'true'
+        run: cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
+      - name: Build the maker, its tests, the CLI and the page's WebAssembly
+        run: |
+          mkdir -p dist
+          test_bin() { jq -r "select(.target.name == \"$1\" and .profile.test == true) | .executable | select(. != null)"; }
+          (cd maker && cargo build --locked)
+          cp "$(cd maker && cargo test --locked --no-run -p liq2sol-maker --test e2e --message-format=json | test_bin e2e)" maker/target/debug/e2e-suite
+          cp "$(cd maker && cargo test --locked --no-run -p liq2sol-signer --test process --message-format=json | test_bin process)" maker/target/debug/process-suite
+          (cd cli && cargo build --locked)
+          cp "$(cd cli && cargo test --locked --no-run --test failures --message-format=json | test_bin failures)" cli/target/debug/failures-suite
+          client/build.sh
+          tar czf dist/binaries.tar.gz maker/target/debug/liq2sol-maker maker/target/debug/liq2sol-signer \
+            maker/target/debug/e2e-suite maker/target/debug/process-suite \
+            cli/target/debug/liq2sol-cli cli/target/debug/failures-suite client/site/wasm
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binaries
+          path: dist/binaries.tar.gz
+          if-no-files-found: error
+
+  suite:
+    needs: [programs, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: L2S with crashes, run: e2e, scenario: "L2S with crashes (E1, E17)" }
+          - { name: S2L with crashes, run: e2e, scenario: "S2L with crashes (E1, E17)" }
+          - { name: crash between commit and send, run: e2e, scenario: "crash between commit and send (E17)" }
+          - { name: L2S taker vanishes, run: e2e, scenario: "L2S taker vanishes (E3)" }
+          - { name: L2S taker never signs, run: e2e, scenario: "L2S taker never signs" }
+          - { name: S2L taker vanishes, run: e2e, scenario: "S2L taker vanishes (E3)" }
+          - { name: bad locks, run: e2e, scenario: "bad locks (E9)" }
+          - { name: Liquid halt extends, run: e2e, scenario: "Liquid halt extends (E11)" }
+          - { name: rollback, run: e2e, scenario: "rollback (E15)" }
+          - { name: RFQ L2S swap, run: e2e, scenario: "RFQ L2S swap (E1)" }
+          - { name: RFQ S2L swap, run: e2e, scenario: "RFQ S2L swap (E1)" }
+          - { name: RFQ attacks, run: e2e, scenario: "RFQ attacks (E6, E7)" }
+          - { name: RFQ early refund, run: e2e, scenario: "RFQ early refund" }
+          - { name: RFQ S2L release, run: e2e, scenario: "RFQ S2L release" }
+          - { name: browser look, run: e2e, scenario: browser client, browser: "look,cancelling,faucet" }
+          - { name: browser swaps, run: e2e, scenario: browser client, browser: "l2s,s2l,split" }
+          - { name: browser refunds, run: e2e, scenario: browser client, browser: "rescue,early,release,wrong" }
+          - { name: signer attacks, run: process }
+          - { name: CLI failures, run: failures }
+    name: ${{ matrix.name }}
+    env:
+      SCENARIO: ${{ matrix.scenario }}
+      BROWSER_SCENARIOS: ${{ matrix.browser }}
+      ELEMENTSD: ${{ github.workspace }}/../elements/bin/elementsd
+      ELEMENTS_CLI: ${{ github.workspace }}/../elements/bin/elements-cli
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: programs
+          path: programs/target/deploy
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: binaries
+      - name: Unpack the binaries
+        run: tar xzf binaries.tar.gz && mkdir -p maker/target/tmp cli/target/tmp
+      - name: Install Agave and Elements
+        run: |
+          curl -fsSL -o agave.tar.bz2 "https://github.com/anza-xyz/agave/releases/download/v$AGAVE_VERSION/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
+          echo "$AGAVE_SHA256  agave.tar.bz2" | sha256sum -c
+          tar xjf agave.tar.bz2 -C "$HOME" solana-release/bin/solana solana-release/bin/solana-keygen solana-release/bin/solana-test-validator
+          echo "$HOME/solana-release/bin" >> "$GITHUB_PATH"
+          name="elements-$ELEMENTS_VERSION-x86_64-linux-gnu.tar.gz"
+          curl -fsSL -o "$name" "https://github.com/ElementsProject/elements/releases/download/elements-$ELEMENTS_VERSION/$name"
+          echo "$ELEMENTS_SHA256  $name" | sha256sum -c
+          mkdir -p ../elements && tar xzf "$name" -C ../elements --strip-components=1
+          rm agave.tar.bz2 "$name"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: matrix.browser != ''
+        with:
+          node-version: 24
+      - name: Install the browser
+        if: matrix.browser != ''
+        working-directory: client
+        run: |
+          npm ci
+          npx playwright-core install --with-deps chromium
+      # Test keys made here, a validator with both programs and the stand-in mint, and SOL and tokens for each wallet.
+      - name: Start a Solana test validator
+        run: |
+          cli/target/debug/liq2sol-cli addresses
+          python3 -I scripts/ci-mint-account.py cli/.keys/mint-authority.json "$RUNNER_TEMP/mint.json"
+          solana-test-validator --reset --quiet --ledger "$RUNNER_TEMP/ledger" \
+            --bpf-program "$ESCROW_ID" programs/target/deploy/solana_escrow.so \
+            --bpf-program "$FAUCET_ID" programs/target/deploy/devnet_faucet.so \
+            --account "$MINT" "$RUNNER_TEMP/mint.json" > "$RUNNER_TEMP/validator.log" 2>&1 &
+          for _ in $(seq 120); do
+            curl -fs "$SOLANA_RPC" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' | grep -q '"ok"' && break
+            sleep 1
+          done
+          for k in taker-solana maker-solana mint-authority; do
+            solana airdrop 1000 "$(solana-keygen pubkey "cli/.keys/$k.json")" -u "$SOLANA_RPC" > /dev/null
+          done
+          # Spends need the airdrops final.
+          for k in taker-solana maker-solana mint-authority; do
+            for _ in $(seq 60); do
+              [ "$(solana balance "$(solana-keygen pubkey "cli/.keys/$k.json")" -u "$SOLANA_RPC" --commitment finalized | cut -d' ' -f1)" != 0 ] && break
+              sleep 1
+            done
+          done
+          cli/target/debug/liq2sol-cli ci-setup "$FAUCET_ID"
+      - name: Run
+        run: |
+          case "${{ matrix.run }}" in
+            e2e) [ -n "$BROWSER_SCENARIOS" ] && export CLIENT_TEST=1
+                 maker/target/debug/e2e-suite --ignored --nocapture ;;
+            process) maker/target/debug/process-suite --ignored --nocapture ;;
+            failures) cli/target/debug/failures-suite --ignored --nocapture ;;
+          esac
+      - name: Keep the logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: logs-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/validator.log
+            maker/target/tmp/*.log
+            maker/target/tmp/client-*/*.png
+          if-no-files-found: ignore

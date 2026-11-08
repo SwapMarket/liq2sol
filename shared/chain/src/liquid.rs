@@ -171,7 +171,19 @@ pub fn pay_from_coins(
     payments: Vec<Payment>,
     genesis: BlockHash,
 ) -> Res<Transaction> {
-    let address = wallet.address();
+    pay_from_coins_with(coins, &wallet.address(), |_| Some(wallet.key), payments, genesis)
+}
+
+/// The same, for coins held at several addresses: change goes to `change`, and each input is signed with the key `key_for`
+/// gives its script.
+pub fn pay_from_coins_with(
+    coins: &[SecretCoin],
+    change: &Address,
+    key_for: impl Fn(&simplicityhl::elements::Script) -> Option<Keypair>,
+    payments: Vec<Payment>,
+    genesis: BlockHash,
+) -> Res<Transaction> {
+    let address = change.clone();
     let mut needed: Vec<(AssetId, u64)> = vec![(lbtc(), 0)];
     for p in &payments {
         match needed.iter_mut().find(|(a, _)| *a == p.asset) {
@@ -248,7 +260,8 @@ pub fn pay_from_coins(
         output,
     };
     for i in 0..tx.input.len() {
-        sign_keypath(&mut tx, &utxos, i, &wallet.key, genesis)?;
+        let key = key_for(&utxos[i].script_pubkey).ok_or("no key for a coin being spent")?;
+        sign_keypath(&mut tx, &utxos, i, &key, genesis)?;
     }
     Ok(tx)
 }

@@ -96,6 +96,6 @@ sudo bash update.sh
 
 ## Back up
 
-`keys/` and both `.db` files. Prices, limits and API endpoints are in `maker.json`. Restart both services after changing a config.
+`keys/` and both `.db` files. With `fresh_addresses` on, `signer.db` is also how the signer finds the coins at its newer addresses. Prices, limits and API endpoints are in `maker.json`. Restart both services after changing a config.
 
 Liquid's public APIs rate-limit by IP. If the logs show `status code 429`, change the endpoints in both configs.

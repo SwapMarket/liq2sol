@@ -394,7 +394,8 @@ impl SignerLedger {
              CREATE TABLE IF NOT EXISTS adaptors (swap BLOB PRIMARY KEY, body TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS fee_coins (swap BLOB PRIMARY KEY, outpoint TEXT NOT NULL UNIQUE);
              CREATE TABLE IF NOT EXISTS used_coins (outpoint TEXT PRIMARY KEY);
-             CREATE TABLE IF NOT EXISTS pending_top_up (id INTEGER PRIMARY KEY CHECK (id = 1), raw_tx BLOB NOT NULL);",
+             CREATE TABLE IF NOT EXISTS pending_top_up (id INTEGER PRIMARY KEY CHECK (id = 1), raw_tx BLOB NOT NULL);
+             CREATE TABLE IF NOT EXISTS addresses (idx INTEGER PRIMARY KEY, swap BLOB UNIQUE);",
         )?;
         Ok(Self { conn })
     }
@@ -435,6 +436,31 @@ impl SignerLedger {
             params![swap.as_slice(), outpoint],
         )?;
         Ok(added == 1)
+    }
+
+    /// An address index for our own coins, recorded before anything pays it, so the wallet always reads it. A swap keeps one
+    /// index, so a retried claim or refund pays the same address. Without a swap, each call gives a new one. Index 0 is the
+    /// wallet's own address and is never handed out here.
+    pub fn address_index(&self, swap: Option<&[u8; 32]>) -> Result<u32> {
+        if let Some(swap) = swap {
+            let known: Option<u32> = self
+                .conn
+                .query_row("SELECT idx FROM addresses WHERE swap = ?1", params![swap.as_slice()], |r| r.get(0))
+                .optional()?;
+            if let Some(idx) = known {
+                return Ok(idx);
+            }
+        }
+        let next: u32 = self.conn.query_row("SELECT COALESCE(MAX(idx), 0) + 1 FROM addresses", [], |r| r.get(0))?;
+        self.conn.execute("INSERT INTO addresses (idx, swap) VALUES (?1, ?2)", params![next, swap.map(|s| s.to_vec())])?;
+        Ok(next)
+    }
+
+    /// Every index handed out, in order.
+    pub fn address_indexes(&self) -> Result<Vec<u32>> {
+        let mut stmt = self.conn.prepare("SELECT idx FROM addresses ORDER BY idx")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     pub fn fee_coin(&self, swap: &[u8; 32]) -> Result<Option<String>> {

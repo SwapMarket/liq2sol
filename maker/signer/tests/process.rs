@@ -196,6 +196,7 @@ fn the_signer_process_resists_a_compromised_engine() {
         fee_coin_sats: FEE,
         priority: Default::default(),
         close_after_slots: 400_000,
+        fresh_addresses: false,
     };
     let config_path = root.join("signer.json");
     std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
@@ -213,6 +214,17 @@ fn the_signer_process_resists_a_compromised_engine() {
         Command::new(env!("CARGO_BIN_EXE_liq2sol-signer")).arg(&open_path).stderr(Stdio::null()).status().unwrap();
     assert!(!status.success(), "a socket in a shared directory is refused");
     println!("    ok: refuses a socket in a shared directory");
+
+    // Fresh addresses mean reading every one of our addresses, which only our own node may see.
+    let mut api_cfg = config.clone();
+    api_cfg.fresh_addresses = true;
+    api_cfg.liquid = LiquidSource::Esplora("https://blockstream.info/liquidtestnet/api".into());
+    let api_path = root.join("api.json");
+    std::fs::write(&api_path, serde_json::to_string(&api_cfg).unwrap()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_liq2sol-signer")).arg(&api_path).output().unwrap();
+    assert!(!out.status.success(), "fresh addresses over a public API are refused");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("fresh_addresses needs liquid to be our own node"));
+    println!("    ok: refuses fresh addresses unless Liquid is read from our own node");
 
     let mut signer = SignerProcess::start(&config_path, &socket);
     let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;

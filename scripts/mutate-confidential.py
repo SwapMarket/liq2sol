@@ -19,6 +19,8 @@ def e2e(s):
     return ["env", f"SCENARIO={s}", "cargo", "test", "-p", "liq2sol-maker", "--test", "e2e", "--", "--ignored", "--nocapture"]
 
 MUTATIONS = [
+    ("fresh: pay the funding address", SIGNER, "        if !self.fresh_addresses {\n            return Ok(self.wallet.address());", "        if true {\n            return Ok(self.wallet.address());", e2e("RFQ L2S")),
+    ("fresh: over a public API", SIGNER, "if cfg.fresh_addresses && !matches!(cfg.liquid, LiquidSource::Node { .. }) {", "if false {", PROCESS),
     ("close: an open escrow", SIGNER, "if escrow.state == EscrowState::Open {\n            return Err(\"the escrow is still open\".into());", "if false {\n            return Err(\"the escrow is still open\".into());", e2e("RFQ L2S")),
     ("close: straight after settling", SIGNER, "if self.sol.slot()? < escrow.settled_slot.saturating_add(self.close_after_slots) {", "if false {", e2e("RFQ L2S")),
     ("priority: sign what fails simulation", "shared/chain/src/sol.rs", "        if let Some(e) = sim.err {\n            return Err(format!(\"simulation failed: {e:?}\\n{:#?}\", sim.logs));\n        }\n        let mut accounts", "        let mut accounts", PROCESS),

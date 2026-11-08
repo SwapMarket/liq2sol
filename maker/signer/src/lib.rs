@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use anchor_lang::prelude::Pubkey;
 use liq2sol_chain::esplora::{Esplora, Rpc};
 use liq2sol_chain::liquid::{
-    self, keypair_from, pay_from_coins, sign_keypath, usdt, use_network, NetworkConfig, Payment, SecretCoin, Wallet,
+    self, keypair_from, sign_keypath, usdt, use_network, NetworkConfig, Payment, SecretCoin, Wallet,
     FEE, LIQUID_MAINNET_GENESIS,
 };
 use liq2sol_chain::sol::{self, escrow_pda, Sol, MAINNET_GENESIS};
@@ -81,6 +81,10 @@ pub struct Config {
     /// taker revealed, which the engine reads to claim on Liquid, so it stays for about a day, long after that claim.
     #[serde(default = "default_close_after")]
     pub close_after_slots: u64,
+    /// Pay each claim, refund, change and fee-coin top-up to a new address of our own, so our coins can't be linked by
+    /// address. Off by default. It needs `liquid` to be our own node: an API would see one IP asking about every address.
+    #[serde(default)]
+    pub fresh_addresses: bool,
 }
 
 fn default_close_after() -> u64 {
@@ -329,6 +333,20 @@ pub fn refuse_mainnet(liquid_genesis: &str, solana_genesis: &str) -> Result<(), 
     Ok(())
 }
 
+/// Our wallet at an index. 0 is the key files themselves. Each other index has its own spend and blinding keys, derived
+/// from both, so a restored signer with its ledger finds every coin.
+fn wallet_at(secrets: &([u8; 32], [u8; 32]), idx: u32) -> Result<Wallet, String> {
+    let (spend, blinding) = if idx == 0 {
+        (secrets.0, secrets.1)
+    } else {
+        let derive = |tag: &[u8], secret: &[u8; 32]| -> [u8; 32] {
+            Sha256::new().chain_update(tag).chain_update(secret).chain_update(idx.to_le_bytes()).finalize().into()
+        };
+        (derive(b"liq2sol-wallet-spend-v1", &secrets.0), derive(b"liq2sol-wallet-blinding-v1", &secrets.1))
+    };
+    Ok(Wallet { key: keypair_from(&spend)?, blinding: SecretKey::from_slice(&blinding).map_err(|e| e.to_string())? })
+}
+
 fn load_or_create_secret(path: &Path) -> Result<[u8; 32], String> {
     if !path.exists() {
         let mut secret = [0u8; 32];
@@ -357,7 +375,10 @@ pub struct Signer {
     sol: Sol,
     ledger: SignerLedger,
     genesis: BlockHash,
+    /// Index 0, the address we are funded at. With fresh addresses, the others derive from its keys.
     wallet: Wallet,
+    wallet_secrets: ([u8; 32], [u8; 32]),
+    fresh_addresses: bool,
     solana: Keypair,
     swap_seed: [u8; 32],
     vault_owner: Option<Pubkey>,
@@ -395,6 +416,11 @@ type Outcome = Result<Reply, Stop>;
 
 impl Signer {
     pub fn new(cfg: &Config) -> Result<Self, String> {
+        if cfg.fresh_addresses && !matches!(cfg.liquid, LiquidSource::Node { .. }) {
+            return Err("refusing to start: fresh_addresses needs liquid to be our own node, because an API would see one IP \
+                        asking about every address"
+                .into());
+        }
         let chain = match &cfg.liquid {
             LiquidSource::Esplora(url) => Esplora::Http(url.clone()),
             LiquidSource::Node { cli, args } => Esplora::Node(Rpc { cli: cli.clone(), args: args.clone() }),
@@ -411,11 +437,11 @@ impl Signer {
         }
         std::fs::create_dir_all(&cfg.keys_dir).map_err(|e| e.to_string())?;
         std::fs::set_permissions(&cfg.keys_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
-        let wallet = Wallet {
-            key: keypair_from(&load_or_create_secret(&cfg.keys_dir.join("liquid-wallet.key"))?)?,
-            blinding: SecretKey::from_slice(&load_or_create_secret(&cfg.keys_dir.join("liquid-blinding.key"))?)
-                .map_err(|e| e.to_string())?,
-        };
+        let wallet_secrets = (
+            load_or_create_secret(&cfg.keys_dir.join("liquid-wallet.key"))?,
+            load_or_create_secret(&cfg.keys_dir.join("liquid-blinding.key"))?,
+        );
+        let wallet = wallet_at(&wallet_secrets, 0)?;
         let swap_seed = load_or_create_secret(&cfg.keys_dir.join("swap-seed.key"))?;
         let solana_path = cfg.keys_dir.join("solana.json");
         if !solana_path.exists() {
@@ -430,6 +456,8 @@ impl Signer {
             ledger: SignerLedger::open(&cfg.ledger).map_err(|e| e.to_string())?,
             genesis: BlockHash::from_str(&genesis).map_err(|e| e.to_string())?,
             wallet,
+            wallet_secrets,
+            fresh_addresses: cfg.fresh_addresses,
             solana,
             swap_seed,
             vault_owner: cfg.vault_owner.as_deref().map(parse_pubkey).transpose()?,
@@ -464,8 +492,47 @@ impl Signer {
 
     /// Our own blinded coins. An explicit coin is ignored, whoever sent it: spending one would bound our blinded outputs.
     fn wallet_coins(&self) -> Result<Vec<SecretCoin>, String> {
-        let coins = self.chain.secret_coins(&self.wallet.address(), &self.wallet.blinding)?;
+        let at: Vec<_> = self.wallets()?.iter().map(|w| (w.address(), w.blinding)).collect();
+        let coins = self.chain.secret_coins_at(&at)?;
         Ok(coins.into_iter().filter(|c| !c.coin.out.asset.is_explicit() && !c.coin.out.value.is_explicit()).collect())
+    }
+
+    /// Every address we hold coins at: just the first, unless fresh addresses are on.
+    fn wallets(&self) -> Result<Vec<Wallet>, String> {
+        let mut all = vec![self.wallet.clone()];
+        if self.fresh_addresses {
+            for idx in self.ledger.address_indexes().map_err(|e| e.to_string())? {
+                all.push(wallet_at(&self.wallet_secrets, idx)?);
+            }
+        }
+        Ok(all)
+    }
+
+    /// The key for one of our coins, found by its script.
+    fn key_for(wallets: &[Wallet], script: &simplicityhl::elements::Script) -> Option<simplicityhl::elements::schnorr::Keypair> {
+        wallets.iter().find(|w| w.address().script_pubkey() == *script).map(|w| w.key)
+    }
+
+    /// Where to pay ourselves. A swap keeps one address, so a retry pays the same one. Recorded before it is used.
+    fn receive_address(&self, swap: Option<&[u8; 32]>) -> Result<Address, String> {
+        if !self.fresh_addresses {
+            return Ok(self.wallet.address());
+        }
+        let idx = self.ledger.address_index(swap).map_err(|e| e.to_string())?;
+        Ok(wallet_at(&self.wallet_secrets, idx)?.address())
+    }
+
+    /// Pay from our own coins, with change to `change`.
+    fn pay(&self, payments: Vec<Payment>, change: &Address) -> Result<LiquidTx, String> {
+        let wallets = self.wallets()?;
+        liquid::pay_from_coins_with(&self.payable_coins()?, change, |s| Self::key_for(&wallets, s), payments, self.genesis)
+    }
+
+    /// Sign the fee coin, input 1 of a swap spend, with the key of the address it is at.
+    fn sign_fee_coin(&self, tx: &mut LiquidTx, utxos: &[simplicityhl::elements::TxOut]) -> Result<(), String> {
+        let script = &utxos.get(1).ok_or("no fee coin input")?.script_pubkey;
+        let key = Self::key_for(&self.wallets()?, script).ok_or("the fee coin isn't at one of our addresses")?;
+        sign_keypath(tx, utxos, 1, &key, self.genesis)
     }
 
     fn is_fee_coin(&self, c: &SecretCoin) -> bool {
@@ -524,11 +591,11 @@ impl Signer {
         if self.free_fee_coins(self.wallet_coins()?)?.len() >= FEE_COINS_LOW {
             return Ok(Reply::Nothing);
         }
-        let to = self.wallet.address();
+        let to = self.receive_address(None)?;
         let payments = (0..FEE_COINS_TOP_UP)
             .map(|_| Payment { asset: liquid::lbtc(), amount: self.fee_coin_sats, address: to.clone() })
             .collect();
-        let tx = pay_from_coins(&self.payable_coins()?, &self.wallet, payments, self.genesis)?;
+        let tx = self.pay(payments, &to)?;
         let raw = serialize(&tx);
         self.ledger.set_pending_top_up(&raw, &spends_of(&tx)).map_err(|e| e.to_string())?;
         Ok(Reply::Liquid(hex(&raw)))
@@ -618,7 +685,8 @@ impl Signer {
             return Err(Refusal::NoTakerCoin.into());
         }
         let fee_coin = self.fee_coin_for(&id)?;
-        let (tx, utxos) = liquid::build_swap_spend(&coin, &fee_coin, &self.wallet.address(), 0, Sequence::MAX)?;
+        let to = self.receive_address(Some(&id))?;
+        let (tx, utxos) = liquid::build_swap_spend(&coin, &fee_coin, &to, 0, Sequence::MAX)?;
         let message = key_spend_sighash(&tx, &utxos, 0, self.genesis).map_err(|e| e.to_string())?;
         let key = self.swap_key(&id)?;
         let output = t.output(&self.maker_key(&id)?)?;
@@ -786,7 +854,7 @@ impl Signer {
             // Exactly one fee coin's worth of L-BTC, so this can't be used to drain the wallet's L-BTC.
             Payment { asset: liquid::lbtc(), amount: self.fee_coin_sats, address: t.taker_fee_address()? },
         ];
-        let tx = pay_from_coins(&self.payable_coins()?, &self.wallet, payments, self.genesis)?;
+        let tx = self.pay(payments, &self.receive_address(Some(&id))?)?;
         let raw = serialize(&tx);
         self.commit(&id, &request, &record, Some((&raw, &spends_of(&tx))))?;
         Ok(Reply::Liquid(hex(&raw)))
@@ -883,7 +951,7 @@ impl Signer {
         let utxos = spent_outputs(&self.chain, &tx)?;
         let signature = complete(&adaptor, &secret).map_err(|e| e.to_string())?;
         set_key_spend_witness(&mut tx, 0, &signature);
-        sign_keypath(&mut tx, &utxos, 1, &self.wallet.key, self.genesis)?;
+        self.sign_fee_coin(&mut tx, &utxos)?;
         self.commit(&id, &request, &record, None)?;
         Ok(Reply::Liquid(serialize_hex(&tx)))
     }
@@ -906,15 +974,15 @@ impl Signer {
         let record = self.check(&request)?;
         let coin = self.swap_coin(t)?.ok_or("our coin isn't there")?;
         let fee_coin = self.fee_coin_for(&id)?;
-        let (tx, utxos) =
-            liquid::build_swap_spend(&coin, &fee_coin, &self.wallet.address(), t.lock_height, Sequence::ZERO)?;
+        let to = self.receive_address(Some(&id))?;
+        let (tx, utxos) = liquid::build_swap_spend(&coin, &fee_coin, &to, t.lock_height, Sequence::ZERO)?;
         let output = t.output(&self.maker_key(&id)?)?;
         let digest = output.refund_sighash(&tx, &utxos, 0, self.genesis).map_err(|e| e.to_string())?;
         let secp = Secp256k1::new();
         let key = self.swap_key(&id)?;
         let signature = *secp.sign_schnorr_no_aux_rand(&Message::from_digest(digest), &key).as_ref();
         let mut tx = output.finalize_refund(tx, &utxos, 0, self.genesis, signature).map_err(|e| e.to_string())?;
-        sign_keypath(&mut tx, &utxos, 1, &self.wallet.key, self.genesis)?;
+        self.sign_fee_coin(&mut tx, &utxos)?;
         self.commit(&id, &request, &record, None)?;
         Ok(Reply::Liquid(serialize_hex(&tx)))
     }
@@ -1175,6 +1243,23 @@ mod tests {
         assert_eq!(cfg.socket, dir.join("run/signer.sock"));
         assert_eq!(cfg.ledger, dir.join("signer.db"));
         assert_eq!(cfg.keys_dir, dir.join("keys"));
+    }
+
+    #[test]
+    fn fresh_addresses_derive_apart_and_the_same_every_time() {
+        let secrets = ([7u8; 32], [9u8; 32]);
+        let zero = wallet_at(&secrets, 0).unwrap();
+        assert_eq!(zero.key, keypair_from(&secrets.0).unwrap(), "index 0 is the key files themselves");
+        assert_eq!(zero.blinding.secret_bytes(), secrets.1);
+        let addresses: Vec<String> = (0..20).map(|i| wallet_at(&secrets, i).unwrap().address().to_string()).collect();
+        let mut unique = addresses.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), addresses.len(), "every index has its own address");
+        assert_eq!(wallet_at(&secrets, 5).unwrap().address(), wallet_at(&secrets, 5).unwrap().address(), "and the same one each time");
+        let one = wallet_at(&secrets, 1).unwrap();
+        assert_ne!(one.blinding.secret_bytes(), secrets.1, "each index has its own blinding key too");
+        assert_ne!(wallet_at(&([7u8; 32], [8u8; 32]), 1).unwrap().key, wallet_at(&([6u8; 32], [8u8; 32]), 1).unwrap().key);
     }
 
     #[test]

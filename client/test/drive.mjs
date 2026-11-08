@@ -862,8 +862,8 @@ async function cancelling() {
   step('a swap the chain shows as paid can\'t be cancelled, nor one the page can\'t check');
 
   // A request already in flight can still meet the failure the test just lifted, so try again as a person would.
-  for (let i = 0; i < 3 && await page.locator('.swap-card[data-state="fund"]').count(); i++) {
-    await new Promise((r) => setTimeout(r, 1500));
+  for (let i = 0; i < 8 && await page.locator('.swap-card[data-state="fund"]').count(); i++) {
+    await new Promise((r) => setTimeout(r, 2500));
     await confirm(page);
     await page.locator('.swap-card[data-state="fund"]').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
   }

@@ -554,7 +554,7 @@ fn run() -> Res<()> {
         ["setup", mint_key] => {
             let net = connect()?;
             let mint = read_keypair_file(mint_key).map_err(|e| e.to_string())?;
-            net.sol.setup_mint(&w.mint_authority, &mint, &[w.taker_sol.pubkey(), w.maker_sol.pubkey()], 100 * SOL_AMOUNT)?;
+            net.sol.setup_mint(&w.mint_authority, Some(&mint), &[w.taker_sol.pubkey(), w.maker_sol.pubkey()], 100 * SOL_AMOUNT)?;
             net.sol.top_up_token(&w.mint_authority, &w.maker_sol.pubkey(), 100 * SOL_AMOUNT)?;
             println!("stand-in mint {} ready", solana_escrow::USDT_MINT);
         }
@@ -572,6 +572,31 @@ fn run() -> Res<()> {
             let units: u64 = units.parse().map_err(|_| "bad amount")?;
             net.sol.top_up_token(&w.mint_authority, &owner, units)?;
             println!("minted {units} stand-in units to {owner}");
+        }
+        // For CI: a local validator started with the stand-in mint preloaded (scripts/ci-mint-account.py). Liquid isn't
+        // touched, so this needs neither Liquid testnet nor the mint's keypair.
+        ["ci-setup", faucet_program] => {
+            let url = std::env::var("SOLANA_RPC").map_err(|_| "set SOLANA_RPC to the local validator")?;
+            if !url.starts_with("http://127.0.0.1") && !url.starts_with("http://localhost") {
+                return Err(format!("refusing: ci-setup is for a local validator, not {url}"));
+            }
+            let sol = Sol::new(&url);
+            let holders = [w.taker_sol.pubkey(), w.maker_sol.pubkey()];
+            sol.setup_mint(&w.mint_authority, None, &holders, 100 * SOL_AMOUNT)?;
+            sol.top_up_token(&w.mint_authority, &w.maker_sol.pubkey(), 100 * SOL_AMOUNT)?;
+            let program = Pubkey::from_str(faucet_program).map_err(|e| format!("bad program id: {e}"))?;
+            let (vault, _) = Pubkey::find_program_address(&[b"vault"], &program);
+            let accounts = vec![
+                AccountMeta::new(w.mint_authority.pubkey(), true),
+                AccountMeta::new_readonly(solana_escrow::USDT_MINT, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new_readonly(anchor_spl::token::ID, false),
+                AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+            ];
+            let data = solana_sdk::hash::hash(b"global:init").to_bytes()[..8].to_vec();
+            sol.send(&[Instruction { program_id: program, accounts, data }], &w.mint_authority, &[])?;
+            sol.mint_to(&w.mint_authority, &vault, 100_000 * 1_000_000)?;
+            println!("local validator funded: stand-in mint, both wallets, faucet vault {vault}");
         }
         ["faucet-init", program] => {
             let net = connect()?;

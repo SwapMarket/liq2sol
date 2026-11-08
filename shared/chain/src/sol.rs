@@ -171,8 +171,9 @@ impl Sol {
     }
 
     /// Create the stand-in mint and an account for each owner, and mint to the first one. Devnet and local only.
-    pub fn setup_mint(&self, authority: &Keypair, mint: &Keypair, holders: &[Pubkey], amount: u64) -> Res<()> {
-        assert_eq!(mint.pubkey(), USDT_MINT, "the mint keypair must match the program's stand-in mint");
+    /// Create the stand-in mint if it isn't there, which needs its keypair, then give each holder a token account and the
+    /// first one `amount`. Without the keypair, the mint must already exist, as on a validator started with it preloaded.
+    pub fn setup_mint(&self, authority: &Keypair, mint: Option<&Keypair>, holders: &[Pubkey], amount: u64) -> Res<()> {
         if self
             .rpc
             .get_account_with_commitment(&USDT_MINT, CommitmentConfig::finalized())
@@ -180,6 +181,8 @@ impl Sol {
             .value
             .is_none()
         {
+            let mint = mint.ok_or("the stand-in mint isn't there, and creating it needs its keypair")?;
+            assert_eq!(mint.pubkey(), USDT_MINT, "the mint keypair must match the program's stand-in mint");
             let rent = self.rpc.get_minimum_balance_for_rent_exemption(MINT_LEN).map_err(|e| e.to_string())?;
             let create = anchor_lang::solana_program::system_instruction::create_account(
                 &authority.pubkey(),
@@ -217,6 +220,22 @@ impl Sol {
             }
         }
         Ok(())
+    }
+
+    /// Mint stand-in tokens straight into a token account, such as the faucet's vault.
+    pub fn mint_to(&self, authority: &Keypair, account: &Pubkey, amount: u64) -> Res<()> {
+        let mut data = vec![7u8];
+        data.extend_from_slice(&amount.to_le_bytes());
+        let mint_to = Instruction {
+            program_id: TOKEN_PROGRAM,
+            accounts: vec![
+                AccountMeta::new(USDT_MINT, false),
+                AccountMeta::new(*account, false),
+                AccountMeta::new_readonly(authority.pubkey(), true),
+            ],
+            data,
+        };
+        self.send(&[mint_to], authority, &[]).map(|_| ())
     }
 
     pub fn top_up_token(&self, authority: &Keypair, owner: &Pubkey, amount: u64) -> Res<()> {

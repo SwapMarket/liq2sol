@@ -227,10 +227,9 @@ struct World {
     vault: Pubkey,
     vault_token: Pubkey,
     vault_owner: Keypair,
-    maker_address: String,
-    maker_blinding: SecretKey,
     bot: Bot,
     client: Client,
+    signer_socket: PathBuf,
     store: Store,
     daemon: Option<Proc>,
     daemon_config: PathBuf,
@@ -297,15 +296,12 @@ impl World {
         }
     }
 
+    /// The maker's USDt, from its signer: with fresh addresses, only the signer knows every address it holds coins at.
     fn holdings(&self) -> Res<u64> {
-        let address = simplicityhl::elements::Address::from_str(&self.maker_address).map_err(|e| format!("{e:?}"))?;
-        Ok(self
-            .chain
-            .secret_coins(&address, &self.maker_blinding)?
-            .iter()
-            .filter(|c| c.secrets.asset == usdt())
-            .map(|c| c.secrets.value)
-            .sum())
+        match Client::connect(&self.signer_socket)?.call(&Call::Balances)? {
+            Reply::Balances { liquid_usdt, .. } => Ok(liquid_usdt),
+            other => Err(format!("no balances: {other:?}")),
+        }
     }
 
     fn maker_holdings(&self) -> Res<u64> {
@@ -1044,6 +1040,8 @@ fn build_world(root: &Path) -> World {
         priority: Default::default(),
         // Short, so the suite sees an escrow closed for its rent.
         close_after_slots: 30,
+        // Every scenario runs with fresh addresses, as a careful operator with its own node would.
+        fresh_addresses: true,
     };
     let signer_path = root.join("signer.json");
     std::fs::write(&signer_path, serde_json::to_string(&signer_cfg).unwrap()).unwrap();
@@ -1058,7 +1056,6 @@ fn build_world(root: &Path) -> World {
     let Reply::Identity { liquid_address, solana, escrow_initiator, .. } = client.call(&Call::Identity).unwrap() else {
         panic!()
     };
-    let maker_blinding = SecretKey::from_slice(&std::fs::read(keys.join("liquid-blinding.key")).unwrap()).unwrap();
     assert_eq!(escrow_initiator, vault.to_string(), "the signer runs on the vault");
 
     let pages = root.join("pages.log");
@@ -1069,7 +1066,7 @@ fn build_world(root: &Path) -> World {
     let relay_url = public_relay.clone().unwrap_or_else(|| relay.url());
     let cfg = Config {
         db: db.clone(),
-        signer_socket: socket,
+        signer_socket: socket.clone(),
         pages: pages.clone(),
         engine,
         liquid,
@@ -1136,10 +1133,9 @@ fn build_world(root: &Path) -> World {
         vault,
         vault_token,
         vault_owner,
-        maker_address: liquid_address,
-        maker_blinding,
         bot,
         client,
+        signer_socket: socket.clone(),
         store,
         daemon: None,
         daemon_config,
@@ -1230,6 +1226,18 @@ fn rfq_l2s_swap(w: &mut World) -> Res<()> {
         return Err(format!("expected a claim offer, got {:?}", got.envelope.body));
     };
     let answer = answer_offer(&w.chain, &swap, &offer, w.genesis)?;
+    // With fresh addresses, the maker's claim pays a new address of its own, which its wallet then reads.
+    let claim: LiquidTx = deserialize(&unhex(&offer.tx)?).map_err(|e| e.to_string())?;
+    let Reply::Identity { liquid_address, .. } = w.client.call(&Call::Identity)? else {
+        return Err("the signer gave no identity".into());
+    };
+    let funding = Address::from_str(&liquid_address).map_err(|e| e.to_string())?.script_pubkey();
+    check(claim.output[0].script_pubkey != funding, "the maker's claim pays a new address, not the one it is funded at")?;
+    let usdt_held = |w: &mut World| match w.client.call(&Call::Balances) {
+        Ok(Reply::Balances { liquid_usdt, .. }) => Ok(liquid_usdt),
+        other => Err(format!("{other:?}")),
+    };
+    let before_claim = usdt_held(w)?;
     send_body(&mut relay, &me, &maker, &negotiation, NETWORK, Body::ClaimAnswer(answer))?;
 
     let initiator =
@@ -1252,6 +1260,13 @@ fn rfq_l2s_swap(w: &mut World) -> Res<()> {
     check(close(w).contains("too soon"), "nor one that has only just settled")?;
     check(w.tokens(&w.taker_sol.pubkey())? == before + RFQ_RECEIVE, "the taker was paid")?;
     w.wait_state(&id, "the maker completing the swap", 120, done(Outcome::Completed))?;
+    let amount = terms.liquid_amount.0;
+    let start = Instant::now();
+    while usdt_held(w)? != before_claim + amount {
+        check(start.elapsed() < Duration::from_secs(60), "the maker's wallet counts the claimed coin")?;
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    println!("    ok: the maker's wallet counts the coin at its new address");
     // A while after settling, the maker closes the escrow it paid for, and its rent comes back.
     let rent = w.sol.lamports(&escrow_addr)?;
     let before = w.sol.lamports(&w.maker_solana)?;

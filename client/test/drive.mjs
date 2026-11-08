@@ -632,7 +632,7 @@ async function liveBook() {
   if ((await headers()).join() !== 'maker,price,size') throw new Error(`columns: ${await headers()}`);
   const quoted = await cells();
   const steps = quoted[1].split('\n');
-  if (!quoted[2].includes('–') || steps.length < 2 || !steps.every((t) => /^≤[\d,.]+: \d\.\d{4}$/.test(t))) throw new Error(`before an order: ${quoted}`);
+  if (!/^≥[\d,.]+\n≤[\d,.]+$/.test(quoted[2]) || steps.length < 2 || !steps.every((t) => /^≤[\d,.]+: \d\.\d{4}$/.test(t))) throw new Error(`before an order: ${quoted}`);
   const mark = () => page.evaluate(() => {
     for (const s of ['.card', '.book', 'tbody tr', 'tbody tr td:nth-child(2)', '#amount', '#go']) document.querySelector(s).dataset.mark = '1';
   });

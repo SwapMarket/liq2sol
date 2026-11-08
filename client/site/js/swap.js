@@ -70,6 +70,17 @@ export class Engine {
     return coins.filter((c) => c.is_usdt && c.amount === s.terms.liquid_amount);
   }
 
+  // The coin a refund sends back: the swap's own if it is there, or else whatever arrived.
+  async refundCoin(s) {
+    const coins = await this.esplora[0].readCoins(s.info.plain_address, s.info.script, s.secrets.blinding_key);
+    return coins.find((c) => c.is_usdt && c.amount === s.terms.liquid_amount) ?? coins[0] ?? null;
+  }
+
+  // Where an L→S swap waits for the maker: paid, or still at the payment step with only a wrong coin.
+  waiting(s) {
+    return s.direction === 'L2S' && !s.coin ? 'fund' : 'await_maker';
+  }
+
   async wrongCoins(s) {
     const coins = await this.esplora[0].readCoins(s.info.plain_address, s.info.script, s.secrets.blinding_key);
     return coins.filter((c) => !(c.is_usdt && c.amount === s.terms.liquid_amount));
@@ -151,7 +162,7 @@ export class Engine {
     // The maker locked first, so it won't agree now, and the swap carries on as normal.
     if (['early_form', 'early_asked', 'early_signing'].includes(s.state) && escrow) s.state = 'await_maker';
     if (s.state === 'early_asked' && now() - s.early_asked_at > EARLY_REFUND_WAIT_SECS) {
-      s.state = 'await_maker';
+      s.state = this.waiting(s);
       s.status = 'The maker did not answer. Nothing has changed, and the timed refund still protects you.';
     }
     if (s.state === 'early_signing' && now() - s.early_asked_at > EARLY_REFUND_WAIT_SECS) {
@@ -428,9 +439,8 @@ export class Engine {
 
   // Any coin at the address can come back, whatever it holds. It needs a small blinded L-BTC coin at the fee address.
   async refundOnLiquid(s, toAddress) {
-    const coins = await this.esplora[0].readCoins(s.info.plain_address, s.info.script, s.secrets.blinding_key);
-    if (!coins.length) throw new Error('There is no coin at the swap address to refund.');
-    const coin = coins[0];
+    const coin = await this.refundCoin(s);
+    if (!coin) throw new Error('There is no coin at the swap address to refund.');
     const fees = await this.esplora[0].readCoins(s.info.plain_fee_address, s.info.fee_script, s.secrets.blinding_key);
     const fee = fees.find((c) => c.is_lbtc && c.confirmations >= 1 && BigInt(c.amount) >= BigInt(NETWORK.refundFeeCoinSats));
     if (!fee) throw new Error(`Send at least ${NETWORK.refundFeeCoinSats} sats of L-BTC to the fee address first, and wait for a confirmation.`);
@@ -448,7 +458,10 @@ export class Engine {
 
   // First the maker promises never to lock. The fee coin and the address can come afterwards, without a race.
   async askCancel(s) {
-    if (s.direction !== 'L2S' || s.state !== 'await_maker' || !s.coin) return;
+    // Paid, or holding only a coin of the wrong asset or amount, which the maker never locks for.
+    const paid = s.state === 'await_maker' && s.coin;
+    const wrong = s.state === 'fund' && s.wrong_coin;
+    if (s.direction !== 'L2S' || !(paid || wrong)) return;
     this.send(s, { type: 'cancel-ask', body: { lock_point: s.secrets.lock_point } });
     this.set(s, { state: 'early_asked', early_asked_at: now(), status: '' });
   }
@@ -456,7 +469,7 @@ export class Engine {
   // Only ever a request. Whatever the maker does, the timed refund is still there.
   async askEarlyRefund(s, toAddress) {
     if (s.state !== 'early_form') return;
-    const [coin] = await this.exactCoins(this.esplora[0], s);
+    const coin = await this.refundCoin(s);
     if (!coin) throw new Error('There is no coin at the swap address to refund.');
     const fees = await this.esplora[0].readCoins(s.info.plain_fee_address, s.info.fee_script, s.secrets.blinding_key);
     const fee = fees.find((c) => c.is_lbtc && c.confirmations >= 1 && BigInt(c.amount) >= BigInt(NETWORK.refundFeeCoinSats));
@@ -514,7 +527,7 @@ export class Engine {
       this.set(s, { state: 'early_form', status: 'The maker didn’t sign the refund. Check the fee coin and ask again, or wait for the timed refund.' });
     } else if (type === 'rfq-reject' && (s.state === 'early_asked' || s.state === 'release_asked')) {
       this.earlyRefunds.delete(s.id);
-      this.set(s, { state: 'await_maker', status: 'The maker can’t refund early now. Nothing has changed, and the timed refund still protects you.' });
+      this.set(s, { state: this.waiting(s), status: 'The maker can’t refund early now. Nothing has changed, and the timed refund still protects you.' });
     } else if (type === 'maker-share' && s.direction === 'S2L') {
       await this.onMakerShare(s, body.share);
     }

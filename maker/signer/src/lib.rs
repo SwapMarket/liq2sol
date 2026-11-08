@@ -765,9 +765,16 @@ impl Signer {
         let request = Request::EarlyRefund { swap_id: id };
         let record = self.check(&request)?;
         let tx: LiquidTx = deserialize(&unhex(tx)?).map_err(|e| e.to_string())?;
-        let coin = self.swap_coin(t)?.ok_or(Refusal::NoTakerCoin)?;
-        if tx.input.first().map(|i| i.previous_output) != Some(coin.coin.outpoint) {
-            return Err("input 0 doesn't spend this swap's coin".into());
+        // Any coin the taker sent here, the swap's own or one of the wrong asset or amount: we never lock for a wrong one,
+        // so it is the taker's either way. Our signature covers the coin it spends, so it can't move any other.
+        let address = t.address(&self.maker_key(&id)?)?;
+        let coins = self.chain.secret_coins(&address, &t.blinding()?)?;
+        if coins.is_empty() {
+            return Err(Refusal::NoTakerCoin.into());
+        }
+        let first = tx.input.first().map(|i| i.previous_output);
+        if !coins.iter().any(|c| Some(c.coin.outpoint) == first) {
+            return Err("input 0 doesn't spend a coin at this swap's address".into());
         }
         // From the chain, so the message is what the network will check, not what the taker says it is.
         let utxos = spent_outputs(&self.chain, &tx)?;

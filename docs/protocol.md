@@ -458,10 +458,12 @@ Before the maker locks on Solana, the taker can ask for its coin back without wa
 1. The taker sends `cancel-ask` with the lock point, as soon as it decides. It needs nothing else yet, so the maker can't lock while the taker finds a fee coin.
 2. The signer refuses if it has ever signed a lock for this swap. Otherwise it records durably that it never will, and the maker answers `cancelled`. From then on the taker answers no claim offer, which is what a lock would need.
 3. The taker builds a refund of its coin to an address of its choosing, paying the fee from its own fee coin, and sends `early-refund-ask` with the unsigned transaction and a MuSig2 nonce.
-4. The signer checks the same rule again, reads the spent outputs from the chain, signs input 0 with this swap's own key and a fresh nonce, and the maker answers `early-refund-share`.
+4. The signer checks the same rule again and that input 0 is a coin at the swap's address, reads the spent outputs from the chain, signs input 0 with this swap's own key and a fresh nonce, and the maker answers `early-refund-share`.
 5. The taker checks the share, finishes the signature, signs its fee coin and publishes.
 
 A taker may skip the cancel and send `early-refund-ask` directly. It makes the same promise.
+
+Input 0 may be any coin at the swap's address, including one of the wrong asset or amount. The maker never locks for a wrong coin, so it is the taker's either way, and a signature covers only the coin it spends.
 
 The spend is a key-path signature, the same shape as a claim. It doesn't show that a refund happened.
 

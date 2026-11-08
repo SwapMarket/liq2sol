@@ -1581,6 +1581,16 @@ struct UpToOffer {
 }
 
 fn up_to_offer(w: &World) -> Res<UpToOffer> {
+    let (mut relay, me, negotiation, swap, secret, initiator) = l2s_agreed(w, 0)?;
+    let got = wait_from(&mut relay, &me, &w.maker_nostr, &negotiation, NETWORK, Duration::from_secs(120))?;
+    let Body::ClaimOffer(offer) = got.envelope.body else {
+        return Err(format!("expected a claim offer, got {:?}", got.envelope.body));
+    };
+    Ok(UpToOffer { relay, me, negotiation, swap, secret, offer, initiator })
+}
+
+/// An L→S swap agreed and paid, `short` units under the agreed amount: a wrong coin, when it isn't 0.
+fn l2s_agreed(w: &World, short: u64) -> Res<(Relay, Keys, String, BotSwap, [u8; 32], Pubkey)> {
     let me = Keys::generate();
     let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
     let (key, chosen, secret) = fresh_swap_terms(w, Direction::L2S, 0, 0, 0)?;
@@ -1602,20 +1612,21 @@ fn up_to_offer(w: &World) -> Res<UpToOffer> {
         Duration::from_secs(15),
     )?;
     let (agreed, maker_key) = agreed_terms(&chosen, &terms)?;
-    taker_pays_to(w, &agreed.address(&maker_key)?, usdt(), terms.liquid_amount.0)?;
-    let got = wait_from(&mut relay, &me, &w.maker_nostr, &negotiation, NETWORK, Duration::from_secs(120))?;
-    let Body::ClaimOffer(offer) = got.envelope.body else {
-        return Err(format!("expected a claim offer, got {:?}", got.envelope.body));
-    };
+    taker_pays_to(w, &agreed.address(&maker_key)?, usdt(), terms.liquid_amount.0 - short)?;
     let initiator = Pubkey::from_str(terms.maker_initiator.as_deref().ok_or("no initiator")?).map_err(|e| e.to_string())?;
-    Ok(UpToOffer { relay, me, negotiation, swap: BotSwap { terms: agreed, key, maker_key }, secret, offer, initiator })
+    Ok((relay, me, negotiation, BotSwap { terms: agreed, key, maker_key }, secret, initiator))
 }
 
 /// The refund the taker would ask for, with its coins in the right order.
 fn refund_tx(w: &World, s: &BotSwap) -> Res<(EarlyRefund, LiquidTx, Vec<simplicityhl::elements::TxOut>)> {
+    refund_of(w, s, s.terms.liquid_amount)
+}
+
+/// The refund of the USDt coin of this value at the swap's address.
+fn refund_of(w: &World, s: &BotSwap, value: u64) -> Res<(EarlyRefund, LiquidTx, Vec<simplicityhl::elements::TxOut>)> {
     let blinding = s.terms.blinding()?;
     let coins = w.chain.secret_coins(&s.terms.address(&s.maker_key)?, &blinding)?;
-    let coin = exact_secret_coin(&coins, usdt(), s.terms.liquid_amount, w.chain.tip()?, 0).ok_or("no coin of ours")?;
+    let coin = exact_secret_coin(&coins, usdt(), value, w.chain.tip()?, 0).ok_or("no coin of ours")?;
     let fee_address = taker_fee_address(&s.terms.taker_key.0, &blinding)?;
     let fee = w.wait_for("the refund's fee coin", 60, || {
         let found = w.chain.secret_coins(&fee_address, &blinding)?;
@@ -1775,6 +1786,52 @@ fn rfq_s2l_release(w: &mut World) -> Res<()> {
     send_body(&mut a.relay, &a.me, &w.maker_nostr, &a.negotiation, NETWORK, ask)?;
     let got = early_answer(&mut a.relay, &a.me, &w.maker_nostr, &a.negotiation);
     check(got.is_err_and(|e| e.contains("declined")), "a second request is declined")?;
+    Ok(())
+}
+
+/// A coin of the wrong amount: the maker never locks for it, and can still hand it back early, through the same cancel.
+fn rfq_early_refund_wrong_coin(w: &mut World) -> Res<()> {
+    const SHORT: u64 = 100;
+    let (mut relay, me, negotiation, swap, _, initiator) = l2s_agreed(w, SHORT)?;
+    let id = swap.terms.swap_id();
+    let lock_point = swap.terms.lock_point.to_hex();
+    let address = swap.terms.address(&swap.maker_key)?;
+    let blinding = swap.terms.blinding()?;
+    let wrong = swap.terms.liquid_amount - SHORT;
+    w.wait_for("the wrong coin to confirm", 60, || {
+        Ok(exact_secret_coin(&w.chain.secret_coins(&address, &blinding)?, usdt(), wrong, w.chain.tip()?, 1))
+    })?;
+    std::thread::sleep(QUIET * 2);
+    let escrow = escrow_pda(&initiator, &point_64(&swap.terms.lock_point));
+    check(w.sol.escrow(&escrow)?.is_none(), "the maker doesn't lock for a coin of the wrong amount")?;
+
+    send_body(&mut relay, &me, &w.maker_nostr, &negotiation, NETWORK, Body::CancelAsk(msg::CancelAsk { lock_point: lock_point.clone() }))?;
+    let got = early_answer(&mut relay, &me, &w.maker_nostr, &negotiation)?;
+    check(matches!(got.envelope.body, Body::Cancelled(_)), "the maker cancels")?;
+    w.wait_state(&id, "the maker dropping the swap", 30, |state| matches!(state, State::Abandoned))?;
+
+    let fee_address = taker_fee_address(&swap.terms.taker_key.0, &blinding)?;
+    taker_pays_to(w, &fee_address, lbtc(), FEE + 1)?;
+    let (started, tx, utxos) = refund_of(w, &swap, wrong)?;
+    let ask = Body::EarlyRefundAsk(msg::EarlyRefundAsk {
+        lock_point,
+        tx: serialize_hex(&tx),
+        nonce: msg::hex(&nonce_bytes(&started.nonce())),
+    });
+    send_body(&mut relay, &me, &w.maker_nostr, &negotiation, NETWORK, ask)?;
+    let got = early_answer(&mut relay, &me, &w.maker_nostr, &negotiation)?;
+    let Body::EarlyRefundShare(share) = got.envelope.body else {
+        return Err(format!("expected the maker's share, got {:?}", got.envelope.body));
+    };
+    let maker_nonce = nonce_from(&unhex(&share.nonce)?).map_err(|e| e.to_string())?;
+    let maker_share = share_from(&unhex(&share.share)?).map_err(|e| e.to_string())?;
+    let output = swap.terms.output(&swap.maker_key)?;
+    let (mut refund, spent) = started.finish(&swap.key, &output, &swap.maker_key.0, &maker_nonce, maker_share)?;
+    sign_keypath(&mut refund, &spent, 1, &swap.key, w.genesis)?;
+    check(spent == utxos, "the refund spends the wrong coin and the fee coin")?;
+    w.chain.broadcast(&refund)?;
+    w.wait_for("the refund to confirm", 60, || Ok(w.chain.secret_coins(&address, &blinding)?.is_empty().then_some(())))?;
+    check(swap.terms.lock_height > w.chain.tip()?, "the wrong coin came back early, long before the lock height")?;
     Ok(())
 }
 
@@ -1966,6 +2023,7 @@ fn the_daemon_runs_real_swaps() {
         ("RFQ S2L swap (E1)", rfq_s2l_swap),
         ("RFQ attacks (E6, E7)", rfq_attacks),
         ("RFQ early refund", rfq_early_refund),
+        ("RFQ wrong coin refunded early", rfq_early_refund_wrong_coin),
         ("RFQ S2L release", rfq_s2l_release),
         ("browser client", browser_client),
     ];

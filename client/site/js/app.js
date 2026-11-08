@@ -892,11 +892,12 @@ function refundAddressInput(s) {
 // Whether each swap's fee coin is confirmed, so a redraw doesn't flash its button off while it looks again.
 const feeReady = new Map();
 
-// Whether the fee coin has arrived. The button that needs it stays off until it is confirmed.
+// Whether the fee coin has arrived. The button that needs it stays off until it is confirmed. It looks again by itself,
+// because the page doesn't redraw while the refund address is being typed.
 function feeCoinStatus(s, button) {
   const line = h('p', { class: 'note fee-status' }, 'Checking for the fee coin…');
   button.disabled = !feeReady.get(s.id);
-  esplora[0].readCoins(s.info.plain_fee_address, s.info.fee_script, s.secrets.blinding_key).then((coins) => {
+  const check = () => esplora[0].readCoins(s.info.plain_fee_address, s.info.fee_script, s.secrets.blinding_key).then((coins) => {
     const fee = coins.filter((c) => c.is_lbtc && BigInt(c.amount) >= BigInt(NETWORK.refundFeeCoinSats));
     const ready = fee.find((c) => c.confirmations >= 1);
     line.textContent = ready ? `Fee coin received: ${ready.amount} sats, confirmed. Ready.`
@@ -905,7 +906,13 @@ function feeCoinStatus(s, button) {
     line.classList.toggle('good-text', !!ready);
     feeReady.set(s.id, !!ready);
     button.disabled = !ready;
-  }).catch(() => { line.textContent = 'Couldn’t check for the fee coin just now.'; });
+    return !!ready;
+  }).catch(() => { line.textContent = 'Couldn’t check for the fee coin just now.'; return false; });
+  const again = () => check().then((ready) => {
+    // Until it is ready, or until a redraw replaces this line with a new one that keeps looking.
+    if (!ready) setTimeout(() => { if (line.isConnected) again(); }, 5000);
+  });
+  again();
   return line;
 }
 
@@ -924,8 +931,8 @@ const KNOWN_ASSETS = { [NETWORK.lbtc]: { ticker: 'L-BTC', name: 'Liquid Bitcoin'
 function refundCoinNote(s) {
   const line = h('p', { class: 'warn refund-asset', hidden: true });
   esplora[0].readCoins(s.info.plain_address, s.info.script, s.secrets.blinding_key).then(async (coins) => {
-    // The same coin refundOnLiquid takes.
-    const coin = coins[0];
+    // The same coin the refund takes (Engine.refundCoin).
+    const coin = coins.find((c) => c.is_usdt && c.amount === s.terms.liquid_amount) ?? coins[0];
     if (!coin || (coin.is_usdt && coin.amount === s.terms.liquid_amount)) return;
     const meta = KNOWN_ASSETS[coin.asset] ?? (coin.is_usdt ? { ticker: 'USDt', precision: 8 } : await esplora[0].asset(coin.asset).catch(() => ({})));
     const precision = Number.isInteger(meta.precision) ? meta.precision : 0;
@@ -959,12 +966,13 @@ function earlyRefundView(s) {
     s.maker_cancelled
       ? h('p', { class: 'good maker-cancelled' }, `The maker cancelled, and won’t lock. Your coin can come back now, or by itself from block ${s.terms.lock_height.toLocaleString('en-US')}.`)
       : h('p', { class: 'note' }, 'If the maker hasn’t locked, it can agree to refund you now, instead of after the timed refund. If it says no or doesn’t answer, nothing changes.'),
+    refundCoinNote(s),
     ...feeCoinParts(s, button),
     h('label', { class: 'field' }, h('span', {}, 'Where to send your refund'), input),
     button,
     s.status && h('p', { class: 'note early-status' }, s.status),
     // Once the maker has cancelled, there is nothing to wait for.
-    !s.maker_cancelled && h('button', { class: 'btn quiet', onclick: act(s.id, (fresh) => engine.set(fresh, { state: 'await_maker', status: '' })) }, 'Keep waiting for the maker'),
+    !s.maker_cancelled && h('button', { class: 'btn quiet', onclick: act(s.id, (fresh) => engine.set(fresh, { state: engine.waiting(fresh), status: '' })) }, 'Keep waiting for the maker'),
   ];
 }
 
@@ -981,7 +989,9 @@ function swapBody(s) {
         copyable('pay-amount', `${liquidUnits(s.terms.liquid_amount)} ${from}`, liquidUnits(s.terms.liquid_amount), 'Amount'),
         copyable('pay-address', s.info.address, s.info.address, 'Address'),
         box,
-        s.wrong_coin && h('p', { class: 'warn' }, 'A coin of the wrong asset or amount reached this address. Nobody will act on it, and you can get it back with a refund after the lock height.'),
+        s.wrong_coin && h('p', { class: 'warn' }, 'A coin of the wrong asset or amount reached this address. Nobody will act on it. You can ask the maker to refund it now, or get it back by yourself after the lock height.'),
+        s.wrong_coin && h('button', { class: 'btn quiet early-refund', onclick: act(s.id, (fresh) => engine.askCancel(fresh)) }, 'Ask for a refund now'),
+        s.wrong_coin && s.status && h('p', { class: 'note early-status' }, s.status),
         h('p', { class: 'note' }, 'The amount stays hidden on-chain only if your wallet pays from blinded coins.'),
         h('p', { class: 'status spin' }, 'Watching for your payment…'),
       ];

@@ -149,10 +149,12 @@ jobs:
           - { name: RFQ S2L swap, run: e2e, scenario: "RFQ S2L swap (E1)" }
           - { name: RFQ attacks, run: e2e, scenario: "RFQ attacks (E6, E7)" }
           - { name: RFQ early refund, run: e2e, scenario: "RFQ early refund" }
+          - { name: RFQ wrong coin refunded early, run: e2e, scenario: "RFQ wrong coin refunded early" }
           - { name: RFQ S2L release, run: e2e, scenario: "RFQ S2L release" }
           - { name: browser look, run: e2e, scenario: browser client, browser: "look,cancelling,faucet" }
           - { name: browser swaps, run: e2e, scenario: browser client, browser: "l2s,s2l,split" }
-          - { name: browser refunds, run: e2e, scenario: browser client, browser: "rescue,early,release,wrong" }
+          - { name: browser refunds, run: e2e, scenario: browser client, browser: "rescue,early,release" }
+          - { name: browser wrong coins, run: e2e, scenario: browser client, browser: "wrong,wrongEarly" }
           - { name: signer attacks, run: process }
           - { name: CLI failures, run: failures }
     name: ${{ matrix.name }}

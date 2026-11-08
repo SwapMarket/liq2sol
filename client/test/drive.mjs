@@ -90,7 +90,7 @@ const shim = await serve(async (req, res) => {
   }
 });
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml' };
 const config = {
   name: env.NETWORK_NAME, regtest: true, genesis: await cli('getblockhash', '0'), usdt: env.USDT, lbtc: env.LBTC,
   esplora: [`http://127.0.0.1:${shim.port}/a`, `http://127.0.0.1:${shim.port}/b`], solana: env.SOLANA_RPC, relays: [env.RELAY_URL],
@@ -1081,6 +1081,34 @@ async function wrong() {
   await page.context().close();
 }
 
+// A coin of the wrong amount comes back early too: the maker cancels at once, and signs its refund.
+async function wrongEarly() {
+  const page = await newPage();
+  await startSwap(page, false);
+  await page.locator('.pay-address').waitFor();
+  const paid = amountSats(env.AMOUNT) - 100;
+  await pay(await page.locator('.pay-address').innerText(), paid, env.USDT);
+  await walletCli('generatetoaddress', '1', await walletCli('getnewaddress'));
+  await page.locator('.swap-card[data-state="fund"] .early-refund').click({ timeout: 60000 });
+  await page.locator('.swap-card[data-state="early_form"] .maker-cancelled').waitFor({ timeout: 60000 });
+  step('with only a wrong coin paid, the page offers an early refund, and the maker cancels');
+  const note = await page.locator('.refund-asset:not([hidden])').innerText({ timeout: 15000 });
+  if (!note.includes('not the swap')) throw new Error(`the refund says: ${note}`);
+  await pay(await page.locator('.fee-address').innerText(), 30, env.LBTC);
+  await walletCli('generatetoaddress', '1', await walletCli('getnewaddress'));
+  const back = await walletCli('getnewaddress');
+  await page.locator('.refund-to').fill(back);
+  await page.locator('.early-go:not([disabled])').click({ timeout: 60000 });
+  await waitState(page, 'refunded', 120000);
+  const got = await receivedAt(back);
+  if (got !== paid) throw new Error(`the refund paid ${got} units, expected ${paid}`);
+  const swap = await storedSwap(page);
+  if (Number(await cli('getblockcount')) >= swap.terms.lock_height) throw new Error('the refund waited for the lock height');
+  step('the wrong coin came back in full, long before the lock height');
+  await checkNoErrors(page);
+  await page.context().close();
+}
+
 async function solanaRpc(method, params) {
   const res = await fetch(env.SOLANA_RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
   const body = await res.json();
@@ -1171,9 +1199,9 @@ async function look() {
 
 let code = 0;
 try {
-  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,cancelling,faucet,l2s,s2l,split,rescue,early,release,wrong').split(',')]) {
+  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,cancelling,faucet,l2s,s2l,split,rescue,early,release,wrong,wrongEarly').split(',')]) {
     console.log(`  == browser: ${name}`);
-    await { vetting, look, cancelling, faucet, l2s, s2l, rescue, split, early, release, wrong }[name]();
+    await { vetting, look, cancelling, faucet, l2s, s2l, rescue, split, early, release, wrong, wrongEarly }[name]();
   }
   console.log('BROWSER OK');
 } catch (e) {

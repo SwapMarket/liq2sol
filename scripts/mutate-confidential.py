@@ -30,7 +30,7 @@ MUTATIONS = [
     ("release: lock on Liquid anyway", POLICY, "if record.early_refunded {\n                return Err(Refusal::EarlyRefunded);\n            }\n            let amount = liquid_amount", "let amount = liquid_amount", CORE),
     ("release: forgets its promise", POLICY, "// And never lock on Liquid afterwards.\n            record.early_refunded = true;", "", CORE),
     ("release: after a Liquid lock", POLICY, "if record.direction.is_some() {\n                return Err(Refusal::ReleaseAfterLock);", "if false {\n                return Err(Refusal::ReleaseAfterLock);", CORE),
-    ("early refund: any coin signed", SIGNER, "if tx.input.first().map(|i| i.previous_output) != Some(coin.coin.outpoint) {", "if false {", e2e("early refund")),
+    ("early refund: any coin signed", SIGNER, "if !coins.iter().any(|c| Some(c.coin.outpoint) == first) {", "if false {", e2e("early refund")),
     ("early refund: abandoned can be undone", "maker/core/src/store.rs", "if current.as_deref() == Some(json(&State::Abandoned)?.as_str()) {", "if false {", CORE),
     ("lock without an adapter signature", POLICY, "if !record.adaptor_held {\n                return Err(Refusal::NoAdaptor);", "if false {\n                return Err(Refusal::NoAdaptor);", CORE),
     ("engine locks without a signature", ENGINE, "l2s_coin_acceptable(cfg, terms, v) && v.adaptor_held", "l2s_coin_acceptable(cfg, terms, v)", CORE),

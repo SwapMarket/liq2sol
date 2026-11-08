@@ -330,6 +330,7 @@ async function checkHistory(page) {
   const want = (swap.direction === 'L2S' ? liquid / solana : solana / liquid).toFixed(4);
   await page.locator('.tab[data-tab="history"]').click();
   const row = page.locator('.history-item').first();
+  await page.locator('.history-head span').first().waitFor({ timeout: 10000 });
   const titles = (await page.locator('.history-head span').allInnerTexts()).map((t) => t.toLowerCase()).join();
   if (titles !== 'swap,status,date') throw new Error(`the history's titles: ${titles}`);
   if (await row.locator('.history-price').isVisible()) throw new Error('details should start hidden');

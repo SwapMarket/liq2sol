@@ -247,7 +247,7 @@ function bookCells(o, direction, send, fills) {
   return {
     rate: tiers.length > 1 ? tiers.map((t) => `≤${size(sizeDown(t.up_to))}: ${price(t.bps)}`).join('\n') : price(tiers[0].bps),
     ladder,
-    size: `${size(sizeUp(o.offer.min_sol_units))} – ${size(sizeDown(o.offer.max_sol_units))}`,
+    size: `≥${size(sizeUp(o.offer.min_sol_units))}\n≤${size(sizeDown(o.offer.max_sol_units))}`,
   };
 }
 
@@ -274,7 +274,7 @@ book.el = h('div', { class: 'book' }, book.title,
 function newBookRow(maker) {
   const star = h('button', { class: 'star', onclick: (e) => { e.stopPropagation(); toggleFavorite(maker); } });
   const vetted = vettedMaker(NETWORK.name, maker);
-  const row = { star, rate: h('td', { class: 'rate' }), size: h('td') };
+  const row = { star, rate: h('td', { class: 'rate' }), size: h('td', { class: 'size' }) };
   row.el = h('tr', { onclick: () => { ui.selected = ui.selected === maker ? null : maker; updateForm(); } },
     h('td', { class: 'mono', title: maker },
       h('div', { class: 'maker-cell' }, star, h('span', {}, short(maker)),

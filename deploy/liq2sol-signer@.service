@@ -7,6 +7,9 @@ Wants=network-online.target
 User=liq2sol
 Group=liq2sol
 WorkingDirectory=/var/lib/liq2sol/%i
+# Makers on one machine share its IP, so their starts are two seconds apart: each takes this lock and holds it that long.
+# Each maker starts after its own signer, so it follows. `+` runs this as root, outside the sandbox, to reach /run.
+ExecStartPre=+/usr/bin/flock /run/liq2sol-start.lock /bin/sleep 2
 ExecStart=/opt/liq2sol/liq2sol-signer /var/lib/liq2sol/%i/signer.json
 Restart=always
 RestartSec=10

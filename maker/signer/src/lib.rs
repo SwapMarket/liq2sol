@@ -168,6 +168,8 @@ pub enum Call {
     TopUpFeeCoins,
     /// What we hold and could lock, for the offer. Nothing is signed.
     Capacity,
+    /// Everything the wallets hold, for the operator's report. Nothing is signed.
+    Balances,
     /// L→S, step one: check the taker's coin, build our claim, and start a signing session on it.
     PrepareClaim {
         terms: SwapTerms,
@@ -248,6 +250,14 @@ pub enum Reply {
     Capacity {
         solana_units: u64,
         liquid_units: u64,
+    },
+    /// Our wallets, for the report. Liquid in its base units, fee coins counted apart from the rest of the L-BTC.
+    Balances {
+        liquid_usdt: u64,
+        liquid_lbtc_sats: u64,
+        free_fee_coins: u64,
+        solana_usdt: u64,
+        sol_lamports: u64,
     },
     /// Nothing needed doing.
     Nothing,
@@ -528,6 +538,16 @@ impl Signer {
         let liquid_units =
             self.payable_coins()?.iter().filter(|c| c.secrets.asset == usdt()).map(|c| c.secrets.value).sum();
         Ok(Reply::Capacity { solana_units: self.sol.token_balance(&token)?, liquid_units })
+    }
+
+    fn balances(&self) -> Outcome {
+        let Ok(Reply::Capacity { solana_units, .. }) = self.capacity() else { return Err(Stop::Failed("no capacity".into())) };
+        let coins = self.wallet_coins()?;
+        let sum = |asset| coins.iter().filter(|c| c.secrets.asset == asset).map(|c| c.secrets.value).sum::<u64>();
+        let (liquid_usdt, liquid_lbtc_sats) = (sum(usdt()), sum(liquid::lbtc()));
+        let free_fee_coins = self.free_fee_coins(coins)?.len() as u64;
+        let sol_lamports = self.sol.lamports(&self.solana.pubkey())?;
+        Ok(Reply::Balances { liquid_usdt, liquid_lbtc_sats, free_fee_coins, solana_usdt: solana_units, sol_lamports })
     }
 
     fn escrow_initiator(&self) -> Pubkey {
@@ -948,6 +968,7 @@ impl Signer {
             Call::AdaptorHeld { swap_id } => Ok(Reply::Held(self.ledger.record(swap_id).adaptor_held)),
             Call::TopUpFeeCoins => self.top_up_fee_coins(),
             Call::Capacity => self.capacity(),
+            Call::Balances => self.balances(),
             Call::PrepareClaim { terms } => self.prepare_claim(terms),
             Call::StoreAdaptor { terms, taker_nonce, taker_share } => {
                 self.store_adaptor(terms, taker_nonce, taker_share)
@@ -1148,6 +1169,7 @@ mod tests {
             | Reply::SwapKey { .. }
             | Reply::Held(_)
             | Reply::Capacity { .. }
+            | Reply::Balances { .. }
             | Reply::Nothing
             | Reply::ClaimTemplate { .. }
             | Reply::Nonce(_)

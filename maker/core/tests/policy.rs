@@ -402,3 +402,18 @@ fn an_unreadable_record_refuses_an_early_refund() {
     m.records.borrow_mut().insert(hash(), SwapRecord { direction: Some(Direction::S2L), ..SwapRecord::default() });
     assert_eq!(apply(&m, &Request::EarlyRefund { swap_id: hash() }), Err(Refusal::AlreadyLocked));
 }
+
+#[test]
+fn after_releasing_the_takers_lock_we_never_lock_on_liquid() {
+    let m = Mem::default();
+    apply(&m, &Request::Release { swap_id: hash() }).unwrap();
+    assert_eq!(apply(&m, &lock_liquid()), Err(Refusal::EarlyRefunded));
+    apply(&m, &Request::Release { swap_id: hash() }).unwrap();
+}
+
+#[test]
+fn after_locking_on_liquid_we_never_release() {
+    let m = Mem::default();
+    apply(&m, &lock_liquid()).unwrap();
+    assert_eq!(apply(&m, &Request::Release { swap_id: hash() }), Err(Refusal::ReleaseAfterLock));
+}

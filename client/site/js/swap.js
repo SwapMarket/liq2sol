@@ -42,6 +42,7 @@ export class Engine {
     this.sessions = new Map();
     this.pendingOffers = new Map();
     this.earlyRefunds = new Map();
+    this.recheckedExpired = new Set();
   }
 
   save(s) {
@@ -180,7 +181,8 @@ export class Engine {
       // The maker's gate leaves 210 blocks when it locks, so past that it won't. With no coin, there is nothing to get back either.
       const makerGone = tip > s.terms.lock_height - 200 && !escrow;
       const refunded = escrow?.state === 'Refunded';
-      if (s.state === 'fund' && tip >= s.terms.lock_height) s.state = 'expired';
+      // Only an empty address expires. A coin of the wrong asset or amount is still the taker's, and comes back by refund.
+      if (s.state === 'fund' && tip >= s.terms.lock_height) s.state = (await this.esplora[0].utxos(s.info.plain_address)).length ? 'refund' : 'expired';
       else if (makerGone || refunded || tip >= s.terms.lock_height) s.state = 'refund_wait';
     }
     if (s.state === 'refund_wait' && tip >= s.terms.lock_height) s.state = 'refund';
@@ -260,10 +262,16 @@ export class Engine {
       s.state = 'done';
       s.status = FINISHED_EARLIER;
     }
+    if (s.state === 'release_asked' && now() - s.early_asked_at > EARLY_REFUND_WAIT_SECS) {
+      s.state = 'await_maker';
+      s.status = 'The maker didn’t answer. Nothing has changed, and the timed refund still protects you.';
+    }
     if (s.claim_tx) await this.tickClaimed(s);
     else if (['await_maker', 'signing'].includes(s.state)) {
       const pastClaim = tip >= s.terms.lock_height - NETWORK.claimCutoffBlocks;
       const coins = await this.exactCoins(this.esplora[0], s);
+      // Once the maker has locked it won't release, so the page stops offering to ask.
+      s.maker_locked = coins.length > 0;
       const deep = coins.find((c) => c.confirmations >= NETWORK.liquidConfirmations);
       if (pastClaim || (escrow && slot >= escrow.deadline_slot)) {
         s.state = 'refund_wait';
@@ -464,6 +472,14 @@ export class Engine {
     await this.esplora[0].broadcast(hex).catch(() => {});
   }
 
+  // S→L, before the maker locks on Liquid. The program sends the tokens back to this wallet's own account, so the maker can
+  // only say yes or no. Nothing secret goes out, and the timed refund stays either way.
+  async askRelease(s) {
+    if (s.direction !== 'S2L' || s.state !== 'await_maker' || s.maker_locked) return;
+    this.send(s, { type: 'release-ask', body: { lock_point: s.secrets.lock_point } });
+    this.set(s, { state: 'release_asked', early_asked_at: now(), status: '' });
+  }
+
   // ---- Messages and ticks ----
 
   async onMessage(s, got) {
@@ -477,7 +493,7 @@ export class Engine {
       this.onSessionNonce(s, body.nonce);
     } else if (type === 'early-refund-share' && s.direction === 'L2S') {
       await this.onEarlyRefundShare(s, body);
-    } else if (type === 'rfq-reject' && s.state === 'early_asked') {
+    } else if (type === 'rfq-reject' && (s.state === 'early_asked' || s.state === 'release_asked')) {
       this.earlyRefunds.delete(s.id);
       this.set(s, { state: 'await_maker', status: 'The maker can’t refund early now. Nothing has changed, and the timed refund still protects you.' });
     } else if (type === 'maker-share' && s.direction === 'S2L') {
@@ -486,6 +502,12 @@ export class Engine {
   }
 
   async tick(s) {
+    // Older pages let a swap with a wrong coin expire. Look once per visit, so such a coin can still come back.
+    if (s.state === 'expired' && s.direction === 'L2S' && !this.recheckedExpired.has(s.id)) {
+      this.recheckedExpired.add(s.id);
+      if ((await this.esplora[0].utxos(s.info.plain_address)).length) this.set(s, { state: 'refund', status: '' });
+      return;
+    }
     if (FINISHED.includes(s.state) || s.state === 'recovery') return;
     const tip = await this.esplora[0].tip();
     if (s.state === 'restored') await this.tickRestored(s, tip);

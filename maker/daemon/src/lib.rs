@@ -653,8 +653,16 @@ pub fn report(config_path: &Path) -> Result<(), String> {
     println!("{:<12} {:>12} {:>14.9}", "total", spent.0, spent.1 as f64 / 1e9);
     println!();
     println!("{} open, {} never started.", r.open, r.abandoned);
-    println!("Spread is on completed swaps, in USDT. Costs are close estimates, by when they were sent: SOL from each transaction's fees, and each");
-    println!("escrow's rent until closing it brings that back. Swaps are by when they finished. Swaps from before this was recorded show as earlier.");
+    println!();
+    // From the running signer, which holds the keys. The rest of the report needs only the store.
+    let balances = Client::connect(&cfg.signer_socket).and_then(|mut c| c.call(&Call::Balances).map_err(|e| e.to_string()));
+    match balances {
+        Ok(Reply::Balances { liquid_usdt, liquid_lbtc_sats, free_fee_coins, solana_usdt, sol_lamports }) => {
+            println!("Liquid  {:>14} USDt  {liquid_lbtc_sats:>12} L-BTC sats, {free_fee_coins} fee coins ready", format!("{:.8}", liquid_usdt as f64 / 1e8));
+            println!("Solana  {:>14} USDT  {:>12.9} SOL", money(solana_usdt as i128), sol_lamports as f64 / 1e9);
+        }
+        other => println!("Balances: can't ask the signer ({other:?})."),
+    }
     Ok(())
 }
 

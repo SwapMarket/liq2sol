@@ -75,6 +75,7 @@ pub struct Handler {
     recent: Vec<u64>,
     /// (Solana, Liquid) that we hold, in SOL-USDT base units.
     balances: Arc<Mutex<(u64, u64)>>,
+    sol: liq2sol_chain::sol::Sol,
 }
 
 /// Often enough for an offer, and rarely enough for a public API's rate limit.
@@ -125,6 +126,7 @@ impl Handler {
             seen_events: HashSet::new(),
             recent: vec![],
             balances: Arc::default(),
+            sol: liq2sol_chain::sol::Sol::new(&maker.solana_rpc),
         })
     }
 
@@ -217,6 +219,7 @@ impl Handler {
             Body::RfqAccept(acc) => self.on_accept(&got.sender, &id, &got.rumor_id, acc, now),
             Body::ClaimAnswer(a) => self.on_claim_answer(&got.sender, &id, a),
             Body::EarlyRefundAsk(a) => self.on_early_refund(&got.sender, &id, a, now),
+            Body::ReleaseAsk(a) => self.on_release(&got.sender, &id, a, now),
             Body::SessionOpen(o) => self.on_session_open(&got.sender, &id, o, now),
             Body::TakerShare(s) => self.on_taker_share(&got.sender, &id, s, now),
             // A taker has no business sending these, and a reject has nothing to free up in this version.
@@ -389,6 +392,37 @@ impl Handler {
             }
         };
         self.reply(sender, id, body, now).ok().map(|(e, _)| e)
+    }
+
+    /// S→L. The signer refuses once we have locked on Liquid, and promises never to afterwards. The program sends the tokens
+    /// back to the taker's own account, so nothing here can redirect them. Asking again sends the release again.
+    fn on_release(&mut self, sender: &PublicKey, id: &str, a: ReleaseAsk, now: u64) -> Option<Event> {
+        let terms = self.swap_for(sender, id, &a.lock_point)?;
+        if terms.direction != engine::Direction::S2L {
+            return None;
+        }
+        let swap = terms.lock_point.id();
+        let call = Call::Release { taker_solana: terms.taker_solana.clone(), lock_point: terms.lock_point };
+        let sent = match self.signer.call(&call) {
+            Ok(Reply::Solana(hex)) => liq2sol_signer::unhex(&hex)
+                .and_then(|raw| bincode::deserialize::<solana_sdk::transaction::Transaction>(&raw).map_err(|e| e.to_string()))
+                .and_then(|tx| self.sol.send_signed(&tx).map(|_| ())),
+            other => Err(format!("{other:?}")),
+        };
+        match sent {
+            Ok(()) => {
+                if let Err(e) = self.store.commit_step(&swap, &engine::State::Abandoned, &[]) {
+                    eprintln!("rfq: couldn't mark {} abandoned: {e}", a.lock_point);
+                }
+                println!("{} released to the taker, at the taker's request", a.lock_point);
+                None
+            }
+            Err(e) => {
+                eprintln!("rfq: release refused: {}", e.chars().take(200).collect::<String>());
+                let body = Body::RfqReject(Reject { reason: "this maker can't refund early now".into() });
+                self.reply(sender, id, body, now).ok().map(|(e, _)| e)
+            }
+        }
     }
 
     fn on_session_open(&mut self, sender: &PublicKey, id: &str, o: SessionOpen, now: u64) -> Option<Event> {

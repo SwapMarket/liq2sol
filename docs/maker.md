@@ -150,7 +150,9 @@ Every Solana transaction the signer builds is simulated first. Its compute limit
 
 ## 6a. Earnings report
 
-`liq2sol-maker report <config>` prints each day's swaps, volume and USDT spread by direction and outcome, and the L-BTC and SOL the maker sent. Liquid costs come from each transaction's fee output, plus the fee coin given to the taker on S→L. Solana costs are 5,000 lamports per signature, without rent, which comes back. Each step counts once however often it is retried. Costs are recorded when a transaction is accepted for sending, so one that never lands is still counted, and these figures are close estimates. Wallet balances have the final word.
+`liq2sol-maker report <config>` prints each day's swaps, volume and USDT spread by direction and outcome, and the L-BTC and SOL the maker sent. Liquid costs come from each transaction's fee output, plus the fee coin given to the taker on S→L. Solana costs are each transaction's fees, and each escrow's rent until closing it brings that back. Each step counts once however often it is retried. Costs are recorded when a transaction is accepted for sending, so one that never lands is still counted, and these figures are close estimates. Swaps count on the day they finished, and those from before this was recorded show as `earlier`. Spread is on completed swaps, in USDT.
+
+It ends with the wallets' balances, which have the final word: USDt and L-BTC on Liquid, with the fee coins ready, and USDT and SOL on Solana. These come from the running signer, so without it the report says it can't ask and prints the rest.
 
 ## 7. Dependencies and operations
 

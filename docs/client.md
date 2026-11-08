@@ -124,7 +124,11 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **Restoring from a file.** The file is saved before a swap starts, so it can't say how far the swap got. A restored swap reads both chains first: payment history on Liquid, and the lock's account and history on Solana. Until that succeeds, no step that spends is offered. A browser that already knows the swap keeps its own record.
 
-**Early refund.** While waiting for the maker on L→S, the taker can ask it to refund now (`docs/protocol.md`). It needs the same fee coin as a timed refund. A refusal or silence puts the page back where it was.
+**Early refund.** While waiting for the maker, the taker can ask it to refund now (`docs/protocol.md`). On L→S it needs the same fee coin as a timed refund. On S→L it is one message, offered only until the maker's coin appears, and a finished or refunded S→L card offers the lock's rent back. A refusal or silence puts the page back where it was.
+
+**Wrong coins.** A coin of the wrong asset or amount at an L→S swap address is still the taker's. The page warns, and past the lock height it offers the refund. Only an empty address expires. Swaps an older page marked expired are checked again once per visit, and Rescue takes their recovery file again.
+
+**Send max.** On S→L, with a wallet connected, it stops at the wallet's SOL-USDT.
 
 **Connecting.** With no wallet, the main button says "Connect a Solana wallet" and is always clickable. It tries wallets in the browser, Phantom first. A person saying no stops there. If none is present or none works, a phone gets a list of supported wallets and WalletConnect, and a computer gets WalletConnect's code.
 

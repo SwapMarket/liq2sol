@@ -170,6 +170,13 @@ pub struct EarlyRefundShare {
     pub share: String,
 }
 
+/// S→L, taker to maker: please give my Solana lock back, before you lock on Liquid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseAsk {
+    pub lock_point: String,
+}
+
 /// S→L, taker to maker: the unsigned claim of the maker's coin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -217,6 +224,7 @@ pub enum Body {
     MakerShare(SessionShare),
     EarlyRefundAsk(EarlyRefundAsk),
     EarlyRefundShare(EarlyRefundShare),
+    ReleaseAsk(ReleaseAsk),
 }
 
 /// Every private message. `id` is 32 random bytes in hex, set by the taker and repeated throughout a negotiation.

@@ -30,6 +30,7 @@ Status: Phase 1 design, for review. "Protocol" below refers to [protocol.md](pro
 | Taker exploits a Solana restart (L→S) | `close_on_restart` | Stalls with no hard fork, bounded by caps |
 | Maker never locks, or fake makers flood the book | Taker refunds. The page shows only makers vetted by SwapMarket unless the taker turns that off (`client/site/js/vetted.js`), and favorites fill before others. | Funds safe. Up to about 5–6 h of the taker's time, and 7 days more if `extend` is used. A taker who turns the switch off, or a vetted maker who misbehaves, still faces this. The list is also a point of control: it depends on the page being genuine, and on SwapMarket's judgment. |
 | Taker gets an early refund and is also paid on Solana | The signer records "never lock" before its share leaves, and refuses if it ever signed a lock (`maker/core/tests/policy.rs`) | None |
+| S→L taker gets its lock released and is also paid on Liquid | The signer records "never lock" before it signs the release, and refuses one once it has signed a Liquid lock (`maker/core/tests/policy.rs`, the daemon's `RFQ S2L` scenarios) | None |
 | Recovery text read from the clipboard by another app | Download comes first, the page warns, and the text is copied only when asked | A phone user who copies it, on a device with a malicious app, can lose that swap's funds |
 | Maker quotes with a short `LOCK_HEIGHT` | Client checks the height from its own view of the tip | None |
 | Maker gives wrong address | The client derives addresses itself and accepts none | None |

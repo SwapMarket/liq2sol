@@ -461,4 +461,14 @@ Before the maker locks on Solana, the taker can ask for its coin back without wa
 
 The spend is a key-path signature, the same shape as a claim. It doesn't show that a refund happened.
 
-A maker that refuses or stays silent changes nothing, and the timed refund remains. So this helps with an honest maker, and is no defence against griefing. S→L and a Solana lock already made would need a new program instruction, and aren't covered.
+A maker that refuses or stays silent changes nothing, and the timed refund remains. So this helps with an honest maker, and is no defence against griefing.
+
+## Early refund (S→L)
+
+Before the maker locks on Liquid, the taker can ask for its Solana lock back without waiting for the deadline.
+
+1. The taker sends `release-ask` with the swap's lock point. Nothing secret goes with it.
+2. The signer refuses if it has ever signed a Liquid lock for this swap. Otherwise it records durably that it never will, and signs the program's `release`, which the recipient (the maker) may call on an open escrow. The daemon sends it and drops the swap. If anything fails, the maker answers `rfq-reject`.
+3. The program pays the tokens back to the taker's own refund account, so the maker can only say yes or no. The taker still paid the escrow's rent, and closes it afterwards to get that back.
+
+The maker reads escrows at `finalized`, so a request made straight after locking is turned down, and the page lets the taker ask again. A maker that is healthy locks within seconds of that, so this mostly helps when a maker has stopped filling. As with L→S, refusal or silence changes nothing, and the deadline refund remains.

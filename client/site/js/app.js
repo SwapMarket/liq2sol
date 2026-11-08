@@ -195,7 +195,25 @@ function currentLimits() {
   };
   const min = sizeUp(limits.min);
   const max = sizeDown(limits.max);
-  return { min: whole(min) ? min : limits.min, max: whole(max) ? max : limits.max };
+  const out = { min: whole(min) ? min : limits.min, max: whole(max) ? max : limits.max };
+  // S→L can't send more than the connected wallet holds.
+  const holds = ui.direction === 'S2L' && wallet && walletUsdt.address === wallet.address ? walletUsdt.units : null;
+  if (holds !== null && holds < out.max) return { ...out, max: holds, capped: true };
+  return out;
+}
+
+// The connected wallet's SOL-USDT, read now and then for the S→L form's largest amount.
+const walletUsdt = { address: null, units: null, at: 0 };
+
+function refreshWalletUsdt() {
+  if (!wallet || (walletUsdt.address === wallet.address && Date.now() - walletUsdt.at < 15_000)) return;
+  const address = wallet.address;
+  walletUsdt.at = Date.now();
+  solana.tokenBalance(W.token_account(address, NETWORK.mint)).then((units) => {
+    const changed = walletUsdt.address !== address || walletUsdt.units !== units;
+    Object.assign(walletUsdt, { address, units });
+    if (changed && wallet?.address === address) updateForm();
+  }).catch(() => {});
 }
 
 function setAmount(send) {
@@ -556,11 +574,16 @@ function updateForm() {
     h('div', {}, h('dt', {}, 'Average price'), h('dd', {}, average))));
   const partial = filled && plan.unfilled > 0n;
   slot(form.unfilled, partial ? `${send}|${plan.unfilled}` : '', () => partial && h('p', { class: 'warn', id: 'unfilled' }, `The book can fill ${show(send - plan.unfilled)} of this right now. ${show(plan.unfilled)} would stay unswapped.`));
+  if (ui.direction === 'S2L') refreshWalletUsdt();
   form.limits = currentLimits();
   form.links.hidden = !form.limits;
   if (form.limits) {
     setText(form.sendMin, show(form.limits.min), 'The smallest order the makers shown below can fill');
-    setText(form.sendMax, show(form.limits.max), 'The largest order the makers shown below can fill. It doesn\'t check your balance.');
+    setText(form.sendMax, show(form.limits.max), form.limits.capped
+      ? 'All the SOL-USDT this wallet holds. The makers shown below could fill more.'
+      : ui.direction === 'S2L' && wallet ? 'The largest order the makers shown below can fill. This wallet holds at least that.'
+        : ui.direction === 'S2L' ? 'The largest order the makers shown below can fill. Connect a wallet to cap it at what you hold.'
+          : 'The largest order the makers shown below can fill. It doesn\'t check your Liquid balance.');
   }
   setText(form.go, label);
   form.go.disabled = !ready;
@@ -941,10 +964,15 @@ function swapBody(s) {
           : (s.status || 'Waiting for the maker to lock on Liquid.')),
         s.direction === 'L2S' && s.status && h('p', { class: 'note early-status' }, s.status),
         s.direction === 'L2S' && s.coin && h('button', { class: 'btn quiet early-refund', onclick: act(s.id, (fresh) => engine.set(fresh, { state: 'early_form', status: '' })) }, 'Ask for a refund now'),
+        s.direction === 'S2L' && !s.maker_locked && h('button', {
+          class: 'btn quiet early-refund', title: 'If the maker hasn’t locked, it can give your Solana lock back now. If it says no, nothing changes.',
+          onclick: act(s.id, (fresh) => engine.askRelease(fresh)),
+        }, 'Ask for a refund now'),
       ];
     case 'early_form':
       return earlyRefundView(s);
     case 'early_asked':
+    case 'release_asked':
       return h('p', { class: 'status spin' }, 'Asking the maker to agree to a refund…');
     case 'ready_claim':
       return [
@@ -961,7 +989,7 @@ function swapBody(s) {
     case 'claiming':
       return h('p', { class: 'status spin' }, s.status || 'Publishing the claim…');
     case 'done':
-      return h('p', { class: 'good done' }, s.status || 'Swap complete.');
+      return [h('p', { class: 'good done' }, s.status || 'Swap complete.'), reclaimButton(s)];
     case 'refund_wait':
       return h('p', { class: 'status spin' }, s.direction === 'L2S'
         ? `This swap won't finish. Your refund opens at block ${s.terms.lock_height.toLocaleString('en-US')} (now ${(s.tip ?? 0).toLocaleString('en-US')}). Nobody needs to help, and nobody needs your recovery file.`
@@ -977,7 +1005,7 @@ function swapBody(s) {
     case 'refunding':
       return h('p', { class: 'status spin' }, s.status || 'Refund sent, waiting for a confirmation.');
     case 'refunded':
-      return h('p', { class: 'good refunded' }, 'Refunded.');
+      return [h('p', { class: 'good refunded' }, 'Refunded.'), reclaimButton(s)];
     case 'expired':
       return h('p', { class: 'note' }, 'This swap expired before anything was paid.');
     case 'cancelled':
@@ -1047,8 +1075,8 @@ function rescueView() {
     for (const raw of swaps) {
       ui.openOrder = raw.order ?? raw.id;
       // This browser's own record knows more than the file, which was saved before the swap began. Unless it was cancelled:
-      // then the file is here because a payment may have arrived after all, so ask the chains.
-      if (known[raw.id] && known[raw.id].state !== 'cancelled') continue;
+      // then the file is here because a payment may have arrived after all, so ask the chains. The same goes for an expired one.
+      if (known[raw.id] && !['cancelled', 'expired'].includes(known[raw.id].state)) continue;
       const s = deriveSwap(raw);
       s.state = 'restored';
       saveSwap(s);
@@ -1371,7 +1399,9 @@ const ticking = new Set();
 
 function tickAll() {
   for (const s of Object.values(loadSwaps())) {
-    if (FINISHED.includes(s.state) || ticking.has(s.id)) continue;
+    // An expired L→S swap gets one look per visit, in case a coin reached it after all (Engine.tick).
+    const recheck = s.state === 'expired' && s.direction === 'L2S' && !engine.recheckedExpired.has(s.id);
+    if ((FINISHED.includes(s.state) && !recheck) || ticking.has(s.id)) continue;
     ticking.add(s.id);
     withSwap(s.id, (fresh) => engine.tick(fresh))
       .catch((e) => console.warn('tick', e.message))

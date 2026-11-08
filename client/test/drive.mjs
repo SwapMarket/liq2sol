@@ -955,6 +955,117 @@ async function early() {
   await page.context().close();
 }
 
+// The page's slot, made to run behind by `offset.slots`, so it locks with a deadline too near for the maker's gate.
+async function slotBehind(page, offset) {
+  await page.route((url) => url.href.startsWith(env.SOLANA_RPC), async (route) => {
+    const body = route.request().postDataJSON();
+    if (body?.method !== 'getSlot' || !offset.slots) return route.fallback();
+    const json = await (await route.fetch()).json();
+    return route.fulfill({ json: { ...json, result: json.result - offset.slots } });
+  });
+}
+
+const storedSwap = (page) => page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps')))[0]);
+
+// S→L before the maker locks. The maker won't lock with this deadline, so only the page's request hands the lock back.
+// Then the finished card offers the lock's rent back. First, Send max stops at what the wallet holds.
+async function release() {
+  const poor = await newPage();
+  const holds = BigInt(Math.round(Number(env.AMOUNT) * 1e6));
+  await poor.route((url) => url.href.startsWith(env.SOLANA_RPC), async (route) => {
+    const body = route.request().postDataJSON();
+    if (body?.method !== 'getAccountInfo' || body.params?.[1]?.encoding !== 'jsonParsed') return route.fallback();
+    const value = { data: { parsed: { info: { tokenAmount: { amount: String(holds) } } } } };
+    return route.fulfill({ json: { jsonrpc: '2.0', id: body.id, result: { context: { slot: 1 }, value } } });
+  });
+  await connectTestWallet(poor);
+  await poor.locator('.flip').click();
+  await poor.locator('tbody tr').first().waitFor({ timeout: 30000 });
+  const max = poor.locator('#send-max');
+  await poor.locator('#send-max[title^="All the SOL-USDT this wallet holds"]').waitFor({ timeout: 30000 });
+  if (Number((await max.innerText()).replace(/[^0-9.]/g, '')) !== Number(env.AMOUNT)) throw new Error(`Send max shows ${await max.innerText()}`);
+  await poor.locator('.flip').click();
+  if ((await max.getAttribute('title')).startsWith('All the SOL-USDT')) throw new Error('L to S is capped by the Solana wallet');
+  await checkNoErrors(poor);
+  await poor.context().close();
+  step('S to L\'s Send max stops at the wallet\'s SOL-USDT, and L to S\'s doesn\'t');
+
+  const offset = { slots: 0 };
+  const page = await newPage();
+  await slotBehind(page, offset);
+  await startSwap(page, true, await walletCli('getnewaddress'));
+  await page.locator('.lock').waitFor({ timeout: 10000 });
+  // The page adds the maker's minimum and 300 to the slot it reads, so the real deadline lands 60 slots out.
+  offset.slots = (await storedSwap(page)).terms.min_deadline_slots + 300 - 60;
+  await page.locator('.lock').click();
+  await page.locator('.swap-card[data-state="await_maker"] .early-refund').waitFor({ timeout: 30000 });
+  step('while the maker hasn\'t locked on Liquid, S to L offers to ask for a refund');
+  // The maker reads the lock only once it is final, and says no before that, as it should.
+  // The banner may still show the bad recovery file from the start.
+  const earlier = await page.locator('#banner').innerText().catch(() => '');
+  for (let i = 0; i < 20 && (await state(page)) !== 'refunded'; i++) {
+    if (await page.locator('.swap-card[data-state="await_maker"] .early-refund').count()) await page.locator('.early-refund').click();
+    await waitState(page, 'refunded', 5000).catch(() => {});
+    // A maker turning it down only changes the status line. A banner means the request itself went wrong.
+    const banner = page.locator('#banner:not([hidden])');
+    if (await banner.count() && (await banner.innerText()) !== earlier) throw new Error(`asking for the release failed: ${await banner.innerText()}`);
+  }
+  await waitState(page, 'refunded', 5000);
+  step('the maker agreed, and the lock came back on Solana');
+  offset.slots = 0;
+  await page.locator('.swap-card .reclaim').click({ timeout: 30000 });
+  await page.locator('#toast', { hasText: 'Rent reclaimed' }).waitFor({ timeout: 30000 });
+  const swap = await storedSwap(page);
+  for (let i = 0; i < 40 && (await solanaRpc('getAccountInfo', [swap.escrow_address, { commitment: 'confirmed', encoding: 'base64' }])).value; i++) await new Promise((r) => setTimeout(r, 500));
+  if ((await solanaRpc('getAccountInfo', [swap.escrow_address, { commitment: 'confirmed', encoding: 'base64' }])).value) throw new Error('the escrow is still there');
+  step('and the refunded card gives the lock\'s rent back');
+  await checkNoErrors(page);
+  await page.context().close();
+}
+
+// A coin of the wrong amount is still the taker's. Past the lock height it comes back by refund, and the swap never expires,
+// even for a swap an older page had already marked expired.
+async function wrong() {
+  const page = await newPage();
+  await startSwap(page, false);
+  await page.locator('.pay-address').waitFor();
+  const paid = amountSats(env.AMOUNT) - 100;
+  await pay(await page.locator('.pay-address').innerText(), paid, env.USDT);
+  await walletCli('generatetoaddress', '1', await walletCli('getnewaddress'));
+  await page.locator('.swap-card[data-state="fund"] .warn', { hasText: 'wrong asset or amount' }).waitFor({ timeout: 60000 });
+  const swap = await storedSwap(page);
+  await walletCli('generatetoaddress', String(Math.max(0, swap.terms.lock_height - Number(await cli('getblockcount')) + 1)), await walletCli('getnewaddress'));
+  await waitState(page, 'refund', 60000);
+  step('past the lock height, a swap holding the wrong coin goes to a refund, not to expired');
+
+  await page.evaluate((id) => {
+    const all = JSON.parse(localStorage.getItem('liq2sol.swaps'));
+    all[id].state = 'expired';
+    localStorage.setItem('liq2sol.swaps', JSON.stringify(all));
+  }, swap.id);
+  await page.reload();
+  for (let i = 0; i < 60 && (await storedSwap(page)).state !== 'refund'; i++) await new Promise((r) => setTimeout(r, 500));
+  if ((await storedSwap(page)).state !== 'refund') throw new Error(`an expired swap holding a coin stayed ${(await storedSwap(page)).state}`);
+  step('a swap an older page marked expired, with a coin at its address, goes back to a refund');
+
+  await page.locator('.tab[data-tab="history"]').click();
+  await page.locator('.history-item').first().locator('.history-row').click();
+  await page.getByRole('button', { name: 'Open' }).first().click();
+  await waitState(page, 'refund', 10000);
+  await pay(await page.locator('.fee-address').innerText(), 30, env.LBTC);
+  await walletCli('generatetoaddress', '1', await walletCli('getnewaddress'));
+  const back = await walletCli('getnewaddress');
+  await page.locator('.fee-status', { hasText: 'Ready' }).waitFor({ timeout: 60000 });
+  await page.locator('.refund-to').fill(back);
+  await page.locator('.refund').click();
+  await waitState(page, 'refunded', 120000);
+  const got = await receivedAt(back);
+  if (got !== paid) throw new Error(`the refund paid ${got} units, expected ${paid}`);
+  step('the wrong coin came back in full');
+  await checkNoErrors(page);
+  await page.context().close();
+}
+
 async function solanaRpc(method, params) {
   const res = await fetch(env.SOLANA_RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
   const body = await res.json();
@@ -1045,9 +1156,9 @@ async function look() {
 
 let code = 0;
 try {
-  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,cancelling,faucet,l2s,s2l,split,rescue,early').split(',')]) {
+  for (const name of ['vetting', ...(env.BROWSER_SCENARIOS ?? 'look,cancelling,faucet,l2s,s2l,split,rescue,early,release,wrong').split(',')]) {
     console.log(`  == browser: ${name}`);
-    await { vetting, look, cancelling, faucet, l2s, s2l, rescue, split, early }[name]();
+    await { vetting, look, cancelling, faucet, l2s, s2l, rescue, split, early, release, wrong }[name]();
   }
   console.log('BROWSER OK');
 } catch (e) {

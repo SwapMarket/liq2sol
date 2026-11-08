@@ -938,16 +938,12 @@ fn vault_cap(world: &World, config: &Config, root: &Path, private: &Path) {
     println!("    ok: the lock drew from the vault, and a refund would return there");
 
     // The signer's own limits would allow this. The chain doesn't: this is the protection against a stolen key.
-    // The signer simulates before signing, so the chain's refusal usually comes back then. Either way, it must be the cap.
+    // The signer simulates before signing, and signs nothing the chain would refuse. The chain's answer is the cap.
     let (reply, _) = lock_once(&mut client, cap, deadline);
-    let err = match reply {
-        Reply::Solana(_) => world.send_solana(&solana_tx(reply)).unwrap_err(),
-        Reply::Failed(e) => e,
-        other => panic!("expected a transaction or the chain's refusal, got {other:?}"),
-    };
-    // 6012 (0x177c) is the program's OverWindowCap. Any other failure wouldn't prove the cap did this.
-    assert!(err.contains("0x177c") || err.contains("Custom(6012)"), "refused for the wrong reason: {err}");
-    println!("    ok: a lock over the window cap is refused on-chain (OverWindowCap), even with a valid signature");
+    let Reply::Failed(err) = reply else { panic!("signed a lock the chain refuses: {reply:?}") };
+    // 6012 is the program's OverWindowCap. Any other failure wouldn't prove the cap did this.
+    assert!(err.contains("Custom(6012)"), "refused for the wrong reason: {err}");
+    println!("    ok: a lock over the window cap is refused by the chain (OverWindowCap), so the signer doesn't sign it");
     assert_eq!(world.sol.token_balance(&vault_token).unwrap(), 4 * SOL_AMOUNT, "nothing moved");
 
     // The hot key can't withdraw: it isn't the owner, so the vault's address doesn't even derive from it.

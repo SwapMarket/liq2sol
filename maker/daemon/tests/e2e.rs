@@ -1262,12 +1262,22 @@ fn rfq_l2s_swap(w: &mut World) -> Res<()> {
 }
 
 /// E1 over Nostr: S→L.
-fn rfq_s2l_swap(w: &mut World) -> Res<()> {
+/// An S→L negotiation up to the point where the taker locks.
+struct S2lAgreed {
+    relay: Relay,
+    me: Keys,
+    negotiation: String,
+    terms: MakerTerms,
+    chosen: SwapTerms,
+    key: LiquidKey,
+    secret: [u8; 32],
+}
+
+fn s2l_agreed(w: &World) -> Res<S2lAgreed> {
     let me = Keys::generate();
     let mut relay = Relay::connect(&w.relay_url, Duration::from_millis(200))?;
     let (key, chosen, secret) = fresh_swap_terms(w, Direction::S2L, 0, 0, 0)?;
-    let id = chosen.swap_id();
-    let side = TakerSide {
+        let side = TakerSide {
         lock_point: chosen.lock_point.0,
         taker_key: chosen.taker_key.0,
         blinding_key: chosen.blinding_key,
@@ -1285,6 +1295,18 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
         move || chain.tip(),
         Duration::from_secs(15),
     )?;
+    Ok(S2lAgreed { relay, me, negotiation, terms, chosen, key, secret })
+}
+
+fn release_ask(a: &S2lAgreed) -> Body {
+    Body::ReleaseAsk(msg::ReleaseAsk { lock_point: a.chosen.lock_point.to_hex() })
+}
+
+fn rfq_s2l_swap(w: &mut World) -> Res<()> {
+    let a = s2l_agreed(w)?;
+    let ask = release_ask(&a);
+    let S2lAgreed { mut relay, me, negotiation, terms, chosen, key, secret } = a;
+    let id = chosen.swap_id();
     check(
         terms.liquid_amount.0 == RFQ_RECEIVE * 100 && terms.solana_amount.0 == RFQ_SEND,
         "the amounts match the quote",
@@ -1304,6 +1326,13 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     let fee = w.chain.secret_coins(&fee_address, &blinding)?.into_iter().next().ok_or("no fee coin")?;
     check(fee.secrets.value == FEE && fee.secrets.asset == lbtc(), "the fee coin is what was promised")?;
     let to = w.taker_wallet.address();
+
+    // Having locked on Liquid, the maker never hands the taker's lock back, or the taker could have both sides.
+    send_body(&mut relay, &me, &w.maker_nostr, &negotiation, NETWORK, ask)?;
+    let got = early_answer(&mut relay, &me, &w.maker_nostr, &negotiation);
+    check(got.is_err_and(|e| e.contains("declined")), "having locked on Liquid, the maker won't release")?;
+    let escrow = escrow_pda(&w.taker_sol.pubkey(), &point_64(&chosen.lock_point));
+    check(w.sol.escrow(&escrow)?.is_some_and(|e| e.state == EscrowState::Open), "and the taker's lock stays")?;
 
     // Real requests on a real coin, so only the sender and id checks can refuse them. The real session below is the control.
     let stranger = Keys::generate();
@@ -1341,6 +1370,11 @@ fn rfq_s2l_swap(w: &mut World) -> Res<()> {
     let (sats, lamports) = r.costs.values().fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1));
     check(sats >= FEE && lamports >= 5_000, "and what the maker spent on both chains")?;
     check(text.contains("S2L") && text.contains("Completed"), "and prints it")?;
+    let Reply::Balances { liquid_usdt, sol_lamports, .. } = w.client.call(&Call::Balances)? else {
+        return Err("the signer gave no balances".into());
+    };
+    check(liquid_usdt > 0 && sol_lamports > 0, "the signer reads its balances")?;
+    check(text.contains(&format!("{:.8} USDt", liquid_usdt as f64 / 1e8)), "and the report ends with them")?;
     Ok(())
 }
 
@@ -1674,6 +1708,47 @@ fn rfq_early_refund(w: &mut World) -> Res<()> {
     Ok(())
 }
 
+/// S→L, before the maker locks on Liquid: the taker asks for its lock back, and the maker releases it to the taker's own
+/// account. A deadline too close for the maker's gate keeps the maker from locking while the test asks.
+fn rfq_s2l_release(w: &mut World) -> Res<()> {
+    let mut a = s2l_agreed(w)?;
+    let id = a.chosen.swap_id();
+    let recipient = Pubkey::from_str(&a.terms.maker_solana).map_err(|e| e.to_string())?;
+    let account = ata(&w.taker_sol.pubkey());
+    let before = w.sol.token_balance(&account)?;
+    let deadline = w.sol.slot()? + 90;
+    w.sol.lock(&w.taker_sol, point_64(&a.chosen.lock_point), recipient, RFQ_SEND, deadline, false)?;
+    let escrow = escrow_pda(&w.taker_sol.pubkey(), &point_64(&a.chosen.lock_point));
+    w.wait_for("the lock to finalize", 60, || w.sol.escrow(&escrow))?;
+
+    // Someone else can't ask for it.
+    let mut stranger = RawTaker::new(w)?;
+    stranger.id = a.negotiation.clone();
+    stranger.send(release_ask(&a))?;
+    check(stranger.answer(QUIET)?.is_none(), "a stranger's request gets no answer")?;
+    check(w.sol.escrow(&escrow)?.is_some_and(|e| e.state == EscrowState::Open), "and the lock stays")?;
+
+    let ask = release_ask(&a);
+    send_body(&mut a.relay, &a.me, &w.maker_nostr, &a.negotiation, NETWORK, ask)?;
+    let e = w.wait_for("the maker to release the lock", 60, || {
+        Ok(w.sol.escrow(&escrow)?.filter(|e| e.state == EscrowState::Refunded))
+    })?;
+    check(w.sol.token_balance(&account)? == before, "the taker has all of it back")?;
+    check(e.rent_payer == w.taker_sol.pubkey(), "and can close the escrow for its rent")?;
+    w.wait_state(&id, "the maker dropping the swap", 30, |state| matches!(state, State::Abandoned))?;
+    let (agreed, maker_key) = agreed_terms(&a.chosen, &a.terms)?;
+    std::thread::sleep(QUIET * 3);
+    let coins = w.chain.secret_coins(&agreed.address(&maker_key)?, &agreed.blinding()?)?;
+    check(coins.is_empty(), "having released, the maker never locks on Liquid")?;
+
+    // Asking again changes nothing.
+    let ask = release_ask(&a);
+    send_body(&mut a.relay, &a.me, &w.maker_nostr, &a.negotiation, NETWORK, ask)?;
+    let got = early_answer(&mut a.relay, &a.me, &w.maker_nostr, &a.negotiation);
+    check(got.is_err_and(|e| e.contains("declined")), "a second request is declined")?;
+    Ok(())
+}
+
 /// E6 and E7 against the real daemon: each of these is a message the maker must not act on.
 fn rfq_attacks(w: &mut World) -> Res<()> {
     let request = || Body::RfqRequest(rfq_request(msg::Direction::L2S));
@@ -1862,6 +1937,7 @@ fn the_daemon_runs_real_swaps() {
         ("RFQ S2L swap (E1)", rfq_s2l_swap),
         ("RFQ attacks (E6, E7)", rfq_attacks),
         ("RFQ early refund", rfq_early_refund),
+        ("RFQ S2L release", rfq_s2l_release),
         ("browser client", browser_client),
     ];
     let filter = std::env::var("SCENARIO").unwrap_or_default();

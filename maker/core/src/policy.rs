@@ -169,7 +169,8 @@ pub struct SwapRecord {
     pub liquid_refunded: bool,
     /// L→S: a checked adapter signature is stored. S→L: and our share of it has been given out.
     pub adaptor_held: bool,
-    /// L→S: we signed the taker's early refund, so this swap is never locked. Absent in records from before this existed.
+    /// We gave the taker its money back early, so this swap is never locked: L→S by signing its refund, S→L by releasing its
+    /// Solana lock. Absent in records from before this existed.
     #[serde(default)]
     pub early_refunded: bool,
 }
@@ -256,6 +257,10 @@ pub fn check(limits: &Limits, ledger: &dyn Ledger, now_secs: u64, request: &Requ
             record.deadline_slot = *deadline_slot;
         }
         LockLiquid { liquid_amount, lock_height, liquid_tip, taker_escrow, .. } => {
+            // We gave the taker their Solana lock back, so a Liquid lock now could only be lost.
+            if record.early_refunded {
+                return Err(Refusal::EarlyRefunded);
+            }
             let amount = liquid_amount.div_ceil(100);
             check_lock(amount)?;
             let escrow = taker_escrow.ok_or(Refusal::NoTakerEscrow)?;
@@ -337,6 +342,8 @@ pub fn check(limits: &Limits, ledger: &dyn Ledger, now_secs: u64, request: &Requ
             if record.direction.is_some() {
                 return Err(Refusal::ReleaseAfterLock);
             }
+            // And never lock on Liquid afterwards.
+            record.early_refunded = true;
         }
         Extend { current_deadline, new_deadline, liquid_tip_age_secs, .. } => {
             if record.direction != Some(Direction::S2L) {

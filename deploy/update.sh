@@ -24,7 +24,13 @@ start_all() {
   systemctl daemon-reload
   local since
   since=$(date '+%Y-%m-%d %H:%M:%S')
-  for m in $running; do systemctl start "liq2sol-signer@$m" "liq2sol-maker@$m"; done
+  # Two seconds apart, so makers sharing this IP don't all hit the chain APIs at once.
+  local first=1
+  for m in $running; do
+    [ "$first" = 1 ] || sleep 2
+    first=0
+    systemctl start "liq2sol-signer@$m" "liq2sol-maker@$m"
+  done
   # A maker says so once both chains answer. It retries every 30 seconds, and makers sharing an IP can meet a public
   # API's rate limit, so this waits a few minutes. Interrupting it is safe: everything is already installed and started.
   for m in $running; do

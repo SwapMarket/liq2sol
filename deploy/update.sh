@@ -56,7 +56,13 @@ key="$opt/release-key.gpg"
 [ -f "$key" ] || key="$(cd "$(dirname "$0")" && pwd)/release-key.gpg"
 [ -f "$key" ] || { echo "no release key: put release-key.gpg in $opt or beside this script" >&2; exit 1; }
 # Releases are pre-releases, which GitHub's "latest" skips, so ask for the newest of any kind.
-tag=${1:-$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=1" | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')}
+# Read whole before searching: grep stopping early would cut curl off, and pipefail would end the script.
+if [ -n "${1:-}" ]; then
+  tag=$1
+else
+  releases=$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=1")
+  tag=$(printf '%s\n' "$releases" | sed -n '/"tag_name"/{s/.*"tag_name": *"\([^"]*\)".*/\1/p;q;}')
+fi
 [[ "$tag" =~ ^v[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: '$tag'" >&2; exit 1; }
 current=$(cat "$opt/VERSION" 2>/dev/null || echo unknown)
 if [ "$current" = "$tag" ]; then

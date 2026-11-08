@@ -12,7 +12,7 @@ cd liq2sol-maker-*/
 
 sudo useradd --system --home /var/lib/liq2sol --shell /usr/sbin/nologin liq2sol
 sudo install -d /opt/liq2sol
-sudo install -m 755 liq2sol-signer liq2sol-maker /opt/liq2sol/
+sudo install -m 755 liq2sol-signer liq2sol-maker update.sh /opt/liq2sol/
 sudo install -m 644 liq2sol-signer@.service liq2sol-maker@.service /etc/systemd/system/
 
 # One folder per maker. `first` can be any name.
@@ -70,7 +70,19 @@ Two makers must never share keys or a database. Their prices and limits are inde
 sudo -u liq2sol /opt/liq2sol/liq2sol-maker report /var/lib/liq2sol/first/maker.json
 ```
 
-It prints, per day and direction, swaps, volume and USDT spread earned, then L-BTC and SOL spent. It is safe while the maker runs. Rent isn't counted, because it comes back. Costs are recorded when a transaction is sent, so one that never lands still counts. Treat them as close estimates, and wallet balances as the final word.
+It prints, per day and direction, swaps, volume and USDT spread earned, then L-BTC and SOL spent, then what the wallets hold now. It is safe while the maker runs. An escrow's rent counts as spent until closing it brings it back. Costs are recorded when a transaction is sent, so one that never lands still counts. Treat them as close estimates, and the balances, which come from the running signer, as the final word.
+
+## Update
+
+```sh
+sudo /opt/liq2sol/update.sh          # the newest release
+sudo /opt/liq2sol/update.sh v0.06    # or a given one
+sudo /opt/liq2sol/update.sh --rollback
+```
+
+It downloads the release, checks it against its `SHA256SUMS`, stops every running maker and its signer, installs the binaries and service files, and starts them again, then waits for each to say `maker running`. Configs, keys and databases are left alone. The old binaries are kept in `/opt/liq2sol/previous` for `--rollback`, and the new example configs go to `/opt/liq2sol/examples`, to show any new settings. A swap in progress carries on after the restart.
+
+The checksum only catches a damaged download: it comes from the same place as the archive. The first time, copy the script in from the archive: `sudo install -m 755 update.sh /opt/liq2sol/`.
 
 ## Back up
 

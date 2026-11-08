@@ -928,22 +928,33 @@ const KNOWN_ASSETS = { [NETWORK.lbtc]: { ticker: 'L-BTC', name: 'Liquid Bitcoin'
 
 // What the refund sends back, when it isn't the swap's own USDt. The registry's name is the issuer's to choose, so its
 // domain and the asset id go with it.
+// Each swap's note, kept so a redraw shows it at once instead of hiding it while it reads the coin again.
+const refundNotes = new Map();
+
 function refundCoinNote(s) {
-  const line = h('p', { class: 'warn refund-asset', hidden: true });
+  const known = refundNotes.get(s.id);
+  const line = h('p', { class: 'warn refund-asset', hidden: !known }, known ?? '');
+  const show = (text) => {
+    refundNotes.set(s.id, text);
+    line.textContent = text;
+    line.hidden = !text;
+  };
   esplora[0].readCoins(s.info.plain_address, s.info.script, s.secrets.blinding_key).then(async (coins) => {
     // The same coin the refund takes (Engine.refundCoin).
     const coin = coins.find((c) => c.is_usdt && c.amount === s.terms.liquid_amount) ?? coins[0];
-    if (!coin || (coin.is_usdt && coin.amount === s.terms.liquid_amount)) return;
+    if (!coin || (coin.is_usdt && coin.amount === s.terms.liquid_amount)) {
+      show('');
+      return;
+    }
     const meta = KNOWN_ASSETS[coin.asset] ?? (coin.is_usdt ? { ticker: 'USDt', precision: 8 } : await esplora[0].asset(coin.asset).catch(() => ({})));
     const precision = Number.isInteger(meta.precision) ? meta.precision : 0;
     const amount = precision ? (Number(coin.amount) / 10 ** precision).toFixed(precision).replace(/\.?0+$/, '') : coin.amount;
     const named = meta.ticker || meta.name
       ? `${amount} ${meta.ticker ?? ''}${meta.name ? ` (${meta.name}${meta.entity?.domain ? `, issued by ${meta.entity.domain}` : ''})` : ''}`
       : `${amount} units of an unregistered asset`;
-    line.textContent = coin.is_usdt
+    show(coin.is_usdt
       ? `This refunds ${named}, not the swap's ${liquidUnits(s.terms.liquid_amount)} L-USDt.`
-      : `This refunds ${named}. Asset ${coin.asset}.`;
-    line.hidden = false;
+      : `This refunds ${named}. Asset ${coin.asset}.`);
   }).catch(() => {});
   return line;
 }
@@ -964,7 +975,7 @@ function earlyRefundView(s) {
   const button = h('button', { class: 'btn early-go', onclick: act(s.id, (fresh) => engine.askEarlyRefund(fresh, input.value.trim())) }, s.maker_cancelled ? 'Get my refund' : 'Ask the maker');
   return [
     s.maker_cancelled
-      ? h('p', { class: 'good maker-cancelled' }, `The maker cancelled, and won’t lock. Your coin can come back now, or by itself from block ${s.terms.lock_height.toLocaleString('en-US')}.`)
+      ? h('p', { class: 'good maker-cancelled' }, 'The maker cancelled, and won’t lock. Your coin can come back now.')
       : h('p', { class: 'note' }, 'If the maker hasn’t locked, it can agree to refund you now, instead of after the timed refund. If it says no or doesn’t answer, nothing changes.'),
     refundCoinNote(s),
     ...feeCoinParts(s, button),

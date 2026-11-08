@@ -42,8 +42,6 @@ main { max-width: 960px; margin: 0 auto; padding: 14px 16px 16px; }
 .card { max-width: 480px; margin: 0 auto; padding: 16px 12px 14px; background: var(--card); border: 1px solid rgb(255 255 255 / 10%); border-radius: var(--radius); box-shadow: 0 0 34px var(--primary-soft); position: relative; }
 .card h2 { margin: 2px 40px 2px; text-align: center; font-size: 1.3rem; color: var(--muted); }
 .sub { text-align: center; font-size: .86rem; color: var(--muted); margin: 0 0 10px; }
-.gear { position: absolute; top: 12px; right: 12px; background: none; border: 0; color: var(--dim); font-size: 1.35rem; cursor: pointer; padding: 2px 6px; }
-.gear:hover { color: var(--text); }
 
 .row { position: relative; border: 1px dashed var(--dim); border-radius: 12px; background: var(--deep); padding: 10px; margin-top: 8px; display: flex; align-items: center; gap: 10px; }
 .row.to { border-color: rgb(232 203 43 / 60%); }

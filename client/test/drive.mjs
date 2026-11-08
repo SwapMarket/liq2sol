@@ -212,8 +212,14 @@ async function checkLogs(page) {
   }
 }
 
+// Settings is in the main menu, which a phone keeps behind the burger.
+async function openSettings(page) {
+  if (await page.locator('#burger').isVisible()) await page.locator('#burger').click();
+  await page.locator('#menu-settings').click();
+}
+
 async function checkSettingsLogs(page) {
-  await page.locator('.gear').click();
+  await openSettings(page);
   await page.locator('#logs-download').waitFor();
   const [file] = await Promise.all([page.waitForEvent('download'), page.locator('#logs-download').click()]);
   const saved = readFileSync(await file.path(), 'utf8');
@@ -410,12 +416,16 @@ async function l2s() {
   await page.screenshot({ path: path.join(shots, 'pay.png') });
   const address = await page.locator('.pay-address').innerText();
   if ((await page.locator('.pay-address').evaluate((e) => e.textContent)) !== address.replace(/\s/g, '')) throw new Error('the address shows altered');
-  const lastLine = await page.locator('.pay-address').evaluate((e) => {
-    const r = document.createRange();
-    r.selectNodeContents(e);
-    const rects = [...r.getClientRects()];
-    return rects.at(-1).width / rects[0].width;
-  });
+  // A redraw can swap the element out while it is measured, which leaves nothing to measure, so look again.
+  let lastLine = null;
+  for (let i = 0; i < 10 && lastLine === null; i++) {
+    lastLine = await page.locator('.pay-address').evaluate((e) => {
+      const r = document.createRange();
+      r.selectNodeContents(e);
+      const rects = [...r.getClientRects()];
+      return rects.length ? rects.at(-1).width / rects[0].width : null;
+    });
+  }
   if (lastLine < 0.1) throw new Error('a lone character on the address\'s last line');
   for (const [cls, name] of [['.pay-amount', 'Amount'], ['.pay-address', 'Address']]) {
     await page.locator(cls).click();
@@ -431,7 +441,7 @@ async function l2s() {
   await page.screenshot({ path: path.join(shots, 'claim.png') });
   step('the page signed the maker’s claim, and sees its lock');
   const setHelius = async (key) => {
-    await page.locator('.swap-card .gear').click();
+    await openSettings(page);
     await page.locator('#s-helius').fill(key);
     await page.locator('dialog .btn', { hasText: 'Save' }).click();
   };
@@ -439,7 +449,7 @@ async function l2s() {
   await page.locator('.one-endpoint').waitFor({ state: 'detached', timeout: 5000 });
   await setHelius('');
   await page.locator('.one-endpoint').waitFor({ timeout: 5000 });
-  step('Settings opens from the claim page, and a second endpoint set there takes effect at once');
+  step('Settings opens from the menu on the claim page, and a second endpoint set there takes effect at once');
   if (!(await page.locator('.claim').isDisabled())) throw new Error('Claim is on with one endpoint and no consent');
   if (await state(page) !== 'ready_claim') throw new Error('claimed with one endpoint and no consent');
   step('with one Solana endpoint and the box unticked, Claim stays off and the secret stays hidden');

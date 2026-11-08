@@ -537,7 +537,6 @@ form.links = h('div', { class: 'send-links' },
   h('span', {}, 'Send Min:'), form.sendMin,
   h('span', {}, 'Max:'), form.sendMax);
 form.el = h('div', { class: 'card' },
-  h('button', { class: 'gear', title: 'Settings', 'aria-label': 'Settings', onclick: () => settingsDialog() }, '⚙'),
   h('h2', {}, 'Create Atomic Swap'),
   h('p', { class: 'sub' }, 'Trustless and confidential. No server holds anything.'),
   form.links,
@@ -1067,7 +1066,6 @@ function swapBody(s) {
 function swapView(s) {
   const [from, to] = names[s.direction];
   return h('div', { class: 'card swap-card', 'data-state': s.state, 'data-id': s.id },
-    h('button', { class: 'gear', title: 'Settings', 'aria-label': 'Settings', onclick: () => settingsDialog() }, '⚙'),
     h('h2', {}, `${from} → ${to}`),
     h('dl', { class: 'facts' },
       h('div', {}, h('dt', {}, 'You send'), h('dd', {}, s.direction === 'L2S' ? `${show(BigInt(s.terms.liquid_amount) / 100n)} ${from}` : `${show(s.terms.solana_amount)} ${from}`)),
@@ -1469,6 +1467,11 @@ function navMenu() {
   };
   burger.addEventListener('click', () => set(!menu.classList.contains('open')));
   menu.addEventListener('click', (e) => { if (e.target.closest('a')) set(false); });
+  // Not a page of its own: it opens over whatever is showing.
+  $('menu-settings').addEventListener('click', (e) => {
+    e.preventDefault();
+    settingsDialog();
+  });
 }
 
 async function main() {

@@ -580,7 +580,8 @@ fn run() -> Res<()> {
             if !url.starts_with("http://127.0.0.1") && !url.starts_with("http://localhost") {
                 return Err(format!("refusing: ci-setup is for a local validator, not {url}"));
             }
-            let sol = Sol::new(&url);
+            // Each step waits for `confirmed` only, then everything once for `finalized`, which is what the suites read at.
+            let sol = Sol::new_confirmed(&url);
             let holders = [w.taker_sol.pubkey(), w.maker_sol.pubkey()];
             sol.setup_mint(&w.mint_authority, None, &holders, 100 * SOL_AMOUNT)?;
             sol.top_up_token(&w.mint_authority, &w.maker_sol.pubkey(), 100 * SOL_AMOUNT)?;
@@ -596,6 +597,14 @@ fn run() -> Res<()> {
             let data = solana_sdk::hash::hash(b"global:init").to_bytes()[..8].to_vec();
             sol.send(&[Instruction { program_id: program, accounts, data }], &w.mint_authority, &[])?;
             sol.mint_to(&w.mint_authority, &vault, 100_000 * 1_000_000)?;
+            let finalized = Sol::new(&url);
+            let start = std::time::Instant::now();
+            while finalized.token_balance(&vault).unwrap_or(0) < 100_000 * 1_000_000 {
+                if start.elapsed() > std::time::Duration::from_secs(120) {
+                    return Err("the setup never finalized".into());
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
             println!("local validator funded: stand-in mint, both wallets, faucet vault {vault}");
         }
         ["faucet-init", program] => {

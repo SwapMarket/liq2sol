@@ -764,9 +764,10 @@ fn failure_scenarios() {
         ("E15b rollback drops the claim", e15b_rollback_drops_taker_claim),
         ("E16 Tether freezes", |e| e16_freezes(e)),
     ];
+    // `SCENARIO` runs those whose names contain any of its comma-separated parts.
     let filter = std::env::var("SCENARIO").unwrap_or_default();
     for (name, run) in scenarios {
-        if !name.contains(&filter) {
+        if !filter.split(',').any(|part| name.contains(part.trim())) {
             continue;
         }
         println!("\n==> {name}");

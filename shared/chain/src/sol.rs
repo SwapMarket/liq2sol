@@ -124,6 +124,12 @@ impl Sol {
         Self { rpc: RpcClient::new_with_commitment(url.to_string(), CommitmentConfig::finalized()) }
     }
 
+    /// Waiting only for `confirmed`, for setting up a local validator, whose single node can't fork. Nothing that decides
+    /// about funds may use this.
+    pub fn new_confirmed(url: &str) -> Self {
+        Self { rpc: RpcClient::new_with_commitment(url.to_string(), CommitmentConfig::confirmed()) }
+    }
+
     pub fn slot(&self) -> Res<u64> {
         self.rpc.get_slot().map_err(|e| format!("get_slot: {e}"))
     }

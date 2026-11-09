@@ -245,7 +245,7 @@ function bookCells(o, direction, send, fills) {
   }
   if (send && send > 0n) return { rate: price(bpsAt(tiers, send < max ? send : max) ?? tiers[0].bps), ladder, size: '–' };
   return {
-    rate: tiers.length > 1 ? tiers.map((t) => `≤${size(sizeDown(t.up_to))}: ${price(t.bps)}`).join('\n') : price(tiers[0].bps),
+    rate: tiers.length > 1 ? tiers.map((t, i) => (i ? `>${size(sizeDown(tiers[i - 1].up_to))}` : `≤${size(sizeDown(t.up_to))}`) + `: ${price(t.bps)}`).join('\n') : price(tiers[0].bps),
     ladder,
     size: `≥${size(sizeUp(o.offer.min_sol_units))}\n≤${size(sizeDown(o.offer.max_sol_units))}`,
   };

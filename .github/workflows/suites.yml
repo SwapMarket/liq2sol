@@ -1,6 +1,7 @@
 # The suites that need real chains: the daemon's scenarios, the browser against the real daemon, the signer attack suite and
 # the CLI's failure scenarios. Each scenario runs in its own job, with its own Elements regtest node and Solana test
-# validator, so the whole set takes about as long as the slowest one.
+# validator, so the whole set takes about as long as the slowest one. A push that only changes the page's script, styles or
+# browser test runs only the browser jobs.
 #
 # No secret is involved. The programs load at their fixed ids with `--bpf-program`, so their keypairs stay off GitHub, and
 # the stand-in USDT mint is preloaded with an authority made in the job (scripts/ci-mint-account.py). Every download is
@@ -24,9 +25,11 @@ on:
 permissions:
   contents: read
 
+# A newer push waits for a running set instead of cancelling it, so every set that starts finishes, such as one a release
+# waits for. GitHub keeps only the newest waiting set.
 concurrency:
   group: suites-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   RUST_VERSION: 1.99.1
@@ -42,6 +45,63 @@ env:
   SOLANA_RPC: http://127.0.0.1:8899
 
 jobs:
+  # Which suites this push needs: only the browser jobs when nothing but the page's script, styles or browser test changed.
+  # Anything else, including the page's WebAssembly (built from the maker's crates), a manual run or a new branch, runs all.
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Pick the suites
+        id: pick
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          all=$(cat <<'JSON'
+          [
+              {"name": "L2S with crashes", "run": "e2e", "scenario": "L2S with crashes (E1, E17)"},
+              {"name": "S2L with crashes", "run": "e2e", "scenario": "S2L with crashes (E1, E17)"},
+              {"name": "crash between commit and send", "run": "e2e", "scenario": "crash between commit and send (E17)"},
+              {"name": "L2S taker vanishes", "run": "e2e", "scenario": "L2S taker vanishes (E3)"},
+              {"name": "L2S taker never signs", "run": "e2e", "scenario": "L2S taker never signs"},
+              {"name": "S2L taker vanishes", "run": "e2e", "scenario": "S2L taker vanishes (E3)"},
+              {"name": "bad locks", "run": "e2e", "scenario": "bad locks (E9)"},
+              {"name": "Liquid halt extends", "run": "e2e", "scenario": "Liquid halt extends (E11)"},
+              {"name": "rollback", "run": "e2e", "scenario": "rollback (E15)"},
+              {"name": "RFQ L2S swap", "run": "e2e", "scenario": "RFQ L2S swap (E1)"},
+              {"name": "RFQ S2L swap", "run": "e2e", "scenario": "RFQ S2L swap (E1)"},
+              {"name": "RFQ attacks", "run": "e2e", "scenario": "RFQ attacks (E6, E7)"},
+              {"name": "RFQ early refund", "run": "e2e", "scenario": "RFQ early refund"},
+              {"name": "RFQ wrong coin refunded early", "run": "e2e", "scenario": "RFQ wrong coin refunded early"},
+              {"name": "RFQ S2L release", "run": "e2e", "scenario": "RFQ S2L release"},
+              {"name": "browser look", "run": "e2e", "scenario": "browser client", "browser": "look,cancelling,faucet"},
+              {"name": "browser swaps", "run": "e2e", "scenario": "browser client", "browser": "l2s,s2l,split"},
+              {"name": "browser refunds", "run": "e2e", "scenario": "browser client", "browser": "rescue,early,release"},
+              {"name": "browser wrong coins", "run": "e2e", "scenario": "browser client", "browser": "wrong,wrongEarly"},
+              {"name": "signer attacks", "run": "process }"},
+              {"name": "CLI failures", "run": "failures }"}
+          ]
+          JSON
+          )
+          page_only=false
+          if [ "${{ github.event_name }}" = push ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+            echo "$changed"
+            # Only the page's own files, or files that never reach a build.
+            if [ -n "$changed" ] && ! echo "$changed" | grep -qvE '^(client/site/(js|style\.css|index\.html|img)|client/test/drive\.mjs|docs/|[^/]+\.md$)'; then
+              page_only=true
+            fi
+          fi
+          if [ "$page_only" = true ]; then
+            echo "only the page changed: browser jobs only"
+            all=$(echo "$all" | jq -c '[.[] | select(.browser)]')
+          fi
+          echo "matrix=$(echo "$all" | jq -c .)" >> "$GITHUB_OUTPUT"
+
   programs:
     runs-on: ubuntu-24.04
     steps:
@@ -129,34 +189,13 @@ jobs:
           if-no-files-found: error
 
   suite:
-    needs: [programs, build]
+    needs: [changes, programs, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: L2S with crashes, run: e2e, scenario: "L2S with crashes (E1, E17)" }
-          - { name: S2L with crashes, run: e2e, scenario: "S2L with crashes (E1, E17)" }
-          - { name: crash between commit and send, run: e2e, scenario: "crash between commit and send (E17)" }
-          - { name: L2S taker vanishes, run: e2e, scenario: "L2S taker vanishes (E3)" }
-          - { name: L2S taker never signs, run: e2e, scenario: "L2S taker never signs" }
-          - { name: S2L taker vanishes, run: e2e, scenario: "S2L taker vanishes (E3)" }
-          - { name: bad locks, run: e2e, scenario: "bad locks (E9)" }
-          - { name: Liquid halt extends, run: e2e, scenario: "Liquid halt extends (E11)" }
-          - { name: rollback, run: e2e, scenario: "rollback (E15)" }
-          - { name: RFQ L2S swap, run: e2e, scenario: "RFQ L2S swap (E1)" }
-          - { name: RFQ S2L swap, run: e2e, scenario: "RFQ S2L swap (E1)" }
-          - { name: RFQ attacks, run: e2e, scenario: "RFQ attacks (E6, E7)" }
-          - { name: RFQ early refund, run: e2e, scenario: "RFQ early refund" }
-          - { name: RFQ wrong coin refunded early, run: e2e, scenario: "RFQ wrong coin refunded early" }
-          - { name: RFQ S2L release, run: e2e, scenario: "RFQ S2L release" }
-          - { name: browser look, run: e2e, scenario: browser client, browser: "look,cancelling,faucet" }
-          - { name: browser swaps, run: e2e, scenario: browser client, browser: "l2s,s2l,split" }
-          - { name: browser refunds, run: e2e, scenario: browser client, browser: "rescue,early,release" }
-          - { name: browser wrong coins, run: e2e, scenario: browser client, browser: "wrong,wrongEarly" }
-          - { name: signer attacks, run: process }
-          - { name: CLI failures, run: failures }
+        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
     name: ${{ matrix.name }}
     env:
       SCENARIO: ${{ matrix.scenario }}

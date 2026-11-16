@@ -24,7 +24,7 @@ Mainnet can't be selected anywhere until the program id below is set. Until then
 The program needs an address of its own on mainnet. Its keypair is only used for the deploy.
 
 1. Make the program keypair, on your own machine: `solana-keygen new -o escrow-mainnet-program.json`. Keep the file private. Send only its public address (`solana-keygen pubkey escrow-mainnet-program.json`).
-2. That address goes into three places, in one reviewed commit: `declare_id!` under the program's `mainnet` feature, `sol::MAINNET_PROGRAM`, and `MAINNET.programId` in `client/site/js/config.js`.
+2. The address is `DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b`, set in `declare_id!` under the program's `mainnet` feature. Only after step 5 confirms the deploy does it go into `sol::MAINNET_PROGRAM` and `MAINNET.programId` in `client/site/js/config.js`, which is what turns mainnet on.
 3. Build it from that commit, with the feature that pins Tether's mint: from `programs/`, `cargo build-sbf --manifest-path solana-escrow/Cargo.toml --features mainnet`. Note the file's `sha256sum`.
 4. Deploy it as final, which is what makes it immutable: `solana program deploy --url mainnet-beta --program-id escrow-mainnet-program.json --final programs/target/deploy/solana_escrow.so`. The rent is about 1.6 SOL, and the deploy also needs about as much again for a buffer, which comes back.
 5. Check what is on chain: `solana program show <address> --url mainnet-beta` must say it is not upgradeable, and `solana program dump <address> onchain.so --url mainnet-beta` must match the build's hash once trailing zero padding is removed.

@@ -9,6 +9,10 @@ use solana_sysvar::last_restart_slot::LastRestartSlot;
 pub mod state;
 use state::*;
 
+// Mainnet's address, from the user's own keypair (2026-11-16). Deployed with `--final`, so it can never be changed.
+#[cfg(feature = "mainnet")]
+declare_id!("DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b");
+#[cfg(not(feature = "mainnet"))]
 declare_id!("EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU");
 
 /// USDT on Solana mainnet: legacy Token program, 6 decimals.

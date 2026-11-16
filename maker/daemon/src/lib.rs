@@ -159,7 +159,8 @@ impl Maker {
         let mut caps = vec![cfg.engine.max_per_swap];
         if let Some(rfq) = &cfg.rfq {
             caps.push(rfq.max_sol_units);
-            if rfq.network != cfg.network {
+            // Test networks may name themselves, as regtest does. Mainnet's name is exact, and nothing else may use it.
+            if (rfq.network == "mainnet") != (cfg.network == "mainnet") {
                 return Err(format!(
                     "refusing to start: quotes are for {:?}, and the network is {:?}",
                     rfq.network, cfg.network

@@ -1,7 +1,9 @@
 // Browser storage. WalletConnect moves localStorage keys containing "walletconnect", "wc@", "wc_" or "wallet_connect" elsewhere,
 // so names here avoid those. This holds secrets until a swap settles, which is why the recovery file exists too.
-const SWAPS = 'liq2sol.swaps';
-const SETTINGS = 'liq2sol.settings';
+import { storageKey } from './config.js';
+
+const SWAPS = storageKey('liq2sol.swaps');
+const SETTINGS = storageKey('liq2sol.settings');
 
 function read(key, fallback) {
   try {

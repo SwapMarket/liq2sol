@@ -1,4 +1,5 @@
 // The recovery file: enough, with no browser storage, to get funds back. The funding address stays hidden until it has been saved and read back.
+import { NETWORK } from './config.js';
 
 
 async function checksum(body) {
@@ -15,7 +16,8 @@ function sortDeep(v) {
 }
 
 export async function makeRecovery(swaps) {
-  const body = { format: 'liq2sol-recovery', version: 2, created_at: Math.floor(Date.now() / 1000), swaps };
+  // Files from before mainnet carry no network, and are testnet's.
+  const body = { format: 'liq2sol-recovery', version: 2, network: NETWORK.name, created_at: Math.floor(Date.now() / 1000), swaps };
   return JSON.stringify({ ...body, checksum: await checksum(body) }, null, 1);
 }
 
@@ -29,6 +31,10 @@ export async function readRecovery(text) {
   }
   if (body.format !== 'liq2sol-recovery' || body.version !== 2 || !body.swaps?.length || !body.swaps.every((s) => s.secrets)) throw new Error("This isn't a liq2sol recovery file.");
   if ((await checksum(body)) !== body.checksum) throw new Error('This recovery file is damaged: its checksum is wrong.');
+  const from = body.network ?? 'testnet';
+  if ((from === 'mainnet') !== (NETWORK.name === 'mainnet')) {
+    throw new Error(`This recovery file is from ${from === 'mainnet' ? 'mainnet' : 'a test network'}. Switch networks in Settings to use it.`);
+  }
   return body.swaps;
 }
 

@@ -1,6 +1,6 @@
 // The page. It shows state and takes decisions from the user. js/swap.js and the WASM do the protocol.
 import init, * as W from '../wasm/liq2sol_client_wasm.js';
-import { NETWORK, refuseMainnet } from './config.js';
+import { NETWORK, checkGenesis, chooseNetwork, mainnetAvailable } from './config.js';
 import { Esplora, Solana, hexToBytes } from './chain.js';
 import { bpsAt, effectivePrice, planOrder, sendLimits } from './plan.js';
 import { Relays } from './relay.js';
@@ -177,8 +177,13 @@ const shownOffers = (direction) => {
     .sort((a, b) => Number(fav.has(b.maker)) - Number(fav.has(a.maker)));
 };
 
+// Mainnet's cap on one swap. An order can still be split across makers, each within it.
+const capped = (units) => (NETWORK.maxSwapUnits && units > NETWORK.maxSwapUnits ? NETWORK.maxSwapUnits : units);
+
+const overCap = (terms) => !!NETWORK.maxSwapUnits && (BigInt(terms.solana_amount) > NETWORK.maxSwapUnits || BigInt(terms.liquid_amount) > NETWORK.maxSwapUnits * 100n);
+
 const planMakers = () => shownOffers(ui.direction).map((o) => ({
-  maker: o.maker, tiers: tiersOf(o, ui.direction), min: BigInt(o.offer.min_sol_units), max: BigInt(o.offer.max_sol_units), available: available(o, ui.direction),
+  maker: o.maker, tiers: tiersOf(o, ui.direction), min: BigInt(o.offer.min_sol_units), max: capped(BigInt(o.offer.max_sol_units)), available: available(o, ui.direction),
 }));
 
 function currentPlan(send) {
@@ -700,6 +705,8 @@ async function acceptFill(f, q, order, tip) {
   const terms = got.body.body;
   const problem = W.terms_problem(spreadLimit(), q.direction, JSON.stringify(f.quote), rumor, JSON.stringify(terms), tip);
   if (problem) throw new Error(`A maker's terms aren't acceptable, so nothing was sent for that swap: ${problem}.`);
+  // Checked on the agreed terms themselves, whatever the offer and the form allowed.
+  if (overCap(terms)) throw new Error('A maker\'s terms are above this network\'s limit for one swap, so nothing was sent for that swap.');
   return deriveSwap({
     id: n.id, order, created_at: now(), direction: q.direction, maker: n.maker, nostr: n.nostr, secrets, terms,
     fee_coin_sats: n.offer?.offer.fee_coin_sats, solana_owner: q.owner, to_address: q.to, state: 'recovery', status: '',
@@ -1320,6 +1327,26 @@ function logsRow() {
   return [h('div', { class: 'setting-row' }, h('span', {}, 'Logs'), h('span', { class: 'icon-btns' }, copy, save, del)), note];
 }
 
+// The switch between test networks and mainnet. Each keeps its own swaps and settings, and switching reloads the page. A swap
+// in progress needs this page to keep watching it, so the switch waits until none is.
+function networkRow() {
+  const other = NETWORK.name === 'mainnet' ? 'testnet' : 'mainnet';
+  const unfinished = Object.values(loadSwaps()).filter((s) => !FINISHED.includes(s.state)).length;
+  const why = other === 'mainnet' && !mainnetAvailable() ? 'Mainnet is not available yet.'
+    : unfinished ? `Finish or cancel your ${unfinished === 1 ? 'swap' : `${unfinished} swaps`} in progress first: this page has to keep watching ${unfinished === 1 ? 'it' : 'them'}.`
+      : other === 'mainnet' ? 'Mainnet uses real funds, up to 100 USDT a swap. Your test swaps and settings stay here for when you switch back.'
+        : 'Your mainnet swaps and settings stay here for when you switch back.';
+  const go = h('button', {
+    class: 'btn quiet', id: 'switch-network', disabled: (other === 'mainnet' && !mainnetAvailable()) || unfinished > 0,
+    onclick: () => chooseNetwork(other),
+  }, other === 'mainnet' ? 'Switch to mainnet' : 'Switch to test networks');
+  return [
+    h('h4', {}, 'Network'),
+    h('div', { class: 'setting-row' }, h('span', { id: 'network-now' }, NETWORK.label), go),
+    h('p', { class: 'note', id: 'network-note' }, why),
+  ];
+}
+
 function settingsDialog() {
   const field = (label, id, value, placeholder = '') => h('label', { class: 'field' }, h('span', {}, label), h('input', { class: 'input', id, value: value ?? '', placeholder }));
   const dialog = h('dialog', {},
@@ -1330,6 +1357,7 @@ function settingsDialog() {
     field('Helius key, for a second Solana source. Stored only in this browser, and sent only to Helius.', 's-helius', settings.heliusKey),
     field('Nostr relays, separated by spaces', 's-relays', settings.relays?.join(' '), NETWORK.relays.join(' ')),
     field('Largest spread to accept, in basis points', 's-spread', settings.maxSpreadBps, String(NETWORK.maxSpreadBps)),
+    ...networkRow(),
     h('h4', {}, 'Support'),
     logsRow(),
     h('button', {
@@ -1507,8 +1535,11 @@ async function main() {
   log('info', `started, build ${document.querySelector('#build')?.textContent ?? ''}, ${navigator.userAgent}`);
   await init();
   if (NETWORK.regtest) W.use_regtest(NETWORK.usdt, NETWORK.lbtc);
+  else if (NETWORK.name === 'mainnet') W.use_mainnet();
   endpoints();
   $('net').textContent = NETWORK.label;
+  $('net').classList.toggle('real', NETWORK.name === 'mainnet');
+  document.documentElement.dataset.network = NETWORK.name;
   document.querySelector('.tab[data-tab="faucet"]').hidden = !NETWORK.faucet;
   engine = new Engine({
     esplora, solana, secondSolana, getWallet: () => wallet, relays: null,
@@ -1522,7 +1553,7 @@ async function main() {
   render();
   restoreWallet();
   try {
-    refuseMainnet(await esplora[0].genesis(), await solana.genesis());
+    checkGenesis(NETWORK, await esplora[0].genesis(), await solana.genesis());
   } catch (e) {
     relays.close();
     fail(e);

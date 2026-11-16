@@ -1,8 +1,9 @@
 // A log a user can hand to someone for support. It stays in this browser unless they copy or download it. People paste these into
 // chats, so everything is scrubbed on the way in, and nothing here may ever hold a secret.
+import { storageKey } from './config.js';
 import { loadSettings, loadSwaps } from './store.js';
 
-const KEY = 'liq2sol.logs';
+const KEY = storageKey('liq2sol.logs');
 const MAX_LINES = 1000;
 const MAX_LINE = 500;
 

@@ -41,7 +41,7 @@ use std::str::FromStr;
 
 use liq2sol_chain::liquid::{
     build_swap_spend, keypair_from, lbtc, random32, read_output, sign_keypath, usdt, use_network, Coin, NetworkConfig,
-    SecretCoin, LIQUID_MAINNET_GENESIS,
+    SecretCoin, LIQUID_MAINNET_GENESIS, MAINNET_USDT,
 };
 use liq2sol_chain::swap::{answer_claim_with, EarlyRefund, swap_address, swap_output, taker_fee_address, SignedClaim, TakerClaim};
 use liq2sol_rfq::messages::{self as msg, Body, Envelope, MakerTerms, Offer, Quote, Request};
@@ -89,11 +89,23 @@ fn secret(text: &str) -> Res<SecretKey> {
 }
 
 fn genesis(text: &str) -> Res<BlockHash> {
-    // Nothing here runs on mainnet. The check is here as well as in the page's configuration, which a user can edit.
-    if text == LIQUID_MAINNET_GENESIS {
-        return Err("refusing to run: this is Liquid mainnet".into());
+    // The page's configuration can be edited, so this is checked here too: mainnet's genesis goes with mainnet's assets and
+    // addresses, and with nothing else.
+    let on_mainnet = usdt().to_string() == MAINNET_USDT;
+    if (text == LIQUID_MAINNET_GENESIS) != on_mainnet {
+        return Err("refusing to run: the genesis and the chosen network don't match".into());
     }
     BlockHash::from_str(text).map_err(|e| e.to_string())
+}
+
+/// Select Liquid mainnet: its addresses, Tether's USDt and L-BTC. Called once at startup, before anything else.
+#[wasm_bindgen]
+pub fn use_mainnet() -> Result<(), String> {
+    use_network(NetworkConfig::mainnet());
+    if usdt().to_string() != MAINNET_USDT {
+        return Err("another network was already chosen".into());
+    }
+    Ok(())
 }
 
 /// Testnet is the built-in default. This selects regtest's assets, and is only used by tests.

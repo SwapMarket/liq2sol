@@ -1165,6 +1165,51 @@ async function deadMakers() {
   step('a maker that stops publishing drops off a page that is already open');
 }
 
+// The network switch. The suite's chains aren't mainnet, so a page switched to mainnet must refuse to run, which is the guard
+// that matters: mainnet's name never goes with other chains. Mainnet has no program yet, so one page is told it has.
+async function networkSwitch() {
+  const page = await newPage();
+  await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
+  await openSettings(page);
+  if (!(await page.locator('#switch-network').isDisabled())) throw new Error('mainnet can be chosen with no program there');
+  if (!/not available yet/.test(await page.locator('#network-note').innerText())) throw new Error('no reason given for the disabled switch');
+  await page.evaluate(() => localStorage.setItem('liq2sol.network', 'mainnet'));
+  await page.reload();
+  await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
+  if (await page.locator('#net.real').count()) throw new Error('a stored choice of mainnet was taken with no program there');
+  await page.evaluate(() => localStorage.removeItem('liq2sol.network'));
+  step('mainnet can\'t be chosen, by the switch or by its stored setting, while it has no escrow program');
+
+  const real = await newPage({ width: 1200, height: 1000 }, (p) => p.route('**/js/config.js', async (route) => {
+    const body = (await (await route.fetch()).text()).replace('programId: null,', "programId: 'EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU',")
+      .replace(/\nObject\.assign\(NETWORK, /, '\nconst wasMainnet = NETWORK === NETWORKS.mainnet;$&')
+      + "\nif (wasMainnet) Object.assign(NETWORK, { name: 'mainnet', regtest: false, faucet: null, label: 'Liquid + Solana mainnet' });\n";
+    await route.fulfill({ body, contentType: 'text/javascript' });
+  }));
+  await real.locator('tbody tr').first().waitFor({ timeout: 30000 });
+  await real.locator('.star').first().click();
+  await real.locator('.star.on').first().waitFor({ timeout: 3000 });
+  const testSettings = await real.evaluate(() => localStorage.getItem('liq2sol.settings'));
+  await openSettings(real);
+  if (!/real funds/.test(await real.locator('#network-note').innerText())) throw new Error('no warning before switching to mainnet');
+  await real.locator('#switch-network').click();
+  await real.locator('#net.real').waitFor({ timeout: 30000 });
+  await real.locator('#banner:not([hidden])', { hasText: 'set to mainnet, and an endpoint is on another network' }).waitFor({ timeout: 30000 });
+  if (await real.locator('.tab[data-tab="faucet"]').isVisible()) throw new Error('the faucet shows on mainnet');
+  if (await real.locator('tbody tr').count()) throw new Error('offers show on a page that refused to run');
+  const kept = await real.evaluate(() => [localStorage.getItem('liq2sol.settings'), localStorage.getItem('liq2sol.settings.mainnet'), localStorage.getItem('liq2sol.swaps.mainnet')]);
+  if (kept[0] !== testSettings || (kept[1] ?? '').includes('favorites') || kept[2]) throw new Error(`mainnet shares storage with the test network: ${kept}`);
+  step('switched to mainnet, the page shows it, hides the faucet, keeps its own storage, and refuses chains that aren\'t mainnet');
+
+  await openSettings(real);
+  await real.locator('#switch-network', { hasText: 'Switch to test networks' }).click();
+  await real.locator('.star.on').first().waitFor({ timeout: 30000 });
+  if (await real.locator('#net.real').count()) throw new Error('still marked as mainnet after switching back');
+  step('switching back brings the test network back as it was');
+  await page.context().close();
+  await real.context().close();
+}
+
 async function look() {
   await deadMakers();
   await phoneWallets();
@@ -1172,6 +1217,7 @@ async function look() {
   await s2lBalance();
   await walletStays();
   await pageLoading();
+  await networkSwitch();
   await walletConnectWait();
   await liveBook();
   const phone = await newPage({ width: 400, height: 800 });

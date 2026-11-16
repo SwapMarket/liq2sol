@@ -847,7 +847,8 @@ async function cancelling() {
   await page.locator('#copy-recovery').click();
   const text = await page.locator('#recovery-text').inputValue();
   if (!(await page.locator('#recovery-text').isVisible()) || JSON.parse(text).format !== 'liq2sol-recovery') throw new Error('the text to copy by hand');
-  await page.locator('#recovery-paste').fill(text.replace(/"lock_secret": "./, '"lock_secret": "0'));
+  // Flip the first digit to one it isn't, or one time in sixteen the text is unchanged and the step passes.
+  await page.locator('#recovery-paste').fill(text.replace(/"lock_secret": "(.)/, (_, c) => `"lock_secret": "${c === '0' ? '1' : '0'}`));
   await page.locator('#recovery-paste-go').click();
   await page.locator('#banner:not([hidden])', { hasText: 'damaged' }).waitFor({ timeout: 5000 });
   if (await page.locator('.pay-address').count()) throw new Error('altered text unlocked the next step');

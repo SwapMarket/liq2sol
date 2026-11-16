@@ -22,9 +22,64 @@ pub struct NetworkConfig {
 
 static NETWORK: std::sync::OnceLock<NetworkConfig> = std::sync::OnceLock::new();
 
-/// Use regtest assets instead of the Liquid testnet defaults. Only the test harness does this.
+/// Use these assets and addresses instead of the Liquid testnet defaults: regtest's in the test harness, or mainnet's.
+/// Only the first call counts, so a process works on one network for its whole life.
 pub fn use_network(config: NetworkConfig) {
     let _ = NETWORK.set(config);
+}
+
+/// Which pair of chains a process works on. Each program is told, and checks what it is told against both chains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Net {
+    /// Liquid testnet and Solana devnet, or regtest and a local validator in tests.
+    #[default]
+    Testnet,
+    /// Liquid and Solana mainnet: real funds.
+    Mainnet,
+}
+
+impl Net {
+    pub fn name(self) -> &'static str {
+        match self {
+            Net::Testnet => "testnet",
+            Net::Mainnet => "mainnet",
+        }
+    }
+
+    pub fn parse(name: &str) -> Result<Self, String> {
+        match name {
+            "testnet" => Ok(Net::Testnet),
+            "mainnet" => Ok(Net::Mainnet),
+            other => Err(format!("unknown network {other:?}: use \"testnet\" or \"mainnet\"")),
+        }
+    }
+}
+
+impl NetworkConfig {
+    pub fn mainnet() -> Self {
+        Self {
+            params: &AddressParams::LIQUID,
+            usdt: AssetId::from_str(MAINNET_USDT).expect("constant"),
+            lbtc: AssetId::from_str(MAINNET_LBTC).expect("constant"),
+        }
+    }
+}
+
+/// The most one swap may move on mainnet, in Solana's USDT units: 100 USDT (user's decision, 2026-11-16). Makers can go
+/// lower, and only a new release can go higher.
+pub const MAINNET_MAX_PER_SWAP: u64 = 100_000_000;
+
+/// Hold a process to the network it was told. A mainnet genesis under "testnet" stops it, and so does anything but mainnet
+/// under "mainnet", on either chain, so a wrong endpoint or a wrong setting can't put real funds under test rules.
+pub fn check_genesis(net: Net, liquid_genesis: &str, solana_genesis: &str) -> Result<(), String> {
+    let on_mainnet = (liquid_genesis == LIQUID_MAINNET_GENESIS, solana_genesis == SOLANA_MAINNET_GENESIS);
+    match (net, on_mainnet) {
+        (Net::Testnet, (false, false)) | (Net::Mainnet, (true, true)) => Ok(()),
+        (Net::Testnet, (true, _)) => Err("refusing to start: this is Liquid mainnet, and the network is set to testnet".into()),
+        (Net::Testnet, (_, true)) => Err("refusing to start: this is Solana mainnet, and the network is set to testnet".into()),
+        (Net::Mainnet, (false, _)) => Err("refusing to start: the network is set to mainnet, and Liquid is not mainnet".into()),
+        (Net::Mainnet, (_, false)) => Err("refusing to start: the network is set to mainnet, and Solana is not mainnet".into()),
+    }
 }
 
 pub fn network() -> &'static NetworkConfig {
@@ -36,8 +91,14 @@ pub fn network() -> &'static NetworkConfig {
 }
 
 pub const LIQUID_TESTNET_GENESIS: &str = "a771da8e52ee6ad581ed1e9a99825e5b3b7992225534eaa2ae23244fe26ab1c1";
-/// Liquid mainnet. Nothing in this project may run against it.
+/// Liquid mainnet. Verified against blockstream.info/liquid/api/block-height/0.
 pub const LIQUID_MAINNET_GENESIS: &str = "1466275836220db2944ca059a3a10ef6fd2ea684b0688d2c379296888a206003";
+/// Solana mainnet-beta, from its `getGenesisHash`.
+pub const SOLANA_MAINNET_GENESIS: &str = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+/// Tether's USDt on Liquid, with 8 decimals. The registry (blockstream.info/liquid/api/asset) ties it to tether.to.
+pub const MAINNET_USDT: &str = "ce091c998b83c78bb71a632313ba3760f1763d9cfcffae02258ffa9865a37bd2";
+/// L-BTC, Liquid's policy asset: `AssetId::LIQUID_BTC` in the elements crate.
+pub const MAINNET_LBTC: &str = "6f0279e9ed041c3d710a9f57d0c02928416460c4b722ae3457a11eec381c526d";
 /// USDt on Liquid testnet, "PEGx USDt Testnet" in the registry, with 8 decimals. Not issued by Tether.
 pub const TEST_ASSET: &str = "b612eb46313a2cd6ebabd8b7a8eed5696e29898b87a43bff41c94f51acef9d73";
 /// L-BTC on Liquid testnet.

@@ -185,6 +185,7 @@ fn the_signer_process_resists_a_compromised_engine() {
     let solana_rpc = std::env::var("SOLANA_RPC").unwrap_or_else(|_| "https://api.devnet.solana.com".into());
     let limits = Limits { extend_after_stall_secs: 3, ..Limits::from(&EngineConfig::default()) };
     let config = Config {
+        network: "testnet".into(),
         socket: socket.clone(),
         ledger: root.join("signer.db"),
         keys_dir: keys.clone(),
@@ -914,6 +915,7 @@ fn vault_cap(world: &World, config: &Config, root: &Path, private: &Path) {
     let vault_token = sol::maker_vault_token_pda(&vault);
 
     let cfg = Config {
+        network: "testnet".into(),
         socket: private.join("vault.sock"),
         ledger: root.join("vault-signer.db"),
         vault_owner: Some(owner.pubkey().to_string()),

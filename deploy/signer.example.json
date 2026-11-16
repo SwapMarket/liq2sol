@@ -1,4 +1,5 @@
 {
+ "network": "testnet",
  "socket": "run/signer.sock",
  "ledger": "signer.db",
  "keys_dir": "keys",

@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 use anchor_lang::prelude::Pubkey;
 use liq2sol_chain::esplora::{Esplora, Rpc};
 use liq2sol_chain::liquid::{
-    exact_secret_coin, is_key_path_spend, published_signature, usdt, use_network, NetworkConfig, LIQUID_MAINNET_GENESIS,
+    exact_secret_coin, is_key_path_spend, published_signature, usdt, use_network, NetworkConfig,
 };
-use liq2sol_chain::sol::{self, ata, escrow_pda, Settled, Sol, MAINNET_GENESIS};
+use liq2sol_chain::sol::{self, ata, escrow_pda, Settled, Sol};
 use liq2sol_maker_core::engine::{
     self, Absence, Action, Closed, Direction, EscrowState, EscrowView, HtlcView, Outcome, Page, State, Terms, View,
 };
@@ -36,6 +36,9 @@ use solana_sdk::transaction::Transaction as SolanaTx;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// "testnet" (the default) or "mainnet". Both chains and the quotes' network must agree with it.
+    #[serde(default = "liq2sol_signer::default_network")]
+    pub network: String,
     pub db: PathBuf,
     pub signer_socket: PathBuf,
     /// Pages are appended here. Something outside the daemon must watch this file.
@@ -153,9 +156,17 @@ impl Maker {
         let chain = source(&cfg.liquid);
         let second = cfg.second_liquid.as_ref().map(source);
         let sol = Sol::new(&cfg.solana_rpc);
-        if chain.genesis()? == LIQUID_MAINNET_GENESIS || sol.genesis()? == MAINNET_GENESIS {
-            return Err("refusing to start: this is mainnet".into());
+        let mut caps = vec![cfg.engine.max_per_swap];
+        if let Some(rfq) = &cfg.rfq {
+            caps.push(rfq.max_sol_units);
+            if rfq.network != cfg.network {
+                return Err(format!(
+                    "refusing to start: quotes are for {:?}, and the network is {:?}",
+                    rfq.network, cfg.network
+                ));
+            }
         }
+        sol::enter(&cfg.network, cfg.regtest_assets.is_some(), &caps, &chain.genesis()?, &sol.genesis()?)?;
         if let Some((usdt_id, lbtc_id)) = &cfg.regtest_assets {
             use_network(NetworkConfig {
                 params: &AddressParams::ELEMENTS,
@@ -341,7 +352,12 @@ impl Maker {
     }
 
     /// The escrow, and while claiming, how it was settled if it is gone.
-    fn escrow_view(&self, id: &[u8; 32], swap: &SwapTerms, claiming: bool) -> Result<(Option<EscrowView>, Option<Closed>), String> {
+    fn escrow_view(
+        &self,
+        id: &[u8; 32],
+        swap: &SwapTerms,
+        claiming: bool,
+    ) -> Result<(Option<EscrowView>, Option<Closed>), String> {
         let address = self.escrow_address(swap)?;
         let (read_at, escrow) = self.sol.escrow_at(&address)?;
         let Some(e) = escrow else {
@@ -354,21 +370,24 @@ impl Maker {
         };
         let point = solana_point_of(&swap.lock_point.0).map_err(|e| e.to_string())?;
         let restarted = e.close_on_restart && self.sol.last_restart_slot()? > e.created_slot;
-        Ok((Some(EscrowView {
-            state: match e.state {
-                solana_escrow::state::EscrowState::Open => EscrowState::Open,
-                solana_escrow::state::EscrowState::Claimed => EscrowState::Claimed,
-                solana_escrow::state::EscrowState::Refunded => EscrowState::Refunded,
-            },
-            amount: e.amount,
-            point_ok: e.lock_point == point,
-            recipient_ok,
-            deadline_slot: e.deadline_slot,
-            close_on_restart: e.close_on_restart,
-            extended: e.extended,
-            restarted,
-            revealed: e.revealed,
-        }), None))
+        Ok((
+            Some(EscrowView {
+                state: match e.state {
+                    solana_escrow::state::EscrowState::Open => EscrowState::Open,
+                    solana_escrow::state::EscrowState::Claimed => EscrowState::Claimed,
+                    solana_escrow::state::EscrowState::Refunded => EscrowState::Refunded,
+                },
+                amount: e.amount,
+                point_ok: e.lock_point == point,
+                recipient_ok,
+                deadline_slot: e.deadline_slot,
+                close_on_restart: e.close_on_restart,
+                extended: e.extended,
+                restarted,
+                revealed: e.revealed,
+            }),
+            None,
+        ))
     }
 
     /// S→L: the taker pays the escrow's rent, so it may close the escrow as soon as it settles, before we read the claim.
@@ -435,7 +454,12 @@ impl Maker {
         };
         let tx: SolanaTx = bincode::deserialize(&unhex(&hex)?).map_err(|e| e.to_string())?;
         self.sol.send_signed(&tx).map(|_| ())?;
-        self.note_cost(swap, kind, 0, (LAMPORTS_PER_SIGNATURE * tx.signatures.len() as u64 + sol::priority_lamports(&tx)) as i64);
+        self.note_cost(
+            swap,
+            kind,
+            0,
+            (LAMPORTS_PER_SIGNATURE * tx.signatures.len() as u64 + sol::priority_lamports(&tx)) as i64,
+        );
         Ok(())
     }
 
@@ -471,7 +495,11 @@ impl Maker {
                         let _ = self.store.mark_closed(&id);
                         println!("{} escrow closed, {rent} lamports of rent back", hex(&id));
                     }
-                    Err(e) => eprintln!("{} could not close its escrow: {}", hex(&id), e.chars().take(200).collect::<String>()),
+                    Err(e) => eprintln!(
+                        "{} could not close its escrow: {}",
+                        hex(&id),
+                        e.chars().take(200).collect::<String>()
+                    ),
                 },
                 // Not yet: settled too recently, which is most of the time.
                 Ok(Reply::Failed(e)) if e.contains("too soon") => {}
@@ -735,7 +763,11 @@ pub fn test_page(config_path: &Path) -> Result<(), String> {
             Err(e) => println!("{url}: {e}"),
         }
     }
-    if delivered { Ok(()) } else { Err("no relay accepted the page".into()) }
+    if delivered {
+        Ok(())
+    } else {
+        Err("no relay accepted the page".into())
+    }
 }
 
 /// What this maker has earned and spent, from its own records. Read-only in effect, and safe while the maker runs.
@@ -748,7 +780,12 @@ pub fn report(config_path: &Path) -> Result<(), String> {
     let mut totals = (0u64, 0i128, 0i128);
     for ((day, direction, outcome), line) in &r.swaps {
         let day = day.as_deref().unwrap_or("earlier");
-        println!("{day:<12} {direction:<4} {outcome:<10} {:>6} {:>14} {:>12}", line.swaps, money(line.volume), money(line.spread));
+        println!(
+            "{day:<12} {direction:<4} {outcome:<10} {:>6} {:>14} {:>12}",
+            line.swaps,
+            money(line.volume),
+            money(line.spread)
+        );
         totals = (totals.0 + line.swaps, totals.1 + line.volume, totals.2 + line.spread);
     }
     println!("{:<12} {:<4} {:<10} {:>6} {:>14} {:>12}", "total", "", "", totals.0, money(totals.1), money(totals.2));
@@ -764,10 +801,14 @@ pub fn report(config_path: &Path) -> Result<(), String> {
     println!("{} open, {} never started.", r.open, r.abandoned);
     println!();
     // From the running signer, which holds the keys. The rest of the report needs only the store.
-    let balances = Client::connect(&cfg.signer_socket).and_then(|mut c| c.call(&Call::Balances).map_err(|e| e.to_string()));
+    let balances =
+        Client::connect(&cfg.signer_socket).and_then(|mut c| c.call(&Call::Balances).map_err(|e| e.to_string()));
     match balances {
         Ok(Reply::Balances { liquid_usdt, liquid_lbtc_sats, free_fee_coins, solana_usdt, sol_lamports }) => {
-            println!("Liquid  {:>14} USDt  {liquid_lbtc_sats:>12} L-BTC sats, {free_fee_coins} fee coins ready", format!("{:.8}", liquid_usdt as f64 / 1e8));
+            println!(
+                "Liquid  {:>14} USDt  {liquid_lbtc_sats:>12} L-BTC sats, {free_fee_coins} fee coins ready",
+                format!("{:.8}", liquid_usdt as f64 / 1e8)
+            );
             println!("Solana  {:>14} USDT  {:>12.9} SOL", money(solana_usdt as i128), sol_lamports as f64 / 1e9);
         }
         other => println!("Balances: can't ask the signer ({other:?})."),
@@ -806,7 +847,10 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     }
     if let Some(page_to) = cfg.page_to.clone() {
         maker.pager = Some(pager::start(page_keys(&cfg)?, page_to));
-        println!("pages also go to {} as Nostr private messages", cfg.page_to.as_ref().map_or("", |p| p.nostr.as_str()));
+        println!(
+            "pages also go to {} as Nostr private messages",
+            cfg.page_to.as_ref().map_or("", |p| p.nostr.as_str())
+        );
     }
     println!("maker running");
     loop {
@@ -848,8 +892,14 @@ mod tests {
         // NIP-19's own example key.
         let npub = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg";
         let cfg = loaded("pager", with(npub, "[\"wss://relay.example\"]"));
-        assert_eq!(cfg.page_to.unwrap().check().unwrap().to_hex(), "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e");
-        assert!(try_loaded("pager-bad-key", with("npub1notakey", "[\"wss://relay.example\"]")).is_err(), "a bad key stops the maker");
+        assert_eq!(
+            cfg.page_to.unwrap().check().unwrap().to_hex(),
+            "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"
+        );
+        assert!(
+            try_loaded("pager-bad-key", with("npub1notakey", "[\"wss://relay.example\"]")).is_err(),
+            "a bad key stops the maker"
+        );
         assert!(try_loaded("pager-no-relay", with(npub, "[]")).is_err(), "and so does nowhere to send");
     }
 

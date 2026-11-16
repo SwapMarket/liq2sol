@@ -1052,6 +1052,7 @@ fn build_world(root: &Path) -> World {
     let liquid = LiquidSource::Node { cli: node.rpc.cli.clone(), args: node.rpc.args.clone() };
     let assets = Some((usdt_id.clone(), lbtc_id.clone()));
     let signer_cfg = SignerConfig {
+        network: "testnet".into(),
         socket: socket.clone(),
         ledger: root.join("signer.db"),
         keys_dir: keys.clone(),
@@ -1090,6 +1091,7 @@ fn build_world(root: &Path) -> World {
     let relay_url = public_relay.clone().unwrap_or_else(|| relay.url());
     let operator = nostr::prelude::Keys::generate();
     let cfg = Config {
+        network: "testnet".into(),
         // More gas than any test wallet holds, so the alarm always fires, and the check below sees it arrive.
         balance_alarms: liq2sol_maker::balances::BalanceAlarms { gas_swaps: 1_000_000_000, ..Default::default() },
         page_to: Some(liq2sol_maker::pager::PageTo {

@@ -10,7 +10,7 @@ use solana_client::{
 };
 use solana_commitment_config::CommitmentConfig;
 use solana_escrow::{
-    state::Escrow, ESCROW_SEED, ESCROW_VAULT_SEED, MAKER_VAULT_SEED, MAKER_VAULT_TOKEN_SEED, USDT_MINT,
+    state::Escrow, ESCROW_SEED, ESCROW_VAULT_SEED, MAKER_VAULT_SEED, MAKER_VAULT_TOKEN_SEED,
 };
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -20,7 +20,65 @@ use solana_sdk::{
 };
 use solana_transaction_status_client_types::UiTransactionEncoding;
 
-pub const MAINNET_GENESIS: &str = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+pub use crate::liquid::SOLANA_MAINNET_GENESIS as MAINNET_GENESIS;
+use crate::liquid::{check_genesis, use_network, Net, NetworkConfig};
+
+/// The escrow program on Solana mainnet. `None` until it is deployed there and made immutable: mainnet can't be selected
+/// before that. It is built from the same source with the program's `mainnet` feature, which pins the mint below.
+pub const MAINNET_PROGRAM: Option<Pubkey> = None;
+/// Tether's USDT on Solana mainnet: the legacy Token program, 6 decimals. Checked against the chain's `getAccountInfo`.
+pub const MAINNET_MINT: Pubkey = Pubkey::from_str_const("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
+
+static IDS: std::sync::OnceLock<(Pubkey, Pubkey)> = std::sync::OnceLock::new();
+
+fn ids() -> &'static (Pubkey, Pubkey) {
+    IDS.get_or_init(|| (solana_escrow::id(), solana_escrow::USDT_MINT))
+}
+
+/// The escrow program this process talks to: devnet's unless mainnet was selected.
+pub fn program_id() -> Pubkey {
+    ids().0
+}
+
+/// The USDT mint this process deals in: the stand-in unless mainnet was selected.
+pub fn usdt_mint() -> Pubkey {
+    ids().1
+}
+
+/// What every program does at startup: read the network it was told, hold both chains to it, and on mainnet refuse test
+/// settings and any per-swap limit above the release's cap. `caps` are the per-swap limits the caller will apply.
+pub fn enter(network: &str, regtest: bool, caps: &[u64], liquid_genesis: &str, solana_genesis: &str) -> Res<Net> {
+    let net = Net::parse(network)?;
+    if net == Net::Mainnet {
+        if regtest {
+            return Err("refusing to start: regtest_assets can't be set on mainnet".into());
+        }
+        if let Some(over) = caps.iter().find(|&&cap| cap > crate::liquid::MAINNET_MAX_PER_SWAP) {
+            return Err(format!(
+                "refusing to start: a per-swap limit of {over} is above mainnet's cap of {}",
+                crate::liquid::MAINNET_MAX_PER_SWAP
+            ));
+        }
+    }
+    select(net, liquid_genesis, solana_genesis)?;
+    Ok(net)
+}
+
+/// Settle which network this process works on, once, before any address is derived or key loaded. The network is what the
+/// operator said, checked against what both chains say.
+pub fn select(net: Net, liquid_genesis: &str, solana_genesis: &str) -> Res<()> {
+    check_genesis(net, liquid_genesis, solana_genesis)?;
+    if net == Net::Mainnet {
+        let program = MAINNET_PROGRAM.ok_or("refusing to start: the escrow program isn't on mainnet yet")?;
+        use_network(NetworkConfig::mainnet());
+        if *IDS.get_or_init(|| (program, MAINNET_MINT)) != (program, MAINNET_MINT)
+            || crate::liquid::usdt().to_string() != crate::liquid::MAINNET_USDT
+        {
+            return Err("refusing to start: this process already chose another network".into());
+        }
+    }
+    Ok(())
+}
 const MINT_LEN: usize = 82;
 const ATA_PROGRAM: Pubkey = anchor_spl::associated_token::ID;
 const TOKEN_PROGRAM: Pubkey = anchor_spl::token::ID;
@@ -43,7 +101,7 @@ pub enum Settled {
 pub fn settled_in(tx: &VersionedTransaction, address: &Pubkey) -> Option<Settled> {
     let keys = tx.message.static_account_keys();
     tx.message.instructions().iter().find_map(|ix| {
-        if keys.get(usize::from(ix.program_id_index)) != Some(&solana_escrow::id())
+        if keys.get(usize::from(ix.program_id_index)) != Some(&program_id())
             || !ix.accounts.iter().any(|&i| keys.get(usize::from(i)) == Some(address))
         {
             return None;
@@ -108,15 +166,15 @@ pub struct Sol {
 }
 
 pub fn ata(owner: &Pubkey) -> Pubkey {
-    get_associated_token_address(owner, &USDT_MINT)
+    get_associated_token_address(owner, &usdt_mint())
 }
 
 pub fn escrow_pda(initiator: &Pubkey, lock_point: &[u8; 64]) -> Pubkey {
-    Pubkey::find_program_address(&[ESCROW_SEED, initiator.as_ref(), &lock_point[..32]], &solana_escrow::id()).0
+    Pubkey::find_program_address(&[ESCROW_SEED, initiator.as_ref(), &lock_point[..32]], &program_id()).0
 }
 
 pub fn vault_pda(escrow: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[ESCROW_VAULT_SEED, escrow.as_ref()], &solana_escrow::id()).0
+    Pubkey::find_program_address(&[ESCROW_VAULT_SEED, escrow.as_ref()], &program_id()).0
 }
 
 impl Sol {
@@ -250,17 +308,17 @@ impl Sol {
     pub fn setup_mint(&self, authority: &Keypair, mint: Option<&Keypair>, holders: &[Pubkey], amount: u64) -> Res<()> {
         if self
             .rpc
-            .get_account_with_commitment(&USDT_MINT, CommitmentConfig::finalized())
+            .get_account_with_commitment(&usdt_mint(), CommitmentConfig::finalized())
             .map_err(|e| e.to_string())?
             .value
             .is_none()
         {
             let mint = mint.ok_or("the stand-in mint isn't there, and creating it needs its keypair")?;
-            assert_eq!(mint.pubkey(), USDT_MINT, "the mint keypair must match the program's stand-in mint");
+            assert_eq!(mint.pubkey(), usdt_mint(), "the mint keypair must match the program's stand-in mint");
             let rent = self.rpc.get_minimum_balance_for_rent_exemption(MINT_LEN).map_err(|e| e.to_string())?;
             let create = anchor_lang::solana_program::system_instruction::create_account(
                 &authority.pubkey(),
-                &USDT_MINT,
+                &usdt_mint(),
                 rent,
                 MINT_LEN as u64,
                 &TOKEN_PROGRAM,
@@ -271,7 +329,7 @@ impl Sol {
             data.push(1);
             data.extend_from_slice(authority.pubkey().as_ref());
             let init =
-                Instruction { program_id: TOKEN_PROGRAM, accounts: vec![AccountMeta::new(USDT_MINT, false)], data };
+                Instruction { program_id: TOKEN_PROGRAM, accounts: vec![AccountMeta::new(usdt_mint(), false)], data };
             self.send(&[create, init], authority, &[mint])?;
         }
         for owner in holders {
@@ -284,7 +342,7 @@ impl Sol {
                 let mint_to = Instruction {
                     program_id: TOKEN_PROGRAM,
                     accounts: vec![
-                        AccountMeta::new(USDT_MINT, false),
+                        AccountMeta::new(usdt_mint(), false),
                         AccountMeta::new(ata(first), false),
                         AccountMeta::new_readonly(authority.pubkey(), true),
                     ],
@@ -303,7 +361,7 @@ impl Sol {
         let mint_to = Instruction {
             program_id: TOKEN_PROGRAM,
             accounts: vec![
-                AccountMeta::new(USDT_MINT, false),
+                AccountMeta::new(usdt_mint(), false),
                 AccountMeta::new(*account, false),
                 AccountMeta::new_readonly(authority.pubkey(), true),
             ],
@@ -322,7 +380,7 @@ impl Sol {
         let ix = Instruction {
             program_id: TOKEN_PROGRAM,
             accounts: vec![
-                AccountMeta::new(USDT_MINT, false),
+                AccountMeta::new(usdt_mint(), false),
                 AccountMeta::new(ata(owner), false),
                 AccountMeta::new_readonly(authority.pubkey(), true),
             ],
@@ -359,7 +417,7 @@ impl Sol {
             program_id: TOKEN_PROGRAM,
             accounts: vec![
                 AccountMeta::new(*account, false),
-                AccountMeta::new_readonly(USDT_MINT, false),
+                AccountMeta::new_readonly(usdt_mint(), false),
                 AccountMeta::new_readonly(authority.pubkey(), true),
             ],
             data: vec![if freeze { 10 } else { 11 }],
@@ -386,14 +444,14 @@ pub fn lock_ix(
         escrow,
         vault: vault_pda(&escrow),
         initiator_token: ata(initiator),
-        mint: USDT_MINT,
+        mint: usdt_mint(),
         token_program: TOKEN_PROGRAM,
         system_program: anchor_lang::system_program::ID,
     }
     .to_account_metas(None);
     let data =
         solana_escrow::instruction::Lock { lock_point, recipient, amount, deadline_slot, close_on_restart }.data();
-    Instruction { program_id: solana_escrow::id(), accounts, data }
+    Instruction { program_id: program_id(), accounts, data }
 }
 
 /// A claim, preceded by creating the recipient's token account if it doesn't exist.
@@ -407,15 +465,15 @@ pub fn claim_ixs(payer: &Pubkey, address: &Pubkey, escrow: &Escrow, revealed: [u
     }
     .to_account_metas(None);
     let data = solana_escrow::instruction::Claim { revealed }.data();
-    vec![create_ata_ix(payer, &escrow.recipient), Instruction { program_id: solana_escrow::id(), accounts, data }]
+    vec![create_ata_ix(payer, &escrow.recipient), Instruction { program_id: program_id(), accounts, data }]
 }
 
 pub fn maker_vault_pda(owner: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[MAKER_VAULT_SEED, owner.as_ref()], &solana_escrow::id()).0
+    Pubkey::find_program_address(&[MAKER_VAULT_SEED, owner.as_ref()], &program_id()).0
 }
 
 pub fn maker_vault_token_pda(maker_vault: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[MAKER_VAULT_TOKEN_SEED, maker_vault.as_ref()], &solana_escrow::id()).0
+    Pubkey::find_program_address(&[MAKER_VAULT_TOKEN_SEED, maker_vault.as_ref()], &program_id()).0
 }
 
 /// Create a maker vault. Signed by the cold owner, never by the daemon's host.
@@ -425,13 +483,13 @@ pub fn vault_init_ix(owner: &Pubkey, operator: Pubkey, window_slots: u64, window
         owner: *owner,
         maker_vault,
         vault_token: maker_vault_token_pda(&maker_vault),
-        mint: USDT_MINT,
+        mint: usdt_mint(),
         token_program: TOKEN_PROGRAM,
         system_program: anchor_lang::system_program::ID,
     }
     .to_account_metas(None);
     let data = solana_escrow::instruction::VaultInit { operator, window_slots, window_cap }.data();
-    Instruction { program_id: solana_escrow::id(), accounts, data }
+    Instruction { program_id: program_id(), accounts, data }
 }
 
 /// Move tokens from the depositor's canonical account into a vault.
@@ -446,7 +504,7 @@ pub fn vault_deposit_ix(depositor: &Pubkey, vault_owner: &Pubkey, amount: u64) -
     }
     .to_account_metas(None);
     let data = solana_escrow::instruction::VaultDeposit { amount }.data();
-    Instruction { program_id: solana_escrow::id(), accounts, data }
+    Instruction { program_id: program_id(), accounts, data }
 }
 
 pub fn lock_from_vault_ix(
@@ -466,7 +524,7 @@ pub fn lock_from_vault_ix(
         vault_token: maker_vault_token_pda(&maker_vault),
         escrow,
         vault: vault_pda(&escrow),
-        mint: USDT_MINT,
+        mint: usdt_mint(),
         token_program: TOKEN_PROGRAM,
         system_program: anchor_lang::system_program::ID,
     }
@@ -474,7 +532,7 @@ pub fn lock_from_vault_ix(
     let data =
         solana_escrow::instruction::LockFromVault { lock_point, recipient, amount, deadline_slot, close_on_restart }
             .data();
-    Instruction { program_id: solana_escrow::id(), accounts, data }
+    Instruction { program_id: program_id(), accounts, data }
 }
 
 /// Whether a token account exists and isn't frozen.
@@ -511,7 +569,7 @@ pub fn refund_ix(address: &Pubkey, escrow: &Escrow) -> Instruction {
     }
     .to_account_metas(None);
     let data = solana_escrow::instruction::Refund {}.data();
-    Instruction { program_id: solana_escrow::id(), accounts, data }
+    Instruction { program_id: program_id(), accounts, data }
 }
 
 pub fn release_ix(recipient: &Pubkey, address: &Pubkey, escrow: &Escrow) -> Instruction {
@@ -525,7 +583,7 @@ pub fn release_ix(recipient: &Pubkey, address: &Pubkey, escrow: &Escrow) -> Inst
     }
     .to_account_metas(None);
     let data = solana_escrow::instruction::Release {}.data();
-    Instruction { program_id: solana_escrow::id(), accounts, data }
+    Instruction { program_id: program_id(), accounts, data }
 }
 
 /// Close a settled escrow and return its rent to whoever paid it.
@@ -533,13 +591,13 @@ pub fn close_ix(closer: &Pubkey, address: &Pubkey, escrow: &Escrow) -> Instructi
     let accounts =
         solana_escrow::accounts::Close { closer: *closer, escrow: *address, rent_payer: escrow.rent_payer }.to_account_metas(None);
     let data = solana_escrow::instruction::Close {}.data();
-    Instruction { program_id: solana_escrow::id(), accounts, data }
+    Instruction { program_id: program_id(), accounts, data }
 }
 
 pub fn extend_ix(recipient: &Pubkey, address: &Pubkey, new_deadline: u64) -> Instruction {
     let accounts = solana_escrow::accounts::Extend { recipient: *recipient, escrow: *address }.to_account_metas(None);
     let data = solana_escrow::instruction::Extend { new_deadline }.data();
-    Instruction { program_id: solana_escrow::id(), accounts, data }
+    Instruction { program_id: program_id(), accounts, data }
 }
 
 fn create_ata_ix(payer: &Pubkey, owner: &Pubkey) -> Instruction {
@@ -549,7 +607,7 @@ fn create_ata_ix(payer: &Pubkey, owner: &Pubkey) -> Instruction {
             AccountMeta::new(*payer, true),
             AccountMeta::new(ata(owner), false),
             AccountMeta::new_readonly(*owner, false),
-            AccountMeta::new_readonly(USDT_MINT, false),
+            AccountMeta::new_readonly(usdt_mint(), false),
             AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
             AccountMeta::new_readonly(TOKEN_PROGRAM, false),
         ],

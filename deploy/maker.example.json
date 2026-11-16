@@ -1,4 +1,5 @@
 {
+ "network": "testnet",
  "db": "maker.db",
  "signer_socket": "run/signer.sock",
  "pages": "pages.log",

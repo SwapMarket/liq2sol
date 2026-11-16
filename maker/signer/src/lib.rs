@@ -22,10 +22,9 @@ use std::sync::{Arc, Mutex};
 use anchor_lang::prelude::Pubkey;
 use liq2sol_chain::esplora::{Esplora, Rpc};
 use liq2sol_chain::liquid::{
-    self, keypair_from, sign_keypath, usdt, use_network, NetworkConfig, Payment, SecretCoin, Wallet,
-    FEE, LIQUID_MAINNET_GENESIS,
+    self, keypair_from, sign_keypath, usdt, use_network, NetworkConfig, Payment, SecretCoin, Wallet, FEE,
 };
-use liq2sol_chain::sol::{self, escrow_pda, Sol, MAINNET_GENESIS};
+use liq2sol_chain::sol::{self, escrow_pda, Sol};
 use liq2sol_chain::swap::{check_claim_shape, spent_outputs, swap_address, swap_output, taker_fee_address};
 use liq2sol_maker_core::engine::Direction;
 use liq2sol_maker_core::policy::{self, CoinEvidence, EscrowEvidence, Ledger, Limits, Refusal, Request};
@@ -60,6 +59,9 @@ pub enum LiquidSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// "testnet" (the default) or "mainnet". Both chains must agree with it, or the signer won't start.
+    #[serde(default = "default_network")]
+    pub network: String,
     pub socket: PathBuf,
     pub ledger: PathBuf,
     pub keys_dir: PathBuf,
@@ -85,6 +87,10 @@ pub struct Config {
     /// address. Off by default. It needs `liquid` to be our own node: an API would see one IP asking about every address.
     #[serde(default)]
     pub fresh_addresses: bool,
+}
+
+pub fn default_network() -> String {
+    "testnet".into()
 }
 
 fn default_close_after() -> u64 {
@@ -322,17 +328,6 @@ pub fn unhex(s: &str) -> Result<Vec<u8>, String> {
     (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())).collect()
 }
 
-/// Nothing in this project may run against mainnet. Checked before any key is loaded.
-pub fn refuse_mainnet(liquid_genesis: &str, solana_genesis: &str) -> Result<(), String> {
-    if liquid_genesis == LIQUID_MAINNET_GENESIS {
-        return Err("refusing to start: this is Liquid mainnet".into());
-    }
-    if solana_genesis == MAINNET_GENESIS {
-        return Err("refusing to start: this is Solana mainnet".into());
-    }
-    Ok(())
-}
-
 /// Our wallet at an index. 0 is the key files themselves. Each other index has its own spend and blinding keys, derived
 /// from both, so a restored signer with its ledger finds every coin.
 fn wallet_at(secrets: &([u8; 32], [u8; 32]), idx: u32) -> Result<Wallet, String> {
@@ -417,9 +412,11 @@ type Outcome = Result<Reply, Stop>;
 impl Signer {
     pub fn new(cfg: &Config) -> Result<Self, String> {
         if cfg.fresh_addresses && !matches!(cfg.liquid, LiquidSource::Node { .. }) {
-            return Err("refusing to start: fresh_addresses needs liquid to be our own node, because an API would see one IP \
+            return Err(
+                "refusing to start: fresh_addresses needs liquid to be our own node, because an API would see one IP \
                         asking about every address"
-                .into());
+                    .into(),
+            );
         }
         let chain = match &cfg.liquid {
             LiquidSource::Esplora(url) => Esplora::Http(url.clone()),
@@ -427,7 +424,8 @@ impl Signer {
         };
         let sol = Sol::new(&cfg.solana_rpc);
         let genesis = chain.genesis()?;
-        refuse_mainnet(&genesis, &sol.genesis()?)?;
+        // Before any key is loaded.
+        sol::enter(&cfg.network, cfg.regtest_assets.is_some(), &[cfg.limits.max_per_swap], &genesis, &sol.genesis()?)?;
         if let Some((usdt_id, lbtc_id)) = &cfg.regtest_assets {
             use_network(NetworkConfig {
                 params: &AddressParams::ELEMENTS,
@@ -509,7 +507,10 @@ impl Signer {
     }
 
     /// The key for one of our coins, found by its script.
-    fn key_for(wallets: &[Wallet], script: &simplicityhl::elements::Script) -> Option<simplicityhl::elements::schnorr::Keypair> {
+    fn key_for(
+        wallets: &[Wallet],
+        script: &simplicityhl::elements::Script,
+    ) -> Option<simplicityhl::elements::schnorr::Keypair> {
         wallets.iter().find(|w| w.address().script_pubkey() == *script).map(|w| w.key)
     }
 
@@ -525,7 +526,13 @@ impl Signer {
     /// Pay from our own coins, with change to `change`.
     fn pay(&self, payments: Vec<Payment>, change: &Address) -> Result<LiquidTx, String> {
         let wallets = self.wallets()?;
-        liquid::pay_from_coins_with(&self.payable_coins()?, change, |s| Self::key_for(&wallets, s), payments, self.genesis)
+        liquid::pay_from_coins_with(
+            &self.payable_coins()?,
+            change,
+            |s| Self::key_for(&wallets, s),
+            payments,
+            self.genesis,
+        )
     }
 
     /// Sign the fee coin, input 1 of a swap spend, with the key of the address it is at.
@@ -612,7 +619,9 @@ impl Signer {
     }
 
     fn balances(&self) -> Outcome {
-        let Ok(Reply::Capacity { solana_units, .. }) = self.capacity() else { return Err(Stop::Failed("no capacity".into())) };
+        let Ok(Reply::Capacity { solana_units, .. }) = self.capacity() else {
+            return Err(Stop::Failed("no capacity".into()));
+        };
         let coins = self.wallet_coins()?;
         let sum = |asset| coins.iter().filter(|c| c.secrets.asset == asset).map(|c| c.secrets.value).sum::<u64>();
         let (liquid_usdt, liquid_lbtc_sats) = (sum(usdt()), sum(liquid::lbtc()));
@@ -784,8 +793,9 @@ impl Signer {
         let output = t.output(&self.maker_key(&id)?)?;
         let session = Session::start(&key.secret_bytes(), output.key_ctx(), &message).map_err(|e| e.to_string())?;
         let nonce = hex(&nonce_bytes(&session.public));
-        let (share, _) =
-            session.sign_plain(&key.secret_bytes(), output.key_ctx(), &their_nonce, &message).map_err(|e| e.to_string())?;
+        let (share, _) = session
+            .sign_plain(&key.secret_bytes(), output.key_ctx(), &their_nonce, &message)
+            .map_err(|e| e.to_string())?;
         self.commit(&id, &request, &record, None)?;
         // A claim session still open could only ever be refused now.
         self.sessions.remove(&id);
@@ -1207,7 +1217,8 @@ pub struct Client {
 
 impl Client {
     pub fn connect(path: &Path) -> Result<Self, String> {
-        let writer = UnixStream::connect(path).map_err(|e| format!("can't reach the signer at {}: {e}", path.display()))?;
+        let writer =
+            UnixStream::connect(path).map_err(|e| format!("can't reach the signer at {}: {e}", path.display()))?;
         let reader = BufReader::new(writer.try_clone().map_err(|e| e.to_string())?);
         Ok(Self { writer, reader })
     }
@@ -1234,13 +1245,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mainnet_is_refused_on_either_chain() {
-        assert!(refuse_mainnet(LIQUID_MAINNET_GENESIS, "x").is_err());
-        assert!(refuse_mainnet("x", MAINNET_GENESIS).is_err());
-        assert!(refuse_mainnet("x", "y").is_ok());
-    }
-
-    #[test]
     fn the_example_config_stays_inside_the_folder_it_is_copied_to() {
         let dir = std::env::temp_dir().join(format!("liq2sol-signer-config-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1263,10 +1267,17 @@ mod tests {
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), addresses.len(), "every index has its own address");
-        assert_eq!(wallet_at(&secrets, 5).unwrap().address(), wallet_at(&secrets, 5).unwrap().address(), "and the same one each time");
+        assert_eq!(
+            wallet_at(&secrets, 5).unwrap().address(),
+            wallet_at(&secrets, 5).unwrap().address(),
+            "and the same one each time"
+        );
         let one = wallet_at(&secrets, 1).unwrap();
         assert_ne!(one.blinding.secret_bytes(), secrets.1, "each index has its own blinding key too");
-        assert_ne!(wallet_at(&([7u8; 32], [8u8; 32]), 1).unwrap().key, wallet_at(&([6u8; 32], [8u8; 32]), 1).unwrap().key);
+        assert_ne!(
+            wallet_at(&([7u8; 32], [8u8; 32]), 1).unwrap().key,
+            wallet_at(&([6u8; 32], [8u8; 32]), 1).unwrap().key
+        );
     }
 
     #[test]

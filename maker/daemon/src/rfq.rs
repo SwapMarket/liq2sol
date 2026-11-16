@@ -173,7 +173,7 @@ impl Handler {
             available_s2l: Units(available_s2l),
             v: VERSION,
             network: self.cfg.network.clone(),
-            program_id: solana_escrow::id().to_string(),
+            program_id: liq2sol_chain::sol::program_id().to_string(),
             template_version: TEMPLATE_VERSION,
             directions: vec![Direction::L2S, Direction::S2L],
             min_sol_units: Units(self.cfg.min_sol_units),
@@ -342,7 +342,7 @@ impl Handler {
             maker_solana: self.our_solana.clone(),
             maker_initiator: is_l2s.then(|| self.our_initiator.clone()),
             usdt_asset: usdt().to_string(),
-            program_id: solana_escrow::id().to_string(),
+            program_id: liq2sol_chain::sol::program_id().to_string(),
             template_version: TEMPLATE_VERSION,
             liquid_amount: Units(liquid_amount),
             solana_amount: Units(solana_amount),
@@ -427,7 +427,9 @@ impl Handler {
         let call = Call::Release { taker_solana: terms.taker_solana.clone(), lock_point: terms.lock_point };
         let sent = match self.signer.call(&call) {
             Ok(Reply::Solana(hex)) => liq2sol_signer::unhex(&hex)
-                .and_then(|raw| bincode::deserialize::<solana_sdk::transaction::Transaction>(&raw).map_err(|e| e.to_string()))
+                .and_then(|raw| {
+                    bincode::deserialize::<solana_sdk::transaction::Transaction>(&raw).map_err(|e| e.to_string())
+                })
                 .and_then(|tx| self.sol.send_signed(&tx).map(|_| ())),
             other => Err(format!("{other:?}")),
         };

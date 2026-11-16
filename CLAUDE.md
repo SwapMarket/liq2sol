@@ -9,7 +9,8 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 ## Rules (from the brief)
 
 - **Phases 0 and 1 are documents only. Stop after Phase 1 and wait for the user's review before any implementation code.**
-- Testnet/devnet only. Never generate, request or handle mainnet keys.
+- **Mainnet support is being added (user's decision, 2026-11-16), which lifts the brief's "testnet/devnet only".** Still never
+  generate, request or handle mainnet keys: the user deploys the program and funds makers. Tests and the CLI stay on test networks.
 - Don't guess APIs: verify against docs/source and cite them. Mark anything unverified **UNVERIFIED**.
 - Small, auditable code over features. Every component needs tests, including adversarial ones.
 - When a decision is the user's, list options with trade-offs instead of picking silently.
@@ -72,6 +73,13 @@ Details and sources are in the docs. These are recorded because older assumption
 - **The signer never reuses a coin it has signed away.** A retried lock must send the same bytes, so a reused coin could never land.
 - **In S→L the taker may close the escrow as soon as it settles,** since it paid the rent, so the daemon can find no escrow at all
   after its claim. Gone before the last deadline seen means claimed; after it, the daemon reads the escrow's history (`docs/maker.md` section 3).
+- **A process is told its network and both chains must agree** (`sol::enter`, the page's `checkGenesis`): mainnet's name never
+  goes with test chains, nor test rules with mainnet chains. `"network": "mainnet"` in both maker configs; default testnet.
+- **Mainnet decisions (user's, 2026-11-16):** a guarded switch in Settings, with separate storage per network; the escrow program
+  immutable from the start; my own review of `musig2`, not an audit; at most 100 USDT a swap (`MAINNET_MAX_PER_SWAP`, the page's
+  `maxSwapUnits`), which only a release can raise.
+- **Mainnet stays off until its program id is set** in `sol::MAINNET_PROGRAM` and the page's `MAINNET.programId`. The program is
+  built with its `mainnet` feature, which pins Tether's mint.
 - **Kind 21059 wrappers carry the real time.** Relays drop ephemeral events more than a few seconds old.
 - **The second Solana endpoint is Helius, using an optional key the taker provides** (user's decision, 2026-11-05). Never
   ship a key in the static app.

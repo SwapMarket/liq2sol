@@ -63,7 +63,6 @@ Details and sources are in the docs. These are recorded because older assumption
 - **A fee coin is 30 sats (user's decision, 2026-11-06),** just above a refund's 29-sat floor, because Liquid has no fee spikes. It leaves no margin if the floor rises.
 - **In the page, every change to a swap goes through `withSwap`.** A slow tick saving an old copy lost a lock and the maker's one-time share. Inputs stay the same elements across renders, or typing is lost when offers arrive.
 - **The page's CSP allows `unsafe-eval`, on testnet and mainnet** (user's decision, 2026-11-06), or Phantom can't connect: its injected scripts use `new Function`. The test wallet doesn't, so browser tests won't show this.
-- **Mainnet client builds must be obfuscated,** as `SwapMarket/swapmarket.github.io` does (user's decision, 2026-11-06). Testnet builds aren't. See `docs/client.md` section 6.
 - **A recovery file is saved before a swap starts, so it says nothing about how far the swap got.** A restored swap reads both chains before offering any step that spends.
 - **An early refund and a Solana lock must exclude each other** (L→S). The signer refuses one after the other, and records its promise before its share leaves. It is no defence against griefing, since a griefing maker just says no.
 - **The program no longer logs instruction names** (`no-log-ix-name`, on by default). That only hides labels from casual viewers.

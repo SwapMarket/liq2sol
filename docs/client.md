@@ -208,7 +208,7 @@ Per D3:
 |---|---|
 | Reproducible builds | Docker image pinned by digest. Rust toolchain and clang pinned. `SOURCE_DATE_EPOCH` set. CI builds twice and compares hashes. |
 | Pinned dependencies | `Cargo.lock` and a package lockfile with integrity hashes. `--locked` and `npm ci`. Dependency changes require review. Minimal count. |
-| SRI | Every script, style and WASM file gets a hash in the entry HTML. WASM loading verifies its hash. |
+| SRI | At deploy, `client/stamp.mjs` pins every script (an import map's `integrity`, allowed by its own hash in the CSP), the style sheet and the WASM (a `wasm-sha256` meta tag, checked by `app.js` before running it) in `index.html`. Browsers without import-map integrity run the page unchecked. The browser test checks that a changed script or WASM is refused. |
 | CSP | `default-src 'self'; connect-src` limited to `'self'`, `https:` and `wss:`, since endpoints are user-configurable; `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`, on testnet and mainnet (user's decision, 2026-11-06); no inline scripts. **`unsafe-eval` is there for wallets:** Phantom's injected scripts call `new Function`, and without it every wallet message fails with "Internal JSON-RPC error" (found in Opera). A page can't exempt one extension. Our own code never evaluates strings, and inline and outside scripts stay blocked. Set by meta tag, because GitHub Pages can't set headers. |
 | Release hashes | Signed `SHA256SUMS` with the SwapMarket key on each GitHub release. Includes the CMR of each template version. |
 | IPFS mirror | Each release is pinned, with its CID in the release notes. |

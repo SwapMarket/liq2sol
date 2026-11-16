@@ -93,8 +93,9 @@ jobs:
       - name: Build the WebAssembly
         if: steps.wasm.outputs.cache-hit != 'true'
         run: client/build.sh
-      - name: Stamp the build
-        run: sed -i "s/__BUILD__/${GITHUB_SHA::12}/g" client/site/index.html
+      # Pins every script, the style sheet and the WebAssembly by hash in index.html, so that file alone is what to check.
+      - name: Stamp the build and pin every file by hash
+        run: node client/stamp.mjs client/site "${GITHUB_SHA::12}"
       - name: Record what is being published
         working-directory: client/site
         run: |

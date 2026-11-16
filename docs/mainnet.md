@@ -13,6 +13,7 @@ Mainnet support was approved on 2026-11-16, with four decisions by the user: a g
 | Mainnet constants | Liquid genesis, Tether's USDt asset, L-BTC, Solana genesis and Tether's USDT mint, each checked against the chain. |
 | The cap | 100 USDT a swap: `MAINNET_MAX_PER_SWAP` for the maker, `maxSwapUnits` for the page, checked on the agreed terms. |
 | `musig2` | Reviewed, with tests against libsecp256k1's verifier, on both backends. |
+| Page integrity | The deploy pins every script, the style sheet and the WebAssembly by hash in `index.html` (`client/stamp.mjs`). A changed file is refused, so `index.html` alone is what to check. |
 | Recovery files | Carry their network. A test network's file can't be restored on mainnet, or the reverse. |
 
 Mainnet can't be selected anywhere until the program id below is set. Until then the switch is disabled and a maker told `mainnet` refuses to start.
@@ -33,7 +34,7 @@ An immutable program can never be fixed. A bug means a new program, a new addres
 
 ### 2. Before the switch is turned on
 
-- **Page integrity.** Hashes (SRI) for every script, style and WebAssembly file, and a build anyone can reproduce. Today a changed file on the host would go unnoticed.
+- **A reproducible page build**, so anyone can check a published `index.html` against the source. The pinning itself is done (below).
 - **The page's signing backend.** It uses `k256`, which isn't constant time (`client/wasm/.cargo/audit.toml`). The key lasts one swap and stays in the user's browser.
 - **Real wallets on real phones**, and Firefox and Safari, on test networks first.
 - **Vetted makers.** The mainnet list in `client/site/js/vetted.js` is empty.

@@ -3,9 +3,9 @@
 //
 // Run through the daemon's suite:  CLIENT_TEST=1 SCENARIO="browser" cargo test -p liq2sol-maker --test e2e -- --ignored --nocapture
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, mkdtempSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, cpSync } from 'node:fs';
 import { createPrivateKey, generateKeyPairSync, sign as edSign } from 'node:crypto';
-import { execFile, execSync } from 'node:child_process';
+import { execFile, execFileSync, execSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir, homedir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +14,10 @@ import { chromium } from 'playwright-core';
 const env = process.env;
 const run = promisify(execFile);
 const SITE = path.resolve(import.meta.dirname, '../site');
+// A copy stamped as the deploy stamps it (client/stamp.mjs), served untouched under /stamped/.
+const STAMPED = mkdtempSync(path.join(tmpdir(), 'liq2sol-stamped-'));
+cpSync(SITE, STAMPED, { recursive: true });
+execFileSync(process.execPath, [path.resolve(import.meta.dirname, '../stamp.mjs'), STAMPED, 'test']);
 const rpcArgs = JSON.parse(env.ELEMENTS_ARGS);
 const cli = (...args) => run(env.ELEMENTS_CLI, [...rpcArgs, ...args], { maxBuffer: 1 << 26 }).then((r) => r.stdout.trim());
 const walletCli = (...args) => cli('-rpcwallet=w', ...args);
@@ -101,7 +105,19 @@ const config = {
 // The makers this page treats as vetted. The suite's maker has a new key each run, so the list is set once it's known.
 let vetted = [];
 const site = await serve((req, res) => {
-  const rel = new URL(req.url, 'http://x').pathname.replace(/^\/$/, '/index.html');
+  const pathname = new URL(req.url, 'http://x').pathname;
+  if (pathname.startsWith('/stamped/')) {
+    const file = path.join(STAMPED, pathname.slice('/stamped'.length).replace(/^\/$/, '/index.html'));
+    if (!file.startsWith(STAMPED) || !existsSync(file)) {
+      res.statusCode = 404;
+      res.end();
+      return;
+    }
+    res.setHeader('content-type', TYPES[path.extname(file)] ?? 'application/octet-stream');
+    res.end(readFileSync(file));
+    return;
+  }
+  const rel = pathname.replace(/^\/$/, '/index.html');
   const file = path.join(SITE, rel);
   if (!file.startsWith(SITE) || !existsSync(file)) {
     res.statusCode = 404;
@@ -1167,6 +1183,39 @@ async function deadMakers() {
 
 // The network switch. The suite's chains aren't mainnet, so a page switched to mainnet must refuse to run, which is the guard
 // that matters: mainnet's name never goes with other chains. Mainnet has no program yet, so one page is told it has.
+// The published page pins every file by hash. It runs as published, and refuses a changed script or WebAssembly.
+async function pinnedFiles() {
+  const open = async (tamper) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    if (tamper) await page.route(tamper.url, async (route) => {
+      const body = Buffer.from(await (await route.fetch()).body());
+      await route.fulfill({ body: tamper.change(body), contentType: tamper.type });
+    });
+    await page.goto(`http://127.0.0.1:${site.port}/stamped/`);
+    return { page, context, errors };
+  };
+  const plain = await open(null);
+  await plain.page.locator('#net:not(:empty)').waitFor({ timeout: 30000 });
+  if (plain.errors.some((e) => /integrity|digest|WebAssembly/i.test(e))) throw new Error(`the stamped page reported: ${plain.errors}`);
+  await plain.context.close();
+
+  const script = await open({ url: '**/stamped/js/plan.js', type: 'text/javascript', change: (b) => Buffer.concat([b, Buffer.from('\n// changed\n')]) });
+  await new Promise((r) => setTimeout(r, 3000));
+  if ((await script.page.locator('#net').innerText()) !== '') throw new Error('the page ran with a changed script');
+  if (!script.errors.some((e) => /integrity/i.test(e))) throw new Error(`no integrity error for a changed script: ${script.errors}`);
+  await script.context.close();
+
+  const wasm = await open({ url: '**/stamped/wasm/*.wasm', type: 'application/wasm', change: (b) => Buffer.concat([b, Buffer.from([0, 0])]) });
+  await wasm.page.locator('#banner:not([hidden])', { hasText: "doesn't match its build" }).waitFor({ timeout: 30000 });
+  if ((await wasm.page.locator('#net').innerText()) !== '') throw new Error('the page ran with changed WebAssembly');
+  await wasm.context.close();
+  step('the published page runs as stamped, and refuses a changed script or WebAssembly');
+}
+
 async function networkSwitch() {
   const page = await newPage();
   await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
@@ -1218,6 +1267,7 @@ async function look() {
   await walletStays();
   await pageLoading();
   await networkSwitch();
+  await pinnedFiles();
   await walletConnectWait();
   await liveBook();
   const phone = await newPage({ width: 400, height: 800 });

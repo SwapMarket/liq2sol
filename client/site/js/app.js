@@ -1523,6 +1523,17 @@ function navMenu() {
   });
 }
 
+// A published page pins its WebAssembly's hash in index.html (client/stamp.mjs), and nothing runs on other bytes. A copy served
+// straight from the repository has no pin.
+async function loadWasm() {
+  const want = document.querySelector('meta[name="wasm-sha256"]')?.content;
+  if (!want) return init();
+  const bytes = await (await fetch(new URL('../wasm/liq2sol_client_wasm_bg.wasm', import.meta.url))).arrayBuffer();
+  const got = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
+  if (got !== want) throw new Error('This page\'s WebAssembly doesn\'t match its build, so nothing was run. Reload, or use a checked copy of the page.');
+  return init({ module_or_path: bytes });
+}
+
 async function main() {
   navMenu();
   // The deploy stamps the build. A copy served straight from the repo says so instead of showing the placeholder.
@@ -1533,7 +1544,7 @@ async function main() {
   }
   captureConsole();
   log('info', `started, build ${document.querySelector('#build')?.textContent ?? ''}, ${navigator.userAgent}`);
-  await init();
+  await loadWasm();
   if (NETWORK.regtest) W.use_regtest(NETWORK.usdt, NETWORK.lbtc);
   else if (NETWORK.name === 'mainnet') W.use_mainnet();
   endpoints();

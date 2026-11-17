@@ -941,6 +941,17 @@ async function cancelling() {
   await page.context().close();
   step('once cancelled, a swap can be forgotten');
 
+  const early = await newPage();
+  await upToRecovery(early, false);
+  await early.locator('#cancel-order').click();
+  await early.locator('#cancel-order').waitFor({ state: 'detached', timeout: 10000 });
+  if (await early.locator('#cancel-confirm').count()) throw new Error('asked to confirm a cancel before the address was shown');
+  await early.locator('.tab[data-tab="history"]').click();
+  await early.locator('.history-item', { hasText: 'cancelled' }).waitFor({ timeout: 5000 });
+  await checkNoErrors(early);
+  await early.context().close();
+  step('a swap cancelled before its recovery file is checked goes without a warning');
+
   const lock = await newPage();
   await startSwap(lock, true, await walletCli('getnewaddress'));
   await lock.locator('.lock').waitFor({ timeout: 10000 });

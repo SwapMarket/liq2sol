@@ -1200,8 +1200,8 @@ const orderOf = (id) => Object.values(loadSwaps()).filter((s) => (s.order ?? s.i
 
 function cancelCard(swaps) {
   const cancel = async (dialog) => {
-    dialog.close();
-    dialog.remove();
+    dialog?.close();
+    dialog?.remove();
     try {
       // All or none, so no part of an order is dropped while another turns out to be paid.
       const problems = await Promise.all(swaps.map((s) => engine.cancelProblem(s)));
@@ -1215,6 +1215,8 @@ function cancelCard(swaps) {
     }
   };
   const ask = () => {
+    // Until the recovery file is checked, the page hasn't shown where to pay or lock, so there is nothing to warn about.
+    if (swaps.every((s) => s.state === 'recovery')) return cancel(null);
     const dialog = h('dialog', {},
       h('h3', {}, swaps.length > 1 ? `Cancel these ${swaps.length} swaps?` : 'Cancel this swap?'),
       h('p', { class: 'warn' }, 'If you have already sent the payment, don’t cancel. If one arrives afterwards, use Rescue with your recovery file to get it back.'),

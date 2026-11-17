@@ -191,7 +191,11 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
         } },
         'solana:signTransaction': {
           version: '1.0.0',
-          signTransaction: async ({ transaction }) => [{ signedTransaction: bytes(await window.testWalletSign(hex(transaction))) }],
+          signTransaction: async ({ transaction }) => {
+            // A person takes a moment to approve.
+            await new Promise((r) => setTimeout(r, Number(localStorage.getItem('test.signDelay') ?? 0)));
+            return [{ signedTransaction: bytes(await window.testWalletSign(hex(transaction))) }];
+          },
         },
       },
     };
@@ -1158,7 +1162,14 @@ async function faucet() {
   const page = await newPage(undefined, null, false, who);
   await page.goto(`http://127.0.0.1:${site.port}/#faucet`);
   await page.locator('#faucet-connect').click();
+  await page.evaluate(() => localStorage.setItem('test.signDelay', '2000'));
   await page.locator('#drip').click();
+  const waiting = page.locator('#wallet-wait', { hasText: 'Approve in Test Wallet' });
+  await waiting.waitFor({ timeout: 15000 });
+  if (!/in its own window/.test(await waiting.innerText())) throw new Error('the approval note doesn\'t say where to look');
+  await waiting.waitFor({ state: 'detached', timeout: 15000 });
+  await page.evaluate(() => localStorage.removeItem('test.signDelay'));
+  step('while the wallet has a transaction to approve, the page says so, and the note goes once it is signed');
   await page.locator('#faucet-balance', { hasText: '100 SOL-USDT' }).waitFor({ timeout: 60000 });
   step('a new wallet gets its test USDT from the faucet program');
   const spent = page.locator('#drip:disabled', { hasText: 'Already claimed' });

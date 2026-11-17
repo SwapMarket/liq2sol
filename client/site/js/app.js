@@ -360,8 +360,30 @@ function walletView() {
 // A wallet saying no is the person's answer, so it isn't a reason to open another one.
 const refusedByUser = (e) => e?.code === 4001 || /reject|denied|declin|cancel/i.test(e?.message ?? '');
 
+// While a wallet has a transaction to approve, the page says so plainly and stays on top: an approval waits in the wallet's own
+// window or app, and with WalletConnect on another device, where it is easy to miss.
+function watched(w, phone) {
+  return {
+    ...w,
+    sign: async (tx) => {
+      const note = h('div', { id: 'wallet-wait', role: 'alertdialog', 'aria-live': 'assertive' },
+        h('div', { class: 'spinner' }),
+        h('strong', {}, `Approve in ${w.name}`),
+        h('p', {}, phone
+          ? `The request is waiting in ${w.name} on your phone. Open the app to approve it. Nothing happens on this page until you do.`
+          : `${w.name} has a transaction for you to approve, in its own window. If you don't see it, open ${w.name} from the browser's toolbar.`));
+      document.body.append(note);
+      try {
+        return await w.sign(tx);
+      } finally {
+        note.remove();
+      }
+    },
+  };
+}
+
 function useWallet(got, remember) {
-  wallet = got;
+  wallet = watched(got, remember?.kind === 'walletconnect');
   rememberWallet(remember);
   render();
 }
@@ -446,7 +468,7 @@ async function restoreWallet() {
       }
     }
     if (got && !wallet) {
-      wallet = got;
+      wallet = watched(got, last.kind === 'walletconnect');
       render();
     }
   } catch (e) {

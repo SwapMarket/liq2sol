@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Install the liq2sol maker on Debian, set up one maker, and start it.
 #
-#   sudo ./install.sh NAME [mainnet|testnet] [--helius KEY] [--page-to NPUB --page-relay URL ...] [--no-start]
+#   sudo ./install.sh NAME [mainnet|testnet] [--helius KEY] [--page-to NPUB --page-relay URL ...]
+#                         [--elements-rpc USER:PASSWORD [--elements-cli PATH] [--elements-port N]] [--no-start]
 #
 # NAME is the maker's folder under /var/lib/liq2sol, such as "main". The network defaults to mainnet.
 # - Downloads the newest release for this machine, and installs it only if SwapMarket's signature checks out, against a key
 #   whose hash is written below. If the maker is already installed, it leaves the binaries alone: update.sh does updates.
 # - Makes the maker's folder from the example configs for that network, with the Helius key and pages if given.
+# - With --elements-rpc, reads Liquid from your own Elements node on this machine, through elements-cli, after checking it
+#   answers on the right chain. The maker keeps a public API as its second source, to check the node against.
 # - Makes the Solana wallet, solana.json, on this machine. The signer makes the other keys on its first start. No key
 #   leaves this machine: back up the keys folder yourself.
 # - Starts the signer and the maker, and prints the addresses to fund and the maker's Nostr key.
@@ -20,7 +23,7 @@ units=/etc/systemd/system
 # sha256 of deploy/release-key.gpg, SwapMarket's release key.
 key_sha256=28846ef1fcfac9b8b1b5c7b34bf14844db01488436f98928f3a70b2507dbd8b1
 
-usage() { sed -n '3,4p' "$0" | sed 's/^# *//' >&2; exit 2; }
+usage() { sed -n '3,5p' "$0" | sed 's/^# *//' >&2; exit 2; }
 die() { echo "install: $*" >&2; exit 1; }
 
 name=${1:-}
@@ -28,12 +31,15 @@ name=${1:-}
 shift
 network=mainnet
 if [ "${1:-}" = mainnet ] || [ "${1:-}" = testnet ]; then network=$1; shift; fi
-helius='' page_to='' page_relays=() start=1
+helius='' page_to='' page_relays=() start=1 rpc='' cli=/usr/local/bin/elements-cli rpc_port=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --helius) helius=${2:?--helius needs a key}; shift 2 ;;
     --page-to) page_to=${2:?--page-to needs an npub}; shift 2 ;;
     --page-relay) page_relays+=("${2:?--page-relay needs a URL}"); shift 2 ;;
+    --elements-rpc) rpc=${2:?--elements-rpc needs USER:PASSWORD}; shift 2 ;;
+    --elements-cli) cli=${2:?--elements-cli needs a path}; shift 2 ;;
+    --elements-port) rpc_port=${2:?--elements-port needs a port}; shift 2 ;;
     --no-start) start=0; shift ;;
     *) usage ;;
   esac
@@ -45,6 +51,12 @@ if [ -n "$page_to" ]; then
   [[ "$page_to" =~ ^(npub1[a-z0-9]{58}|[0-9a-f]{64})$ ]] || die "--page-to wants an npub or a hex key"
   [ ${#page_relays[@]} -gt 0 ] || die "--page-to needs at least one --page-relay, from your app's DM relays"
   for r in "${page_relays[@]}"; do [[ "$r" =~ ^wss://[A-Za-z0-9./:_-]+$ ]] || die "not a relay URL: $r"; done
+fi
+if [ -n "$rpc" ]; then
+  # Kept to characters that need no escaping in JSON or sed.
+  [[ "$rpc" =~ ^[A-Za-z0-9._~-]+:[A-Za-z0-9._~-]{12,}$ ]] || die "--elements-rpc wants USER:PASSWORD, letters, digits and . _ ~ -, with a password of 12 or more"
+  [[ "$cli" =~ ^/[A-Za-z0-9._/-]+$ ]] && [ -x "$cli" ] || die "no elements-cli at $cli: give its full path with --elements-cli"
+  [[ "$rpc_port" =~ ^[0-9]*$ ]] || die "--elements-port wants a number"
 fi
 [ "$(id -u)" = 0 ] || die "run it with sudo"
 for c in curl gpgv sha256sum openssl tar od; do command -v "$c" >/dev/null || die "needs $c: sudo apt install curl gpgv openssl"; done
@@ -111,6 +123,19 @@ if [ -n "$page_to" ]; then
   sed -i "0,/^{/s||{\n \"page_to\": { \"nostr\": \"$page_to\", \"relays\": [${relays%, }] },|" "$folder/maker.json"
 fi
 
+# Your own node, through elements-cli. Its data folder must be one the services may write, inside the maker's folder.
+if [ -n "$rpc" ]; then
+  install -d -m 700 "$folder/elements-cli"
+  args="\"-chain=$([ "$network" = mainnet ] && echo liquidv1 || echo liquidtestnet)\", \"-datadir=$folder/elements-cli\", \"-rpcuser=${rpc%%:*}\", \"-rpcpassword=${rpc#*:}\""
+  [ -z "$rpc_port" ] || args="$args, \"-rpcport=$rpc_port\""
+  node="\"liquid\": { \"Node\": { \"cli\": \"$cli\", \"args\": [$args] } },"
+  for f in signer.json maker.json; do
+    sed -i "/^ \"liquid\": {/,/^ },/c\\ $node" "$folder/$f"
+  done
+  # Our own node sees every address we ask about, so a fresh one per payment links nothing.
+  sed -i 's/"fresh_addresses": false/"fresh_addresses": true/' "$folder/signer.json"
+fi
+
 # The Solana wallet: an ed25519 key, in solana-keygen's format, the 32-byte secret then the 32-byte public key.
 openssl genpkey -algorithm ed25519 -out "$work/solana.pem" 2>/dev/null
 { openssl pkey -in "$work/solana.pem" -outform DER | tail -c 32
@@ -119,6 +144,23 @@ openssl genpkey -algorithm ed25519 -out "$work/solana.pem" 2>/dev/null
 rm -f "$work/solana.pem"
 [ "$(tr -cd , < "$folder/keys/solana.json" | wc -c)" = 63 ] || die "making the Solana wallet failed"
 chown -R liq2sol:liq2sol "$folder"
+if [ -n "$rpc" ]; then
+  want=$([ "$network" = mainnet ] && echo liquidv1 || echo liquidtestnet)
+  check=(-chain="$want" -datadir="$folder/elements-cli" -rpcuser="${rpc%%:*}" -rpcpassword="${rpc#*:}")
+  [ -z "$rpc_port" ] || check+=(-rpcport="$rpc_port")
+  info=$(runuser -u liq2sol -- "$cli" "${check[@]}" getblockchaininfo 2>&1) || {
+    echo "note: the node doesn't answer yet: ${info:0:200}" >&2
+    echo "the maker is set up for it, but not started. Start it once the node answers (see the end)." >&2
+    start=0
+  }
+  if [ "$start" = 1 ]; then
+    chain=$(printf '%s' "$info" | sed -n 's/.*"chain": *"\([^"]*\)".*/\1/p' | head -1)
+    # Made just now, with keys never used, so nothing is lost, and a second run can start clean.
+    [ "$chain" = "$want" ] || { rm -rf "$folder"; die "the node is on '$chain', not $want, so $folder was removed again"; }
+    progress=$(printf '%s' "$info" | sed -n 's/.*"verificationprogress": *\([0-9.e-]*\).*/\1/p' | head -1)
+    echo "the node answers on $chain, synced $(awk "BEGIN { printf \"%.1f\", ${progress:-0} * 100 }")%"
+  fi
+fi
 chmod 600 "$folder/signer.json" "$folder/maker.json" "$folder/keys/solana.json"
 echo "made $folder for $network"
 

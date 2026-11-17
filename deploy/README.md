@@ -12,7 +12,7 @@ wget https://raw.githubusercontent.com/SwapMarket/liq2sol/main/deploy/install.sh
 sudo bash install.sh main --helius YOUR_HELIUS_KEY --page-to npub1... --page-relay wss://your.dm.relay
 ```
 
-`main` is the maker's folder name. Add `testnet` after it for a test maker. `--page-to` and `--page-relay` are optional (see "Pages on your phone"). Then back up `/var/lib/liq2sol/main/keys`, fund the addresses, set prices in `maker.json`, and restart the maker. It never touches a maker folder that exists. Updates are `sudo /opt/liq2sol/update.sh`.
+`main` is the maker's folder name. Add `testnet` after it for a test maker. `--page-to` and `--page-relay` are optional (see "Pages on your phone"). With your own Elements node on the same machine, add `--elements-rpc USER:PASSWORD` (its `rpcuser` and `rpcpassword`), and `--elements-cli PATH` or `--elements-port N` if they aren't `/usr/local/bin/elements-cli` and the default port. The script checks the node answers on the right chain, points both configs at it, keeps a public API as the maker's second source, and turns on `fresh_addresses`. If the node isn't answering yet, the maker is set up but not started. Then back up `/var/lib/liq2sol/main/keys`, fund the addresses, set prices in `maker.json`, and restart the maker. It never touches a maker folder that exists. Updates are `sudo /opt/liq2sol/update.sh`.
 
 ## Install by hand
 

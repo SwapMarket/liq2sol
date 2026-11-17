@@ -213,3 +213,51 @@ fn a_wallet_with_only_blinded_coins_works_on_a_real_node() {
     assert!(is_key_path_spend(&spend, &coin.coin.outpoint).unwrap());
     assert!(published_signature(&spend, &coin.coin.outpoint).is_some());
 }
+
+#[test]
+#[ignore = "needs elementsd"]
+fn a_node_finds_a_spend_without_walking_the_whole_chain() {
+    let node = start();
+    let call = |args: &[&str]| node.rpc.call(args).unwrap();
+    let mine = |n: u32| {
+        let a = call(&["getnewaddress"]);
+        call(&["generatetoaddress", &n.to_string(), &a]);
+    };
+    mine(101);
+    let chain = Esplora::Node(node.rpc.clone());
+    // Plain addresses throughout: the test is about finding a spend, and a node won't blind a spend of one plain coin.
+    let plain_new = || {
+        let info: Json = serde_json::from_str(&call(&["getaddressinfo", &call(&["getnewaddress"])])).unwrap();
+        info["unconfidential"].as_str().unwrap().to_string()
+    };
+    let plain = plain_new();
+    let txid = call(&["sendtoaddress", &plain, "1"]);
+    mine(1);
+    let tx: Json = serde_json::from_str(&call(&["getrawtransaction", &txid, "1"])).unwrap();
+    let vout = tx["vout"].as_array().unwrap().iter().position(|o| o["scriptPubKey"]["address"].as_str() == Some(&plain)).unwrap();
+    let outpoint = simplicityhl::elements::OutPoint::new(simplicityhl::elements::Txid::from_str(&txid).unwrap(), vout as u32);
+    // A long chain after the coin, as on mainnet. Walking it all would take minutes here.
+    mine(300);
+
+    let start = Instant::now();
+    assert!(chain.spender(&outpoint).unwrap().is_none(), "unspent");
+    assert!(start.elapsed() < Duration::from_secs(3), "an unspent coin is one question: {:?}", start.elapsed());
+
+    let change = plain_new();
+    let options = format!(r#"{{"inputs":[{{"txid":"{txid}","vout":{vout}}}],"add_inputs":false,"change_address":"{change}"}}"#);
+    let back = plain_new();
+    let sent: Json =
+        serde_json::from_str(&call(&["send", &format!(r#"[{{"{back}":0.5}}]"#), "null", "unset", "null", &options])).unwrap();
+    let spend = sent["txid"].as_str().unwrap().to_string();
+    assert_eq!(chain.spender(&outpoint).unwrap().map(|t| t.txid().to_string()), Some(spend.clone()), "found in the mempool");
+    mine(1);
+    let start = Instant::now();
+    assert_eq!(chain.spender(&outpoint).unwrap().map(|t| t.txid().to_string()), Some(spend), "found in a block");
+    assert!(start.elapsed() < Duration::from_secs(60), "searching only from the coin's block: {:?}", start.elapsed());
+
+    // A coin the node never saw has no spend, and doesn't make it search.
+    let unknown = simplicityhl::elements::OutPoint::new(simplicityhl::elements::Txid::from_str(&"ab".repeat(32)).unwrap(), 0);
+    let start = Instant::now();
+    assert!(chain.spender(&unknown).unwrap().is_none());
+    assert!(start.elapsed() < Duration::from_secs(3));
+}

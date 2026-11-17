@@ -275,7 +275,12 @@ impl Esplora {
                 }
             }
             Esplora::Node(n) => {
-                // Regtest chains here are short, so scanning the mempool and all blocks is fine.
+                // Still unspent, mempool included, is the usual answer, and one call. Walking the chain for it instead hung a
+                // mainnet maker: there are millions of blocks.
+                let (txid, vout) = (outpoint.txid.to_string(), outpoint.vout.to_string());
+                if !n.call(&["gettxout", &txid, &vout, "true"])?.trim().is_empty() {
+                    return Ok(None);
+                }
                 let spends = |tx: &Transaction| tx.input.iter().any(|i| i.previous_output == *outpoint);
                 for id in n.json(&["getrawmempool"])?.as_array().ok_or("mempool")? {
                     let tx = self.tx(&Txid::from_str(id.as_str().unwrap_or_default()).map_err(|e| e.to_string())?)?;
@@ -283,7 +288,12 @@ impl Esplora {
                         return Ok(Some(tx));
                     }
                 }
-                for height in (1..=self.tip()?).rev() {
+                // Spent in a block, so at or after the coin's own block. A coin the node doesn't know, or not yet in a
+                // block, has no spend there.
+                let Ok(made) = n.json(&["getrawtransaction", &txid, "1"]) else { return Ok(None) };
+                let Some(block) = made["blockhash"].as_str() else { return Ok(None) };
+                let from = n.json(&["getblockheader", block])?["height"].as_u64().ok_or("block height")? as u32;
+                for height in (from..=self.tip()?).rev() {
                     let hash = n.call(&["getblockhash", &height.to_string()])?;
                     let block = n.json(&["getblock", &hash])?;
                     for id in block["tx"].as_array().ok_or("block txs")? {

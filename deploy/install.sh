@@ -143,10 +143,12 @@ if [ -z "$nostr" ]; then
   journalctl -u "liq2sol-maker@$name" --since "$since" -q -n 8 --no-pager >&2 || true
   echo "watch it with: journalctl -fu liq2sol-maker@$name" >&2
 fi
+# Quotes inside a ${...:-...} default break bash's parsing in a here-document, so the defaults are set first.
+[ -n "$funding" ] || funding="The signer hasn't printed its addresses yet: journalctl -u liq2sol-signer@$name | grep 'signer ready'"
 cat <<EOF
 
-${funding:-The signer hasn't printed its addresses yet: journalctl -u liq2sol-signer@$name | grep 'signer ready'}
-${nostr:-}
+$funding
+$nostr
 
 Next:
  1. Back up $folder/keys somewhere safe and offline. On $network, these keys hold the maker's funds.

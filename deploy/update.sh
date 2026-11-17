@@ -105,7 +105,7 @@ install -m 755 "$name/liq2sol-signer" "$name/liq2sol-maker" "$opt/"
 install -m 644 "$name/liq2sol-signer@.service" "$name/liq2sol-maker@.service" "$units/"
 # New settings come with defaults, so an existing config keeps working. These show what there is to set.
 install -d "$opt/examples"
-install -m 644 "$name/signer.example.json" "$name/maker.example.json" "$name/README.md" "$opt/examples/"
+install -m 644 "$name"/*.example.json "$name/README.md" "$opt/examples/"
 [ -f "$name/update.sh" ] && install -m 755 "$name/update.sh" "$opt/update.sh"
 # Signed by the key we trust, so a new key it carries is trusted next time.
 [ -f "$name/release-key.gpg" ] && install -m 644 "$name/release-key.gpg" "$opt/release-key.gpg"

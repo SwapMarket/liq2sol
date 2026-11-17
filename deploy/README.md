@@ -2,7 +2,19 @@
 
 For Debian 12 or later, on x86-64, or on arm64 such as a Raspberry Pi 4 or 5 with Raspberry Pi OS 64-bit (Bookworm). A 32-bit OS won't do. A maker runs on mainnet or on the test networks (Liquid testnet and Solana devnet), as its configs say. For mainnet, read "A mainnet maker" below first.
 
-## Install
+## Install with one script
+
+`install.sh` does everything below for one maker: it downloads the newest release, installs it only if SwapMarket's signature checks out, sets up the maker's folder from the example configs, makes its Solana wallet on this machine, starts it, and prints the addresses to fund and its Nostr key.
+
+```sh
+sudo apt install curl gpgv openssl
+wget https://raw.githubusercontent.com/SwapMarket/liq2sol/main/deploy/install.sh
+sudo bash install.sh main --helius YOUR_HELIUS_KEY --page-to npub1... --page-relay wss://your.dm.relay
+```
+
+`main` is the maker's folder name. Add `testnet` after it for a test maker. `--page-to` and `--page-relay` are optional (see "Pages on your phone"). Then back up `/var/lib/liq2sol/main/keys`, fund the addresses, set prices in `maker.json`, and restart the maker. It never touches a maker folder that exists. Updates are `sudo /opt/liq2sol/update.sh`.
+
+## Install by hand
 
 ```sh
 # Download a release: the archive for this machine, the checksums, SwapMarket's signature of them, and SwapMarket's key.

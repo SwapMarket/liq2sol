@@ -1341,9 +1341,9 @@ async function networkSwitch() {
   await real.locator('html[data-network="mainnet"]').waitFor({ state: 'attached', timeout: 30000 });
   await real.locator('#banner:not([hidden])', { hasText: 'set to mainnet, and an endpoint is on another network' }).waitFor({ timeout: 30000 });
   if (await real.locator('.tab[data-tab="faucet"]').isVisible()) throw new Error('the faucet shows on mainnet');
-  for (const name of ['sol2base', 'eth2base']) {
-    const link = real.locator(`a.tab[href="https://swapmarket.github.io/${name}/"]`);
-    if (!(await link.isVisible()) || (await link.getAttribute('target')) !== '_blank') throw new Error(`no ${name} link on mainnet`);
+  for (const name of ['', 'sol2base/', 'eth2base/']) {
+    const link = real.locator(`a.tab[href="https://swapmarket.github.io/${name}"]`);
+    if (!(await link.isVisible()) || (await link.getAttribute('target')) !== '_blank') throw new Error(`no link to swapmarket.github.io/${name} on mainnet`);
   }
   if (await real.locator('tbody tr').count()) throw new Error('offers show on a page that refused to run');
   const kept = await real.evaluate(() => [localStorage.getItem('liq2sol.settings'), localStorage.getItem('liq2sol.settings.mainnet'), localStorage.getItem('liq2sol.swaps.mainnet')]);

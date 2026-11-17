@@ -1138,7 +1138,7 @@ function swapBody(s) {
       return [
         s.escrow_problem && h('p', { class: 'warn escrow-problem' }, `The maker locked, but the secret stays hidden: ${s.escrow_problem}. Your funds are safe, and can come back with a refund.`),
         h('p', { class: 'status spin confirmations' }, s.direction === 'L2S'
-          ? `Your payment has ${confirmations(s.coin?.confirmations)}. The maker locks on Solana after ${NETWORK.liquidConfirmations}.`
+          ? `Your payment has ${confirmations(s.coin?.confirmations)}.`
           : s.maker_locked ? `The maker locked on Liquid: ${confirmations(s.maker_confirmations)}.` : 'Locked. Waiting for the maker to lock on Liquid.'),
         (s.direction === 'L2S' || s.maker_locked) && s.status && h('p', { class: 'note early-status' }, s.status),
         s.direction === 'L2S' && s.coin && h('button', {

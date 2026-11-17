@@ -84,13 +84,24 @@ impl Node {
             }
             std::thread::sleep(Duration::from_millis(300));
         }
+        // Leave nothing running: a stray node kept a failed run waiting until its job timed out.
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
         Err("elementsd did not start".into())
     }
 
+    /// Ask the node to stop, and kill it if it hasn't within a minute.
     fn stop(&mut self) {
         let probe = Rpc { cli: self.rpc.cli.clone(), args: self.rpc.args[..4].to_vec() };
         let _ = probe.call(&["stop"]);
         if let Some(mut c) = self.child.take() {
+            let start = Instant::now();
+            while matches!(c.try_wait(), Ok(None)) && start.elapsed() < Duration::from_secs(60) {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            let _ = c.kill();
             let _ = c.wait();
         }
     }

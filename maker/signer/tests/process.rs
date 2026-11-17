@@ -53,7 +53,7 @@ impl Node {
         let port = 40_000 + (std::process::id() % 20_000) as u16;
         let dir = root.join("node");
         std::fs::create_dir_all(&dir).unwrap();
-        let child = Command::new(daemon)
+        let mut child = Command::new(daemon)
             .arg(format!("-datadir={}", dir.display()))
             .args(["-chain=liquidregtest", "-listen=0", "-txindex=1", "-validatepegin=0", "-fallbackfee=0.00001"])
             .args(["-initialfreecoins=2100000000", "-anyonecanspendaremine=1", "-evbparams=simplicity:-1:::"])
@@ -68,7 +68,12 @@ impl Node {
         let rpc = Rpc { cli, args: base };
         let start = Instant::now();
         while rpc.call(&["getblockcount"]).is_err() {
-            assert!(start.elapsed() < Duration::from_secs(60), "elementsd did not start");
+            if start.elapsed() > Duration::from_secs(90) || matches!(child.try_wait(), Ok(Some(_))) {
+                // Leave nothing running: a stray node kept a failed run waiting until its job timed out.
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("elementsd did not start");
+            }
             std::thread::sleep(Duration::from_millis(300));
         }
         let node = Node { child, rpc, dir };
@@ -93,6 +98,11 @@ impl Node {
 impl Drop for Node {
     fn drop(&mut self) {
         let _ = self.rpc.call(&["stop"]);
+        let start = Instant::now();
+        while matches!(self.child.try_wait(), Ok(None)) && start.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.dir);
     }

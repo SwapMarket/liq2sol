@@ -117,14 +117,30 @@ impl Node {
         self.child = Some(child);
         let start = Instant::now();
         while self.rpc.call(&["getblockcount"]).is_err() {
-            assert!(start.elapsed() < Duration::from_secs(60), "elementsd did not start");
+            // Say why, and leave nothing running: a stray node kept a failed run waiting until its job timed out.
+            let exited = self.child.as_mut().and_then(|c| c.try_wait().ok().flatten());
+            if exited.is_some() || start.elapsed() > Duration::from_secs(90) {
+                if let Some(mut c) = self.child.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                let log = std::fs::read_to_string(self.dir.join("liquidregtest/debug.log")).unwrap_or_default();
+                let tail: Vec<&str> = log.lines().rev().take(25).collect();
+                panic!("elementsd did not start ({exited:?}), port {}:\n{}", self.port, tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
+            }
             std::thread::sleep(Duration::from_millis(200));
         }
     }
 
+    /// Ask the node to stop, and kill it if it hasn't within a minute.
     fn stop(&mut self) {
         let _ = self.rpc.call(&["stop"]);
         if let Some(mut c) = self.child.take() {
+            let start = Instant::now();
+            while matches!(c.try_wait(), Ok(None)) && start.elapsed() < Duration::from_secs(60) {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            let _ = c.kill();
             let _ = c.wait();
         }
     }

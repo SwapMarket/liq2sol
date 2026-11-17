@@ -1223,25 +1223,30 @@ async function pinnedFiles() {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    const requests = [];
+    page.on('request', (r) => requests.push(r.url()));
     if (tamper) await page.route(tamper.url, async (route) => {
       const body = Buffer.from(await (await route.fetch()).body());
       await route.fulfill({ body: tamper.change(body), contentType: tamper.type });
     });
     await page.goto(`http://127.0.0.1:${site.port}/stamped/`);
-    return { page, context, errors };
+    return { page, context, errors, requests };
   };
   const plain = await open(null);
   await plain.page.locator('html[data-network]').waitFor({ state: 'attached', timeout: 30000 });
   if (plain.errors.some((e) => /integrity|digest|WebAssembly/i.test(e))) throw new Error(`the stamped page reported: ${plain.errors}`);
+  // Every file is asked for at an address carrying its hash, so no copy cached from an earlier build can be paired with this one.
+  const unversioned = plain.requests.filter((u) => /\/stamped\/.*\.(js|css|wasm)(\?|$)/.test(u) && !/\?v=[0-9a-f]{16}$/.test(u));
+  if (unversioned.length) throw new Error(`files asked for without their version: ${unversioned}`);
   await plain.context.close();
 
-  const script = await open({ url: '**/stamped/js/plan.js', type: 'text/javascript', change: (b) => Buffer.concat([b, Buffer.from('\n// changed\n')]) });
+  const script = await open({ url: '**/stamped/js/plan.js?v=*', type: 'text/javascript', change: (b) => Buffer.concat([b, Buffer.from('\n// changed\n')]) });
   await new Promise((r) => setTimeout(r, 3000));
   if (await script.page.locator('html[data-network]').count()) throw new Error('the page ran with a changed script');
   if (!script.errors.some((e) => /integrity/i.test(e))) throw new Error(`no integrity error for a changed script: ${script.errors}`);
   await script.context.close();
 
-  const wasm = await open({ url: '**/stamped/wasm/*.wasm', type: 'application/wasm', change: (b) => Buffer.concat([b, Buffer.from([0, 0])]) });
+  const wasm = await open({ url: '**/stamped/wasm/*.wasm?v=*', type: 'application/wasm', change: (b) => Buffer.concat([b, Buffer.from([0, 0])]) });
   await wasm.page.locator('#banner:not([hidden])', { hasText: "doesn't match its build" }).waitFor({ timeout: 30000 });
   if (await wasm.page.locator('html[data-network]').count()) throw new Error('the page ran with changed WebAssembly');
   await wasm.context.close();

@@ -29,11 +29,15 @@ if (!html.includes('__BUILD__') || html.includes('type="importmap"')) {
 }
 html = html.replaceAll('__BUILD__', build);
 
+// Each file is asked for at an address carrying its own hash, so a browser can never pair this index.html with a copy of a file it
+// cached from an earlier build: GitHub Pages lets browsers keep every file for 10 minutes, each on its own. A file that didn't
+// change keeps its address, and stays cached. The import map sends every module, imported or dynamic, to its versioned address.
 const scripts = files(site).filter((f) => f.endsWith('.js')).sort();
-const integrity = Object.fromEntries(scripts.map((f) => [
-  `./${path.relative(site, f).split(path.sep).join('/')}`, `sha384-${hash('sha384', readFileSync(f))}`,
-]));
-const importMap = JSON.stringify({ imports: {}, integrity });
+const rel = (f) => `./${path.relative(site, f).split(path.sep).join('/')}`;
+const version = (data) => hash('sha256', data, 'hex').slice(0, 16);
+const imports = Object.fromEntries(scripts.map((f) => [rel(f), `${rel(f)}?v=${version(readFileSync(f))}`]));
+const integrity = Object.fromEntries(scripts.map((f) => [imports[rel(f)], `sha384-${hash('sha384', readFileSync(f))}`]));
+const importMap = JSON.stringify({ imports, integrity });
 const wasm = readFileSync(path.join(site, 'wasm', 'liq2sol_client_wasm_bg.wasm'));
 
 const swap = (from, to) => {
@@ -44,10 +48,12 @@ const swap = (from, to) => {
   html = html.replace(from, to);
 };
 swap("script-src 'self'", `script-src 'self' 'sha256-${hash('sha256', importMap)}'`);
+const css = readFileSync(path.join(site, 'style.css'));
 swap('<link rel="stylesheet" href="style.css">',
-  `<link rel="stylesheet" href="style.css" integrity="sha384-${hash('sha384', readFileSync(path.join(site, 'style.css')))}">`);
+  `<link rel="stylesheet" href="style.css?v=${version(css)}" integrity="sha384-${hash('sha384', css)}">`);
+// The entry script's own tag isn't mapped, so it names its versioned address itself.
 swap('<script type="module" src="js/app.js"></script>',
   `<meta name="wasm-sha256" content="${hash('sha256', wasm, 'hex')}">\n<script type="importmap">${importMap}</script>\n`
-  + `<script type="module" src="js/app.js" integrity="${integrity['./js/app.js']}"></script>`);
+  + `<script type="module" src="${imports['./js/app.js']}" integrity="${integrity[imports['./js/app.js']]}"></script>`);
 writeFileSync(page, html);
 console.log(`stamped ${scripts.length} scripts, the style sheet and the WebAssembly; index.html sha256 ${hash('sha256', html, 'hex')}`);

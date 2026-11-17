@@ -968,15 +968,32 @@ async function qrView(text) {
 }
 
 // A button's action on one swap, in turn with everything else touching it.
-function act(id, fn) {
+// A button pressed for a swap, until its step ends. The step can wait behind a check already running for the swap, so the
+// page says at once that it heard the press.
+const pressed = new Map();
+
+function act(id, fn, label) {
   return async () => {
+    if (label) {
+      if (pressed.has(id)) return;
+      pressed.set(id, label);
+      render();
+    }
     try {
       await withSwap(id, fn);
     } catch (e) {
       fail(e);
+    } finally {
+      pressed.delete(id);
     }
     render();
   };
+}
+
+// A step's button, or what it is doing once pressed.
+function stepButton(s, cls, text, disabled, fn, label) {
+  if (pressed.has(s.id)) return h('p', { class: `status spin pressed` }, pressed.get(s.id));
+  return h('button', { class: `btn ${cls}`, disabled, onclick: act(s.id, fn, label) }, text);
 }
 
 // What was typed for each swap's refund. The page redraws every few seconds, and a new input would otherwise come back empty.
@@ -1111,7 +1128,8 @@ function swapBody(s) {
       return [
         h('p', { class: 'note' }, `Lock ${show(s.terms.solana_amount)} ${from}. The maker then locks ${show(BigInt(s.terms.liquid_amount) / 100n)} ${to} for you.`),
         walletView(),
-        h('button', { class: 'btn lock', disabled: !wallet, onclick: act(s.id, (fresh) => engine.lockOnSolana(fresh)) }, 'Lock on Solana'),
+        stepButton(s, 'lock', 'Lock on Solana', !wallet, (fresh) => engine.lockOnSolana(fresh), 'Checking before the lock…'),
+        pressed.has(s.id) && s.status && h('p', { class: 'status' }, s.status),
       ];
     case 'await_maker':
       return [
@@ -1139,7 +1157,7 @@ function swapBody(s) {
     case 'ready_claim': {
       // With one endpoint, the claim waits for the box. The engine refuses without it too.
       const consented = () => !!secondSolana() || !!settings.allowOneEndpoint;
-      const claim = h('button', { class: 'btn claim', disabled: !wallet || !consented(), onclick: act(s.id, (fresh) => engine.claimOnSolana(fresh)) }, 'Claim on Solana');
+      const claim = stepButton(s, 'claim', 'Claim on Solana', !wallet || !consented(), (fresh) => engine.claimOnSolana(fresh), 'Checking the escrow before the claim…');
       return [
         h('p', { class: 'good' }, `The maker locked ${show(s.terms.solana_amount)} ${to} for you.`),
         !secondSolana() && h('label', { class: 'check' },

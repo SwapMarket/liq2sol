@@ -6,8 +6,17 @@ export const bytesToHex = (b) => Array.from(b, (x) => x.toString(16).padStart(2,
 export const bytesToB64 = (b) => btoa(String.fromCharCode(...b));
 export const b64ToBytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
+// Each swap's steps run one at a time, so a request that never answers would hold up everything after it, a claim included.
+const HTTP_TIMEOUT_MS = 30000;
+
 async function http(url, options) {
-  const res = await fetch(url, options);
+  let res;
+  try {
+    res = await fetch(url, { ...options, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
+  } catch (e) {
+    if (e?.name === 'TimeoutError') throw new Error(`${new URL(url).host} didn't answer in ${HTTP_TIMEOUT_MS / 1000} s`);
+    throw e;
+  }
   const text = await res.text();
   if (!res.ok) throw new Error(`${new URL(url).host}: ${text.slice(0, 200) || res.status}`);
   return text;

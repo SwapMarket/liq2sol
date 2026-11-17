@@ -494,7 +494,14 @@ async function l2s() {
   if (await state(page) !== 'ready_claim') throw new Error('claimed with one endpoint and no consent');
   step('with one Solana endpoint and the box unticked, Claim stays off and the secret stays hidden');
   await page.locator('.one-endpoint').check();
+  // A slow endpoint: the press shows at once, not only when the wallet is asked.
+  const slow = (url) => url.href.startsWith(env.SOLANA_RPC);
+  await page.route(slow, async (route) => { await new Promise((r) => setTimeout(r, 3000)); await route.fallback(); });
   await page.locator('.claim:not([disabled])').click({ timeout: 5000 });
+  await page.locator('.pressed', { hasText: 'Checking the escrow' }).waitFor({ timeout: 1000 });
+  if (await page.locator('.claim').count()) throw new Error('Claim can be pressed twice');
+  await page.unroute(slow);
+  step('a pressed Claim says so at once, even while the endpoint is slow');
   await waitState(page, 'done');
   await page.screenshot({ path: path.join(shots, 'done.png') });
   step('claimed on Solana');

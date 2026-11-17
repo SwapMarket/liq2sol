@@ -222,4 +222,3 @@ body.menu-open { overflow: hidden; }
 .history-rent-total { max-width: 480px; margin: 0 auto 10px; text-align: center; color: var(--primary); }
 /* An asset id is 64 characters with no break in it. */
 .refund-asset { overflow-wrap: anywhere; }
-.net.real { color: #ffd27a; border: 1px solid #ffd27a; font-weight: 600; }

@@ -5,8 +5,18 @@ For Debian 12 or later, on x86-64, or on arm64 such as a Raspberry Pi 4 or 5 wit
 ## Install
 
 ```sh
+# Download a release: the archive for this machine, the checksums, SwapMarket's signature of them, and SwapMarket's key.
+TAG=v0.13   # the latest is at https://github.com/SwapMarket/liq2sol/releases
+ARCH=$(uname -m)   # x86_64, or aarch64 on a Raspberry Pi
+mkdir -p ~/liq2sol-download && cd ~/liq2sol-download
+wget "https://github.com/SwapMarket/liq2sol/releases/download/$TAG/liq2sol-maker-$TAG-$ARCH-linux.tar.gz" \
+     "https://github.com/SwapMarket/liq2sol/releases/download/$TAG/SHA256SUMS" \
+     "https://github.com/SwapMarket/liq2sol/releases/download/$TAG/SHA256SUMS.asc" \
+     "https://raw.githubusercontent.com/SwapMarket/liq2sol/$TAG/deploy/release-key.gpg"
+sha256sum release-key.gpg   # must be 28846ef1fcfac9b8b1b5c7b34bf14844db01488436f98928f3a70b2507dbd8b1
+
 # Check the download first: SHA256SUMS is signed by SwapMarket, and lists the archive's checksum.
-gpgv --keyring ./release-key.gpg SHA256SUMS.asc SHA256SUMS   # release-key.gpg from the repo's deploy/ folder
+gpgv --keyring ./release-key.gpg SHA256SUMS.asc SHA256SUMS   # sudo apt install gpgv, if it is missing
 sha256sum -c --ignore-missing SHA256SUMS
 tar xzf liq2sol-maker-*-linux.tar.gz
 cd liq2sol-maker-*/

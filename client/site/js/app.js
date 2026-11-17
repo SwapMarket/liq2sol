@@ -1548,8 +1548,9 @@ async function main() {
   if (NETWORK.regtest) W.use_regtest(NETWORK.usdt, NETWORK.lbtc);
   else if (NETWORK.name === 'mainnet') W.use_mainnet();
   endpoints();
+  // Only test networks are labelled: mainnet is the default, and needs no badge.
   $('net').textContent = NETWORK.label;
-  $('net').classList.toggle('real', NETWORK.name === 'mainnet');
+  $('net').hidden = NETWORK.name === 'mainnet';
   document.documentElement.dataset.network = NETWORK.name;
   document.querySelector('.tab[data-tab="faucet"]').hidden = !NETWORK.faucet;
   // SwapMarket's bridges, for the next hop once funds are on mainnet.

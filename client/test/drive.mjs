@@ -1201,19 +1201,19 @@ async function pinnedFiles() {
     return { page, context, errors };
   };
   const plain = await open(null);
-  await plain.page.locator('#net:not(:empty)').waitFor({ timeout: 30000 });
+  await plain.page.locator('html[data-network]').waitFor({ state: 'attached', timeout: 30000 });
   if (plain.errors.some((e) => /integrity|digest|WebAssembly/i.test(e))) throw new Error(`the stamped page reported: ${plain.errors}`);
   await plain.context.close();
 
   const script = await open({ url: '**/stamped/js/plan.js', type: 'text/javascript', change: (b) => Buffer.concat([b, Buffer.from('\n// changed\n')]) });
   await new Promise((r) => setTimeout(r, 3000));
-  if ((await script.page.locator('#net').innerText()) !== '') throw new Error('the page ran with a changed script');
+  if (await script.page.locator('html[data-network]').count()) throw new Error('the page ran with a changed script');
   if (!script.errors.some((e) => /integrity/i.test(e))) throw new Error(`no integrity error for a changed script: ${script.errors}`);
   await script.context.close();
 
   const wasm = await open({ url: '**/stamped/wasm/*.wasm', type: 'application/wasm', change: (b) => Buffer.concat([b, Buffer.from([0, 0])]) });
   await wasm.page.locator('#banner:not([hidden])', { hasText: "doesn't match its build" }).waitFor({ timeout: 30000 });
-  if ((await wasm.page.locator('#net').innerText()) !== '') throw new Error('the page ran with changed WebAssembly');
+  if (await wasm.page.locator('html[data-network]').count()) throw new Error('the page ran with changed WebAssembly');
   await wasm.context.close();
   step('the published page runs as stamped, and refuses a changed script or WebAssembly');
 }
@@ -1240,7 +1240,8 @@ async function networkSwitch() {
       }
     });
   });
-  await first.locator('#net.real').waitFor({ timeout: 30000 });
+  await first.locator('html[data-network="mainnet"]').waitFor({ state: 'attached', timeout: 30000 });
+  if (await first.locator('#net').isVisible()) throw new Error('mainnet shows a network badge');
   await first.locator('#banner:not([hidden])', { hasText: 'an endpoint is on another network' }).waitFor({ timeout: 30000 });
   if (await first.evaluate(() => localStorage.getItem('liq2sol.network')) !== null) throw new Error('a first visit stored a choice');
   await first.context().close();
@@ -1254,7 +1255,7 @@ async function networkSwitch() {
   await openSettings(real);
   if (!/real funds/.test(await real.locator('#network-note').innerText())) throw new Error('no warning before switching to mainnet');
   await real.locator('#switch-network').click();
-  await real.locator('#net.real').waitFor({ timeout: 30000 });
+  await real.locator('html[data-network="mainnet"]').waitFor({ state: 'attached', timeout: 30000 });
   await real.locator('#banner:not([hidden])', { hasText: 'set to mainnet, and an endpoint is on another network' }).waitFor({ timeout: 30000 });
   if (await real.locator('.tab[data-tab="faucet"]').isVisible()) throw new Error('the faucet shows on mainnet');
   for (const name of ['sol2base', 'eth2base']) {
@@ -1269,7 +1270,7 @@ async function networkSwitch() {
   await openSettings(real);
   await real.locator('#switch-network', { hasText: 'Switch to test networks' }).click();
   await real.locator('.star.on').first().waitFor({ timeout: 30000 });
-  if (await real.locator('#net.real').count()) throw new Error('still marked as mainnet after switching back');
+  if (await real.locator('html[data-network="mainnet"]').count() || !(await real.locator('#net').isVisible())) throw new Error('still on mainnet after switching back, or no test badge');
   if (await real.locator('.mainnet-only:visible').count()) throw new Error('the bridge links show on a test network');
   step('switching back brings the test network back as it was');
   await real.context().close();

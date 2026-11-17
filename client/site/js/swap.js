@@ -267,7 +267,7 @@ export class Engine {
     const signed = await wallet.sign(hexToBytes(unsigned));
     await this.solana.simulate(signed);
     await this.solana.send(signed);
-    this.set(s, { state: 'await_maker', status: 'Locked. Waiting for the maker to lock on Liquid.' });
+    this.set(s, { state: 'await_maker', status: '' });
   }
 
   async tickS2L(s, tip) {
@@ -293,6 +293,7 @@ export class Engine {
       const coins = await this.exactCoins(this.esplora[0], s);
       // Once the maker has locked it won't release, so the page stops offering to ask.
       s.maker_locked = coins.length > 0;
+      s.maker_confirmations = coins.length ? Math.max(...coins.map((c) => c.confirmations)) : 0;
       const deep = coins.find((c) => c.confirmations >= NETWORK.liquidConfirmations);
       if (pastClaim || (escrow && slot >= escrow.deadline_slot)) {
         s.state = 'refund_wait';

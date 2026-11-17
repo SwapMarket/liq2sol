@@ -477,6 +477,8 @@ async function l2s() {
   step('clicking the amount or the address copies it, with a notification');
   await pay(address, amountSats(env.AMOUNT), env.USDT);
   step(`paid ${env.AMOUNT} from the node's wallet to the address the page derived`);
+  await page.locator('.confirmations', { hasText: /Your payment has [0-2]\/2 confirmations/ }).waitFor({ timeout: 60000 });
+  step('while the maker waits, the page counts the payment\'s confirmations');
   await waitState(page, 'ready_claim');
   await page.screenshot({ path: path.join(shots, 'claim.png') });
   step('the page signed the maker’s claim, and sees its lock');
@@ -522,6 +524,7 @@ async function s2l() {
   await page.locator('.lock').waitFor();
   await page.screenshot({ path: path.join(shots, 'lock.png') });
   await page.locator('.lock').click();
+  await page.locator('.confirmations', { hasText: /Locked\. Waiting for the maker|The maker locked on Liquid: [0-2]\/2 confirmations/ }).waitFor({ timeout: 60000 });
   step('locked on Solana');
   loseBroadcastReply = true;
   await waitState(page, 'done');
@@ -529,6 +532,7 @@ async function s2l() {
   await page.screenshot({ path: path.join(shots, 's2l-done.png') });
   step('the page signed with the maker, and its claim confirmed on Liquid, even with the reply to its broadcast lost');
   const swap = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps')))[0]);
+  if (!(swap.maker_confirmations >= 2)) throw new Error(`the maker's lock was counted at ${swap.maker_confirmations} confirmations`);
   const tx = JSON.parse(await cli('getrawtransaction', swap.claim_txid, '1'));
   const coinInput = tx.vin[0].txinwitness;
   if (coinInput.length !== 1) throw new Error(`a claim's witness has ${coinInput.length} items`);

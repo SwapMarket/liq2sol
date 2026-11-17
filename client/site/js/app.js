@@ -991,6 +991,9 @@ function act(id, fn, label) {
 }
 
 // A step's button, or what it is doing once pressed.
+// "1/2 confirmations", counting to the number a step waits for.
+const confirmations = (n) => `${Math.min(n ?? 0, NETWORK.liquidConfirmations)}/${NETWORK.liquidConfirmations} confirmations`;
+
 function stepButton(s, cls, text, disabled, fn, label) {
   if (pressed.has(s.id)) return h('p', { class: `status spin pressed` }, pressed.get(s.id));
   return h('button', { class: `btn ${cls}`, disabled, onclick: act(s.id, fn, label) }, text);
@@ -1134,10 +1137,10 @@ function swapBody(s) {
     case 'await_maker':
       return [
         s.escrow_problem && h('p', { class: 'warn escrow-problem' }, `The maker locked, but the secret stays hidden: ${s.escrow_problem}. Your funds are safe, and can come back with a refund.`),
-        h('p', { class: 'status spin' }, s.direction === 'L2S'
-          ? `Your coin has ${s.coin?.confirmations ?? 0} confirmations. Waiting for the maker to sign and lock on Solana.`
-          : (s.status || 'Waiting for the maker to lock on Liquid.')),
-        s.direction === 'L2S' && s.status && h('p', { class: 'note early-status' }, s.status),
+        h('p', { class: 'status spin confirmations' }, s.direction === 'L2S'
+          ? `Your payment has ${confirmations(s.coin?.confirmations)}. The maker locks on Solana after ${NETWORK.liquidConfirmations}.`
+          : s.maker_locked ? `The maker locked on Liquid: ${confirmations(s.maker_confirmations)}.` : 'Locked. Waiting for the maker to lock on Liquid.'),
+        (s.direction === 'L2S' || s.maker_locked) && s.status && h('p', { class: 'note early-status' }, s.status),
         s.direction === 'L2S' && s.coin && h('button', {
           class: 'btn quiet early-refund', title: 'If the maker hasn’t locked, it can cancel now, and you get your coin back without waiting. If it says no, nothing changes.',
           onclick: act(s.id, (fresh) => engine.askCancel(fresh)),

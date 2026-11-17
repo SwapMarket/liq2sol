@@ -19,11 +19,54 @@ fn tx_cache() -> &'static Mutex<HashMap<Txid, Transaction>> {
 
 use crate::liquid::{pay_from_coins, read_output, Coin, Payment, Res, SecretCoin, Wallet};
 
+/// When each host may be asked again after telling us to slow down (HTTP 429), and how many times in a row it has.
+fn cooldowns() -> &'static Mutex<HashMap<String, (std::time::Instant, u32)>> {
+    static COOL: OnceLock<Mutex<HashMap<String, (std::time::Instant, u32)>>> = OnceLock::new();
+    COOL.get_or_init(Mutex::default)
+}
+
+fn host_of(url: &str) -> String {
+    url.split('/').take(3).collect::<Vec<_>>().join("/")
+}
+
+/// How long to leave a host alone after a 429: what it asks for in `Retry-After`, else 15 seconds, doubling each time in a row,
+/// up to 5 minutes. Retrying at once would only keep us over its limit.
+pub fn backoff(retry_after: Option<&str>, in_a_row: u32) -> std::time::Duration {
+    let asked = retry_after.and_then(|v| v.trim().parse::<u64>().ok());
+    let doubling = 15u64.saturating_mul(1 << in_a_row.min(5));
+    std::time::Duration::from_secs(asked.unwrap_or(doubling).clamp(1, 300))
+}
+
 fn get(url: &str) -> Res<String> {
+    let host = host_of(url);
     let mut last = String::new();
     for _ in 0..5 {
+        // Every request in this process to a host that asked us to slow down waits, not only this one.
+        let wait = cooldowns().lock().ok().and_then(|c| c.get(&host).map(|(until, _)| *until));
+        if let Some(until) = wait {
+            let now = std::time::Instant::now();
+            if until > now {
+                std::thread::sleep(until - now);
+            }
+        }
         match ureq::get(url).timeout(std::time::Duration::from_secs(20)).call() {
-            Ok(r) => return r.into_string().map_err(|e| e.to_string()),
+            Ok(r) => {
+                if let Ok(mut c) = cooldowns().lock() {
+                    c.remove(&host);
+                }
+                return r.into_string().map_err(|e| e.to_string());
+            }
+            Err(ureq::Error::Status(429, r)) => {
+                let after = r.header("retry-after").map(str::to_string);
+                if let Ok(mut c) = cooldowns().lock() {
+                    let in_a_row = c.get(&host).map_or(0, |(_, n)| n + 1);
+                    let pause = backoff(after.as_deref(), in_a_row);
+                    c.insert(host.clone(), (std::time::Instant::now() + pause, in_a_row));
+                    last = format!("GET {url}: rate limited (429), pausing {}s", pause.as_secs());
+                }
+                // No retry here: the next tick asks again, after the pause.
+                break;
+            }
             Err(e) => last = format!("GET {url}: {e}"),
         }
         std::thread::sleep(std::time::Duration::from_secs(2));

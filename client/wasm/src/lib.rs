@@ -173,6 +173,13 @@ impl SwapArgs {
     }
 }
 
+/// An address's plain form, without its blinding key, which is what an explorer's address page shows.
+#[wasm_bindgen]
+pub fn plain_address(address: &str) -> Result<String, String> {
+    let a = Address::from_str(address).map_err(|e| format!("bad Liquid address: {e}"))?;
+    Ok(a.to_unconfidential().to_string())
+}
+
 /// The addresses of a swap, derived here and never taken from the maker.
 #[wasm_bindgen]
 pub fn swap_info(args: &str) -> Result<String, String> {

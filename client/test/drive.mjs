@@ -214,8 +214,11 @@ const step = (t) => console.log(`    ${t}`);
 async function connectTestWallet(page) {
   const go = page.locator('#go', { hasText: 'Connect a Solana wallet' });
   await go.waitFor({ timeout: 15000 });
+  // With a wallet in this browser, a phone wallet is one more button away.
+  await page.locator('#view .walletconnect-qr').waitFor({ timeout: 15000 });
   await go.click();
   await page.getByRole('link', { name: 'disconnect' }).waitFor({ timeout: 5000 });
+  await page.locator('#view .walletconnect-qr').waitFor({ state: 'hidden', timeout: 5000 });
 }
 const state = (page) => page.locator('.swap-card').first().getAttribute('data-state');
 const waitState = (page, want, ms = 240000) => page.locator(`.swap-card[data-state="${want}"]`).first().waitFor({ timeout: ms });
@@ -284,6 +287,14 @@ async function startSwap(page, flip, to) {
   await page.locator('#recovery-file').focus();
   await page.locator('#recovery-file').setInputFiles(file);
   step('a bad file is refused, and the funding step only appears after the real one is read back');
+  // The step just done shows how long it took, the current one counts up, and every address links to its explorer.
+  await page.locator('.steps li.done .step-time').first().waitFor({ timeout: 30000 });
+  const live = page.locator('.steps li.now .step-time.live');
+  const first = await live.innerText();
+  await page.waitForFunction((t) => document.querySelector('.steps li.now .step-time.live')?.textContent !== t, first, { timeout: 5000 });
+  const links = await page.locator('.facts.addresses a').evaluateAll((as) => as.map((a) => a.href));
+  if (!links.some((h) => /\/address\//.test(h)) || links.length < 3) throw new Error(`addresses without explorer links: ${links}`);
+  step('each step shows its time, the current one counting up, and every address links to its explorer');
   return file;
 }
 

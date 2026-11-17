@@ -349,12 +349,30 @@ function updateBook(send) {
 }
 
 // ---- Wallet ----
+// With a wallet in this browser, the main button connects it. A wallet on a phone is then one more button away: WalletConnect's
+// QR code. A phone gets its own list of wallets instead, since it can't scan its own screen.
+const offerQr = () => !wallet && extensionWallets().length > 0 && !matchMedia('(pointer: coarse)').matches;
+
+async function qrConnect() {
+  if (connecting) return;
+  connecting = true;
+  try {
+    useWallet(await walletConnect(), { kind: 'walletconnect' });
+  } catch (e) {
+    fail(e);
+  } finally {
+    connecting = false;
+  }
+}
+
+const qrButton = () => offerQr() && h('button', { class: 'btn quiet walletconnect-qr', type: 'button', onclick: () => qrConnect() }, 'Or connect a phone wallet with a QR code');
+
 function walletView() {
   if (wallet) {
     return h('p', { class: 'note' }, `Solana: ${wallet.name} ${short(wallet.address)} `,
       h('a', { href: '#', onclick: (e) => { e.preventDefault(); wallet = null; rememberWallet(null); render(); } }, 'disconnect'));
   }
-  return h('button', { class: 'btn quiet connect-wallet', onclick: connectWallet }, 'Connect a Solana wallet');
+  return [h('button', { class: 'btn quiet connect-wallet', onclick: connectWallet }, 'Connect a Solana wallet'), qrButton()];
 }
 
 // A wallet saying no is the person's answer, so it isn't a reason to open another one.
@@ -556,6 +574,7 @@ const form = {
   facts: h('div'),
   unfilled: h('div'),
   go: h('button', { class: 'btn', id: 'go', onclick: () => (wallet ? startQuote() : connectWallet()) }),
+  qr: h('button', { class: 'btn quiet walletconnect-qr', type: 'button', hidden: true, onclick: () => qrConnect() }, 'Or connect a phone wallet with a QR code'),
   limits: null,
   sendMin: h('button', { class: 'send-limit', id: 'send-min', type: 'button', onclick: () => { if (form.limits) setAmount(form.limits.min); } }),
   sendMax: h('button', { class: 'send-limit', id: 'send-max', type: 'button', onclick: () => { if (form.limits) setAmount(form.limits.max); } }),
@@ -570,7 +589,7 @@ form.el = h('div', { class: 'card' },
   h('div', { class: 'row' }, form.fromCoin, amountInput, clearAmount),
   h('button', { class: 'flip', title: 'Swap direction', 'aria-label': 'Swap direction', onclick: () => { ui.direction = ui.direction === 'L2S' ? 'S2L' : 'L2S'; ui.selected = null; updateForm(); } }, arrowDown()),
   h('div', { class: 'row to' }, form.toCoin, form.receive),
-  form.address, form.wallet, form.facts, form.unfilled, form.go);
+  form.address, form.wallet, form.facts, form.unfilled, form.go, form.qr);
 
 function updateForm() {
   if (!form.el.isConnected) return;
@@ -613,6 +632,7 @@ function updateForm() {
   }
   setText(form.go, label);
   form.go.disabled = !ready;
+  form.qr.hidden = !offerQr();
   updateBook(send);
 }
 
@@ -767,12 +787,47 @@ const FLOW = {
   S2L: [['recovery', 'Save the recovery file'], ['lock', 'Lock on Solana'], ['await_maker', 'The maker locks on Liquid'], ['signing', 'Sign the claim together'], ['claiming', 'Publish the claim'], ['done', 'Done']],
 };
 
+// "45s", "3m 05s", "1h 02m".
+function duration(secs) {
+  const t = Math.max(0, Math.floor(secs));
+  if (t < 60) return `${t}s`;
+  if (t < 3600) return `${Math.floor(t / 60)}m ${String(t % 60).padStart(2, '0')}s`;
+  return `${Math.floor(t / 3600)}h ${String(Math.floor((t % 3600) / 60)).padStart(2, '0')}m`;
+}
+
 function stepsView(s) {
   const flow = FLOW[s.direction];
   const at = flow.findIndex(([k]) => k === s.state);
   // A refund leaves this path, and a list with nothing marked would only confuse.
   if (at < 0 && s.state !== 'done') return null;
-  return h('ol', { class: 'steps' }, flow.map(([k, text], i) => h('li', { class: i < at || s.state === 'done' ? 'done' : i === at ? 'now' : '' }, text)));
+  const began = (k) => s.step_at?.[k] ?? (k === 'recovery' ? s.created_at : undefined);
+  return h('ol', { class: 'steps' }, flow.map(([k, text], i) => {
+    const done = i < at || s.state === 'done';
+    const start = began(k);
+    // A finished step shows how long it took, and the current one counts up, by itself, between redraws.
+    const next = flow.slice(i + 1).map(([n]) => began(n)).find((t) => t !== undefined);
+    let time = null;
+    if (k !== 'done' && start !== undefined) {
+      if (done && next !== undefined) time = h('span', { class: 'step-time' }, duration(next - start));
+      else if (i === at) time = h('span', { class: 'step-time live', 'data-since': String(start) }, duration(now() - start));
+    }
+    return h('li', { class: done ? 'done' : i === at ? 'now' : '' }, text, time);
+  }));
+}
+
+// Every address of a swap still under way, each linked to its explorer, so a person can watch the chains themselves.
+function addressesView(s) {
+  const liquid = (a) => { try { return W.plain_address(a); } catch { return a; } };
+  const rows = [
+    ['Swap address', s.info?.plain_address, (a) => `${NETWORK.explorer}/address/${a}`],
+    ['Solana escrow', s.escrow_address, NETWORK.solanaExplorer],
+    ['Your Solana wallet', s.solana_owner, NETWORK.solanaExplorer],
+    ['Your Liquid address', s.to_address && liquid(s.to_address), (a) => `${NETWORK.explorer}/address/${a}`],
+    ["The maker's Solana wallet", s.direction === 'S2L' ? s.terms.maker_solana : s.terms.maker_initiator, NETWORK.solanaExplorer],
+  ].filter(([, a]) => a);
+  return h('dl', { class: 'facts addresses' }, rows.map(([label, a, url]) => h('div', {},
+    h('dt', {}, label),
+    h('dd', {}, h('a', { class: 'explorer mono', href: url(a), target: '_blank', rel: 'noopener noreferrer', title: a }, `${a.slice(0, 8)}…${a.slice(-6)}`)))));
 }
 
 // One file for a whole order, and nothing is funded until it has been read back with every swap in it.
@@ -1121,7 +1176,8 @@ function swapView(s) {
       h('div', {}, h('dt', {}, 'You send'), h('dd', {}, s.direction === 'L2S' ? `${show(BigInt(s.terms.liquid_amount) / 100n)} ${from}` : `${show(s.terms.solana_amount)} ${from}`)),
       h('div', {}, h('dt', {}, 'You receive'), h('dd', {}, s.direction === 'L2S' ? `${show(s.terms.solana_amount)} ${to}` : `${show(BigInt(s.terms.liquid_amount) / 100n)} ${to}`))),
     stepsView(s),
-    swapBody(s));
+    swapBody(s),
+    !FINISHED.includes(s.state) && addressesView(s));
 }
 
 const orderOf = (id) => Object.values(loadSwaps()).filter((s) => (s.order ?? s.id) === id).sort((a, b) => a.id.localeCompare(b.id));
@@ -1213,15 +1269,25 @@ function explorerLinks(s) {
   const link = (cls, href, text) => h('a', { class: `explorer ${cls}`, href, target: '_blank', rel: 'noopener noreferrer', title: 'Opens the explorer with this swap’s amounts unblinded. Anyone you share this link with can read them.' }, text);
   const box = h('span', { class: 'explorer-links' }, s.escrow_address && link('explorer-solana', NETWORK.solanaExplorer(s.escrow_address), 'Solana'));
   if (s.coin?.txid) {
-    esplora[0].txHex(s.coin.txid).then((hex) => {
-      const blinded = `#blinded=${W.explorer_blinders(hex, s.coin.vout, s.secrets.blinding_key)}`;
+    const add = (blinded) => {
       const spend = s.refund_txid ?? s.claim_txid;
       box.prepend(link('explorer-coin', `${NETWORK.explorer}/tx/${s.coin.txid}${blinded}`, 'Liquid coin'),
         ...(spend ? [link('explorer-spend', `${NETWORK.explorer}/tx/${spend}${blinded}`, s.refund_txid ? 'Liquid refund' : 'Liquid claim')] : []));
-    }).catch((e) => console.warn('explorer link', e?.message ?? e));
+    };
+    // Fetched once per coin, so the history page redrawing itself doesn't make the links blink.
+    const key = `${s.coin.txid}:${s.coin.vout}`;
+    if (blinderCache.has(key)) add(blinderCache.get(key));
+    else {
+      esplora[0].txHex(s.coin.txid).then((hex) => {
+        const blinded = `#blinded=${W.explorer_blinders(hex, s.coin.vout, s.secrets.blinding_key)}`;
+        blinderCache.set(key, blinded);
+        add(blinded);
+      }).catch((e) => console.warn('explorer link', e?.message ?? e));
+    }
   }
   return box;
 }
+const blinderCache = new Map();
 
 // What each swap's escrow still holds in rent for this taker. It can be reclaimed once the maker has collected.
 const rentCache = new Map();
@@ -1240,12 +1306,17 @@ async function unclaimedRent(s) {
 const sol = (lamports) => `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
 
 // S→L locks pay about 0.002 SOL of rent into the escrow record. Once settled, the wallet that paid can have it back.
+// The history page redraws every few seconds, so this starts from the last known answer and only changes when the answer does,
+// or it would blink on every redraw.
 function reclaimButton(s) {
   const box = h('div', { class: 'reclaim-box' });
   if (s.direction !== 'S2L' || !['done', 'refunded'].includes(s.state)) return box;
-  engine.closable(s).then((e) => {
-    if (!e) return;
-    box.append(h('button', {
+  const show = (lamports) => {
+    const has = box.querySelector('.reclaim');
+    if (lamports > 0n && !has) box.append(button());
+    if (!(lamports > 0n) && has) box.replaceChildren();
+  };
+  const button = () => h('button', {
       class: 'btn quiet reclaim',
       onclick: async (ev) => {
         ev.target.disabled = true;
@@ -1260,8 +1331,9 @@ function reclaimButton(s) {
           ev.target.disabled = false;
         }
       },
-    }, 'Reclaim the rent'));
-  }).catch(() => {});
+    }, 'Reclaim the rent');
+  show(rentCache.get(s.id)?.lamports ?? 0n);
+  unclaimedRent(s).then(show).catch(() => {});
   return box;
 }
 
@@ -1274,14 +1346,24 @@ function historyView() {
   const fact = (name, value) => h('div', {}, h('dt', {}, name), h('dd', {}, value));
   const rents = [];
   const total = h('p', { class: 'note history-rent-total', hidden: true });
+  const showTotal = (sum) => {
+    total.hidden = !(sum > 0n);
+    if (sum > 0n) total.textContent = `${sol(sum)} of rent can come back to your wallet. Open a swap marked below to reclaim it.`;
+  };
+  showTotal(all.reduce((sum, s) => sum + (rentCache.get(s.id)?.lamports ?? 0n), 0n));
   const items = all.map((s) => {
     const [from, to] = names[s.direction];
     const vetted = vettedMaker(NETWORK.name, s.maker);
     const rentNote = h('span', { class: 'history-rent', hidden: true });
+    const known = rentCache.get(s.id)?.lamports ?? 0n;
+    if (known > 0n) {
+      rentNote.textContent = `${sol(known)} rent to reclaim`;
+      rentNote.hidden = false;
+    }
     rents.push(unclaimedRent(s).then((lamports) => {
+      rentNote.hidden = !(lamports > 0n);
       if (lamports > 0n) {
         rentNote.textContent = `${sol(lamports)} rent to reclaim`;
-        rentNote.hidden = false;
       }
       return lamports;
     }).catch(() => 0n));
@@ -1312,13 +1394,7 @@ function historyView() {
     h('span', { class: 'history-date' }, new Date(s.created_at * 1000).toLocaleDateString(undefined, { dateStyle: 'short' })));
     return h('div', { class: 'history-item' }, summary, details);
   });
-  Promise.all(rents).then((all) => {
-    const sum = all.reduce((a, b) => a + b, 0n);
-    if (sum > 0n) {
-      total.textContent = `${sol(sum)} of rent can come back to your wallet. Open a swap marked below to reclaim it.`;
-      total.hidden = false;
-    }
-  });
+  Promise.all(rents).then((got) => showTotal(got.reduce((a, b) => a + b, 0n)));
   return [total, h('div', { class: 'list history' },
     h('div', { class: 'history-head' }, ['Swap', 'Status', 'Date'].map((t) => h('span', {}, t))),
     items)];
@@ -1472,7 +1548,7 @@ function faucetView() {
     balance,
     wallet
       ? button
-      : h('button', { class: 'btn', id: 'faucet-connect', onclick: connectWallet }, 'Connect a Solana wallet'),
+      : [h('button', { class: 'btn', id: 'faucet-connect', onclick: connectWallet }, 'Connect a Solana wallet'), qrButton()],
     status,
     h('p', { class: 'note', id: 'sideswap-note' }, 'To get testnet USDt on Liquid, swap L-BTC for it in the SideSwap wallet. It’s the same asset as here:'),
     h('div', { class: 'addr' }, NETWORK.usdt));
@@ -1597,6 +1673,10 @@ async function main() {
     return;
   }
   setInterval(() => tickAll(), NETWORK.pollMs);
+  // The current step's timer, between redraws.
+  setInterval(() => {
+    for (const el of document.querySelectorAll('.step-time.live')) el.textContent = duration(now() - Number(el.dataset.since));
+  }, 1000);
   tickAll();
   // Wallet extensions can register after load, and offers can expire.
   setInterval(() => {

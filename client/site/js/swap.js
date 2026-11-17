@@ -49,6 +49,9 @@ export class Engine {
     if (s.logged_state !== s.state) {
       log('info', `swap ${s.id.slice(0, 8)} ${s.direction}: ${s.logged_state ?? 'new'} -> ${s.state}`, s.status ?? '');
       s.logged_state = s.state;
+      // When each step began, for the timers on the swap's card. A state reached again keeps its first time.
+      s.step_at = { ...s.step_at };
+      s.step_at[s.state] ??= Math.floor(Date.now() / 1000);
     }
     saveSwap(s);
     this.onChange(s);

@@ -25,6 +25,11 @@ test('Opera on Android names the app, keeping the same path and encoded page', (
   assert.equal(walletLink('Phantom', URL_, REF, OPERA), `intent://phantom.app/ul/browse/${URL_}?ref=${REF}#Intent;scheme=https;package=app.phantom;end`);
 });
 
-test('a wallet with no known app id keeps its normal link', () => {
-  assert.ok(walletLink('Trust', URL_, REF, OPERA).startsWith('https://link.trustwallet.com/'));
+test('Trust is named outright on every Android browser, and keeps its normal link elsewhere', () => {
+  const intent = `intent://link.trustwallet.com/open_url?coin_id=501&url=${URL_}#Intent;scheme=https;package=com.wallet.crypto.trustapp;end`;
+  assert.equal(walletLink('Trust', URL_, REF, OPERA), intent);
+  assert.equal(walletLink('Trust', URL_, REF, CHROME), intent, 'Chrome on Android too');
+  const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+  assert.equal(walletLink('Trust', URL_, REF, IPHONE), `https://link.trustwallet.com/open_url?coin_id=501&url=${URL_}`);
+  assert.equal(walletLink('Trust', URL_, REF, DESKTOP_OPERA), `https://link.trustwallet.com/open_url?coin_id=501&url=${URL_}`);
 });

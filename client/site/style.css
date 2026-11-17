@@ -226,3 +226,8 @@ body.menu-open { overflow: hidden; }
 #wallet-wait .spinner { grid-row: span 2; width: 32px; height: 32px; border-width: 3px; }
 #wallet-wait strong { font-size: 1.1rem; }
 #wallet-wait p { margin: 0; color: var(--muted); font-size: .9rem; }
+.step-time { margin-left: .6em; font-size: .82em; color: var(--muted); font-variant-numeric: tabular-nums; }
+.step-time.live { color: var(--primary); }
+.facts.addresses { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--edge); }
+.facts.addresses a { font-size: .85rem; }
+.walletconnect-qr { display: block; margin: 8px auto 0; font-size: .88rem; }

@@ -2,7 +2,9 @@
 const WALLETS = {
   Phantom: { link: (url, ref) => `phantom.app/ul/browse/${url}?ref=${ref}`, android: 'app.phantom' },
   Solflare: { link: (url, ref) => `solflare.com/ul/v1/browse/${url}?ref=${ref}`, android: 'com.solflare.mobile' },
-  Trust: { link: (url) => `link.trustwallet.com/open_url?coin_id=501&url=${url}` },
+  // Trust's https link didn't open the installed app on Android, so every Android browser names it (developer.trustwallet.com,
+  // deep linking: open_url, coin_id 501 for Solana; package from its Google Play listing).
+  Trust: { link: (url) => `link.trustwallet.com/open_url?coin_id=501&url=${url}`, android: 'com.wallet.crypto.trustapp', alwaysIntent: true },
 };
 
 // Opera on Android sent Solflare's normal link to Google Play, with the app installed. Chrome opened the app. So only Opera names
@@ -12,6 +14,7 @@ export const isOperaOnAndroid = (userAgent) => /Android/.test(userAgent) && /\bO
 export function walletLink(name, url, ref, userAgent) {
   const wallet = WALLETS[name];
   const target = wallet.link(url, ref);
-  if (isOperaOnAndroid(userAgent) && wallet.android) return `intent://${target}#Intent;scheme=https;package=${wallet.android};end`;
+  const android = /Android/.test(userAgent);
+  if (wallet.android && (isOperaOnAndroid(userAgent) || (android && wallet.alwaysIntent))) return `intent://${target}#Intent;scheme=https;package=${wallet.android};end`;
   return `https://${target}`;
 }

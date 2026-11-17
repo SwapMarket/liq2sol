@@ -643,6 +643,12 @@ impl Maker {
 
         // Commit first, so a crash can't lose track of what may be in flight.
         let ids = self.store.commit_step(&hash, &next, &due).map_err(|e| e.to_string())?;
+        // Released or refunded early meanwhile, from the quote thread: the store keeps it abandoned, and nothing goes out. Say
+        // so, rather than a change that didn't happen.
+        if next != State::Abandoned && self.store.state(&hash).ok().flatten().is_some_and(|(_, s)| s == State::Abandoned) {
+            println!("{} {:?}: abandoned meanwhile, so it stays abandoned and nothing is sent", hex(&hash), terms.direction);
+            return Ok(());
+        }
         if next != *state {
             println!("{} {:?}: {state:?} -> {next:?}", hex(&hash), terms.direction);
         }

@@ -80,3 +80,15 @@ test('both chains must agree with the network, in both directions', async () => 
   assert.throws(() => checkGenesis(main, NETWORKS.testnet.genesis, SOLANA_MAIN), /another network/);
   assert.throws(() => checkGenesis({ ...main, programId: null }, LIQUID_MAIN, SOLANA_MAIN), /not on mainnet yet/);
 });
+
+// WalletConnect proves the page's domain to the wallet with a hidden frame from its verify server. Blocked, every wallet says
+// "Cannot verify", however the domain is registered. Only those frames are allowed.
+test('the page lets WalletConnect prove its domain, and allows no other frames', async () => {
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../site/index.html', import.meta.url), 'utf8');
+  const csp = html.match(/Content-Security-Policy" content="([^"]*)"/)[1];
+  const frames = csp.split(';').map((d) => d.trim()).find((d) => d.startsWith('frame-src'));
+  assert.equal(frames, 'frame-src https://verify.walletconnect.org https://verify.walletconnect.com');
+  const bundle = readFileSync(new URL('../site/vendor/walletconnect.js', import.meta.url), 'utf8');
+  for (const host of bundle.match(/https:\/\/verify\.walletconnect\.[a-z]+/g)) assert.ok(frames.includes(host), host);
+});

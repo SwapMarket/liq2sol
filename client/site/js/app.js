@@ -208,17 +208,25 @@ function currentLimits() {
 }
 
 // The connected wallet's SOL-USDT, read now and then for the S→L form's largest amount.
-const walletUsdt = { address: null, units: null, at: 0 };
+const walletUsdt = { address: null, units: null, lamports: null, at: 0 };
 
 function refreshWalletUsdt() {
   if (!wallet || (walletUsdt.address === wallet.address && Date.now() - walletUsdt.at < 15_000)) return;
   const address = wallet.address;
   walletUsdt.at = Date.now();
-  solana.tokenBalance(W.token_account(address, NETWORK.mint)).then((units) => {
-    const changed = walletUsdt.address !== address || walletUsdt.units !== units;
-    Object.assign(walletUsdt, { address, units });
-    if (changed && wallet?.address === address) updateForm();
+  Promise.all([solana.tokenBalance(W.token_account(address, NETWORK.mint)), solana.lamports(address)]).then(([units, lamports]) => {
+    const changed = walletUsdt.address !== address || walletUsdt.units !== units || walletUsdt.lamports !== lamports;
+    Object.assign(walletUsdt, { address, units, lamports });
+    if (!changed || wallet?.address !== address) return;
+    for (const el of document.querySelectorAll('.wallet-balances')) el.textContent = balancesText();
+    updateForm();
   }).catch(() => {});
+}
+
+// The connected wallet's USDT and SOL, once read.
+function balancesText() {
+  if (!wallet || walletUsdt.address !== wallet.address || walletUsdt.units === null) return '';
+  return ` · ${show(walletUsdt.units)} USDT · ${(Number(walletUsdt.lamports) / 1e9).toFixed(4)} SOL`;
 }
 
 function setAmount(send) {
@@ -369,7 +377,8 @@ const qrButton = () => offerQr() && h('button', { class: 'btn quiet walletconnec
 
 function walletView() {
   if (wallet) {
-    return h('p', { class: 'note' }, `Solana: ${wallet.name} ${short(wallet.address)} `,
+    refreshWalletUsdt();
+    return h('p', { class: 'note' }, `Solana: ${wallet.name} ${short(wallet.address)}`, h('span', { class: 'wallet-balances' }, balancesText()), ' ',
       h('a', { href: '#', onclick: (e) => { e.preventDefault(); wallet = null; rememberWallet(null); render(); } }, 'disconnect'));
   }
   return [h('button', { class: 'btn quiet connect-wallet', onclick: connectWallet }, 'Connect a Solana wallet'), qrButton()];
@@ -619,7 +628,7 @@ function updateForm() {
     h('div', {}, h('dt', {}, 'Average price'), h('dd', {}, average))));
   const partial = filled && plan.unfilled > 0n;
   slot(form.unfilled, partial ? `${send}|${plan.unfilled}` : '', () => partial && h('p', { class: 'warn', id: 'unfilled' }, `The book can fill ${show(send - plan.unfilled)} of this right now. ${show(plan.unfilled)} would stay unswapped.`));
-  if (ui.direction === 'S2L') refreshWalletUsdt();
+  refreshWalletUsdt();
   form.limits = currentLimits();
   form.links.hidden = !form.limits;
   if (form.limits) {

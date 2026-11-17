@@ -219,6 +219,8 @@ async function connectTestWallet(page) {
   await go.click();
   await page.getByRole('link', { name: 'disconnect' }).waitFor({ timeout: 5000 });
   await page.locator('#view .walletconnect-qr').waitFor({ state: 'hidden', timeout: 5000 });
+  // Once connected, the wallet's USDT and SOL show beside it.
+  await page.locator('.wallet-balances', { hasText: /^ · [\d,.]+ USDT · \d+\.\d{4} SOL$/ }).first().waitFor({ timeout: 30000 });
 }
 const state = (page) => page.locator('.swap-card').first().getAttribute('data-state');
 const waitState = (page, want, ms = 240000) => page.locator(`.swap-card[data-state="${want}"]`).first().waitFor({ timeout: ms });

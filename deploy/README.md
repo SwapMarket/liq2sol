@@ -121,8 +121,9 @@ Mainnet swaps move real funds. The release caps one swap at 100 USDT, and both p
    Make `solana.json` on the machine itself, with `solana-keygen new -o solana.json`, and write its recovery phrase down offline. Back up the whole `keys/` folder somewhere safe: these keys hold real funds.
 2. **Endpoints.** Put your Helius key in `solana_rpc` in both files, replacing `YOUR_HELIUS_KEY`. Public Solana endpoints rate-limit and keep little history, and the maker reads history after a deadline. For Liquid, your own node is better than the public APIs, and is needed for `fresh_addresses`. The maker calls `elements-cli` with the arguments you give, for example:
    ```json
-   "liquid": { "Node": { "cli": "/usr/local/bin/elements-cli", "args": ["-chain=liquidv1", "-rpcuser=you", "-rpcpassword=secret"] } },
+   "liquid": { "Node": { "cli": "/usr/local/bin/elements-cli", "args": ["-chain=liquidv1", "-datadir=/var/lib/liq2sol/main/elements-cli", "-rpcuser=you", "-rpcpassword=secret"] } },
    ```
+   Make that `-datadir` folder first, with `sudo -u liq2sol mkdir /var/lib/liq2sol/main/elements-cli`. The services may write only inside the maker's folder, and without it `elements-cli` stops trying to create `~/.elements`. Use the RPC user and password, not the node's cookie file, which the services can't read.
 3. **Prices and limits.** Set `l2s_prices` and `s2l_prices` in `maker.json`. `max_per_swap`, `max_sol_units` and the signer's `max_per_swap` must stay at or under `100000000` (100 USDT). `max_open_l2s` and `max_open_s2l` limit what is locked at once.
 4. **Pages.** Set `page_to` and check it with `test-page` (see "Pages on your phone"). Also have something on another machine notice if the maker stops.
 5. **Start it**, as `liq2sol-signer@main` and `liq2sol-maker@main`. Both check that both chains are mainnet before loading a key. The signer's log gives the addresses to fund: `journalctl -u liq2sol-signer@main | grep "signer ready"`.

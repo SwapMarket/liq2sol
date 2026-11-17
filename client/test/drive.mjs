@@ -795,7 +795,7 @@ async function s2lBalance() {
     await page.locator('.flip').click();
     await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
     await page.locator('#amount').fill(env.AMOUNT);
-    await page.locator('#to').fill('tlq1x');
+    await page.locator('#to').fill(await walletCli('getnewaddress'));
     await page.locator('#go:not(:disabled)').click();
     await page.locator('#banner:not([hidden])', { hasText: want }).waitFor({ timeout: 10000 });
     await page.locator('#go').waitFor({ timeout: 3000 });

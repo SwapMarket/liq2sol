@@ -268,7 +268,12 @@ async function upToRecovery(page, flip, to) {
   await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
   await page.screenshot({ path: path.join(shots, `book-${flip ? 's2l' : 'l2s'}.png`) });
   await page.locator('#amount').fill(env.AMOUNT);
-  if (to) await page.locator('#to').fill(to);
+  if (to) {
+    // A real Liquid testnet address, while these chains are regtest: it would pay a script only that network's wallet can spend.
+    await page.locator('#to').fill('tlq1pqvd5qf9vjghhl6cd5v2t5yp6rxj9r7e8q3lxttjtt9zfvmykjk8tskcf060v44lx2gzrmpu9zad8ad400ncvuq58st3s7anpuqvpugyaaj8fe0wqwa26');
+    await page.locator('#go:disabled', { hasText: 'This address is for another network' }).waitFor({ timeout: 10000 });
+    await page.locator('#to').fill(to);
+  }
   await page.locator('#go:not(:disabled)').click();
   await page.locator('#accept').waitFor({ timeout: 30000 });
   await page.screenshot({ path: path.join(shots, `quote-${flip ? 's2l' : 'l2s'}.png`) });

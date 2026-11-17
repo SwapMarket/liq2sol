@@ -7,6 +7,8 @@ const TESTNET = {
   usdt: 'b612eb46313a2cd6ebabd8b7a8eed5696e29898b87a43bff41c94f51acef9d73',
   lbtc: '144c654344aa716d6f3abcc1ca90e5641e4e2a7f633bc09fe3baf64585819a49',
   regtest: false,
+  // How a confidential address starts here, for the examples in the address fields.
+  addressHint: 'tlq1…',
   esplora: ['https://blockstream.info/liquidtestnet/api', 'https://liquid.network/liquidtestnet/api'],
   explorer: 'https://blockstream.info/liquidtestnet',
   solanaExplorer: (address) => `https://explorer.solana.com/address/${address}?cluster=devnet`,
@@ -62,6 +64,7 @@ const MAINNET = {
   // Tether's USDt, which the Liquid asset registry ties to tether.to, and L-BTC, the policy asset.
   usdt: 'ce091c998b83c78bb71a632313ba3760f1763d9cfcffae02258ffa9865a37bd2',
   lbtc: '6f0279e9ed041c3d710a9f57d0c02928416460c4b722ae3457a11eec381c526d',
+  addressHint: 'lq1…',
   esplora: ['https://blockstream.info/liquid/api', 'https://liquid.network/api'],
   explorer: 'https://blockstream.info/liquid',
   solanaExplorer: (address) => `https://explorer.solana.com/address/${address}`,

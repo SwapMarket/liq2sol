@@ -173,6 +173,25 @@ impl SwapArgs {
     }
 }
 
+/// A Liquid address someone gave us to be paid at: for this network, and confidential. An address for another network has the
+/// same script, so a payment to it would land, but only that other network's wallet could spend it.
+fn payout_address(address: &str) -> Res<Address> {
+    let a = Address::from_str(address.trim()).map_err(|_| "This isn't a Liquid address.".to_string())?;
+    if *a.params != *liq2sol_chain::liquid::network().params {
+        return Err("This address is for another network.".into());
+    }
+    if !a.is_blinded() {
+        return Err("Use a confidential address, so the amount stays hidden.".into());
+    }
+    Ok(a)
+}
+
+/// What is wrong with an address to be paid at, or nothing.
+#[wasm_bindgen]
+pub fn address_problem(address: &str) -> String {
+    payout_address(address).err().unwrap_or_default()
+}
+
 /// An address's plain form, without its blinding key, which is what an explorer's address page shows.
 #[wasm_bindgen]
 pub fn plain_address(address: &str) -> Result<String, String> {
@@ -358,7 +377,7 @@ impl ClaimSession {
         let genesis = genesis(&a.genesis)?;
         let coin = secret_coin(&a.coin_tx, a.coin_vout, &blinding)?;
         let fee = secret_coin(&a.fee_tx, a.fee_vout, &blinding)?;
-        let to = Address::from_str(&a.to_address).map_err(|e| format!("bad Liquid address: {e}"))?;
+        let to = payout_address(&a.to_address)?;
         let (claim, utxos) = build_swap_spend(&coin, &fee, &to, 0, Sequence::MAX)?;
         let tx_hex = serialize_hex(&claim);
         let started = TakerClaim::start_with(&key, &output, claim, utxos, genesis)?;
@@ -479,7 +498,7 @@ pub fn build_refund(args: &str) -> Result<String, String> {
     let genesis = genesis(&a.genesis)?;
     let coin = secret_coin(&a.coin_tx, a.coin_vout, &blinding)?;
     let fee = secret_coin(&a.fee_tx, a.fee_vout, &blinding)?;
-    let to = Address::from_str(&a.to_address).map_err(|e| format!("bad Liquid address: {e}"))?;
+    let to = payout_address(&a.to_address)?;
     let (t, utxos) = build_swap_spend(&coin, &fee, &to, a.swap.lock_height, Sequence::ZERO)?;
     let digest = output.refund_sighash(&t, &utxos, 0, genesis).map_err(|e| e.to_string())?;
     let signature = *Secp256k1::new().sign_schnorr_no_aux_rand(&Message::from_digest(digest), &key).as_ref();
@@ -513,7 +532,7 @@ impl EarlyRefundSession {
         let genesis = genesis(&a.genesis)?;
         let coin = secret_coin(&a.coin_tx, a.coin_vout, &blinding)?;
         let fee = secret_coin(&a.fee_tx, a.fee_vout, &blinding)?;
-        let to = Address::from_str(&a.to_address).map_err(|e| format!("bad Liquid address: {e}"))?;
+        let to = payout_address(&a.to_address)?;
         // No lock height, because this spend doesn't wait for one. The maker's share is for exactly these outputs.
         let (t, utxos) = build_swap_spend(&coin, &fee, &to, 0, Sequence::MAX)?;
         let tx = serialize_hex(&t);

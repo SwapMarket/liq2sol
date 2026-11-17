@@ -554,7 +554,7 @@ const clearAmount = h('button', {
   },
 }, '×');
 const toInput = h('input', {
-  class: 'input', id: 'to', placeholder: 'tlq1…',
+  class: 'input', id: 'to', placeholder: NETWORK.addressHint,
   oninput: (e) => { ui.to = e.target.value; updateForm(); },
 });
 
@@ -608,8 +608,9 @@ function updateForm() {
   const hasAmount = send && send > 0n;
   const filled = hasAmount && plan.fills.length > 0;
   const needsAddress = ui.direction === 'S2L';
-  const ready = !wallet || (filled && (!needsAddress || ui.to.trim()));
-  const label = !wallet ? 'Connect a Solana wallet' : !hasAmount ? 'Enter an amount' : !plan.fills.length ? 'No maker fits this amount' : needsAddress && !ui.to.trim() ? 'Enter a Liquid address' : plan.fills.length > 1 ? `Get ${plan.fills.length} firm quotes` : 'Get a firm quote';
+  const toProblem = needsAddress && ui.to.trim() ? W.address_problem(ui.to) : '';
+  const ready = !wallet || (filled && (!needsAddress || (ui.to.trim() && !toProblem)));
+  const label = !wallet ? 'Connect a Solana wallet' : !hasAmount ? 'Enter an amount' : !plan.fills.length ? 'No maker fits this amount' : needsAddress && !ui.to.trim() ? 'Enter a Liquid address' : toProblem ? toProblem.replace(/\.$/, '') : plan.fills.length > 1 ? `Get ${plan.fills.length} firm quotes` : 'Get a firm quote';
 
   clearAmount.hidden = !ui.amount;
   amountInput.setAttribute('aria-label', `You send, in ${from}`);
@@ -977,7 +978,7 @@ const refundTo = new Map();
 
 function refundAddressInput(s) {
   return h('input', {
-    class: 'input refund-to', placeholder: 'tlq1… confidential address', value: refundTo.get(s.id) ?? '',
+    class: 'input refund-to', placeholder: `${NETWORK.addressHint} confidential address`, value: refundTo.get(s.id) ?? '',
     oninput: (e) => refundTo.set(s.id, e.target.value),
   });
 }

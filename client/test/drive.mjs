@@ -990,6 +990,9 @@ async function early() {
   step('asked for a refund before the maker locked');
   await page.locator('.swap-card[data-state="refunded"]').waitFor({ timeout: 120000 });
   const swap = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps')))[0]);
+  const refundLink = page.locator('.swap-card .refund-links a.explorer-spend', { hasText: 'Liquid refund' });
+  await refundLink.waitFor({ timeout: 30000 });
+  if (!(await refundLink.getAttribute('href')).includes(`/tx/${swap.refund_txid}`)) throw new Error('the refunded card links to another transaction');
   const tx = JSON.parse(await cli('getrawtransaction', swap.refund_txid, '1'));
   if (tx.vin[0].txinwitness.length !== 1) throw new Error(`the refund's witness has ${tx.vin[0].txinwitness.length} items, so it shows it was a refund`);
   const got = await receivedAt(to);
@@ -1055,7 +1058,10 @@ async function release() {
     if (await banner.count() && (await banner.innerText()) !== earlier) throw new Error(`asking for the release failed: ${await banner.innerText()}`);
   }
   await waitState(page, 'refunded', 5000);
-  step('the maker agreed, and the lock came back on Solana');
+  const escrowLink = page.locator('.swap-card .refund-links a.explorer-solana');
+  await escrowLink.waitFor({ timeout: 5000 });
+  if (!(await escrowLink.getAttribute('href')).includes((await storedSwap(page)).escrow_address)) throw new Error('the refunded card links somewhere else');
+  step('the maker agreed, and the lock came back on Solana, with the escrow linked on the card');
   offset.slots = 0;
   await page.locator('.swap-card .reclaim').click({ timeout: 30000 });
   await page.locator('#toast', { hasText: 'Rent reclaimed' }).waitFor({ timeout: 30000 });

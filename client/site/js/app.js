@@ -1167,7 +1167,7 @@ function swapBody(s) {
     case 'refunding':
       return h('p', { class: 'status spin' }, s.status || 'Refund sent, waiting for a confirmation.');
     case 'refunded':
-      return [h('p', { class: 'good refunded' }, 'Refunded.'), reclaimButton(s)];
+      return [h('p', { class: 'good refunded' }, 'Refunded.'), h('p', { class: 'note refund-links' }, 'See it on: ', explorerLinks(s)), reclaimButton(s)];
     case 'expired':
       return h('p', { class: 'note' }, 'This swap expired before anything was paid.');
     case 'cancelled':
@@ -1277,6 +1277,8 @@ function swapPrice(s) {
 function explorerLinks(s) {
   const link = (cls, href, text) => h('a', { class: `explorer ${cls}`, href, target: '_blank', rel: 'noopener noreferrer', title: 'Opens the explorer with this swap’s amounts unblinded. Anyone you share this link with can read them.' }, text);
   const box = h('span', { class: 'explorer-links' }, s.escrow_address && link('explorer-solana', NETWORK.solanaExplorer(s.escrow_address), 'Solana'));
+  // A refund of a coin this page never read, such as a wrong one, still gets its link, without amounts.
+  if (!s.coin?.txid && s.refund_txid) box.prepend(link('explorer-spend', `${NETWORK.explorer}/tx/${s.refund_txid}`, 'Liquid refund'));
   if (s.coin?.txid) {
     const add = (blinded) => {
       const spend = s.refund_txid ?? s.claim_txid;

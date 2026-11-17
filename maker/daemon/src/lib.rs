@@ -884,6 +884,28 @@ mod tests {
     }
 
     #[test]
+    fn the_mainnet_examples_are_mainnet_and_within_the_cap() {
+        use liq2sol_chain::liquid::MAINNET_MAX_PER_SWAP;
+        let dir = std::env::temp_dir().join(format!("liq2sol-config-{}-mainnet", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("maker.json");
+        std::fs::write(&path, include_str!("../../../deploy/maker.mainnet.example.json")).unwrap();
+        let cfg = load_config(&path).unwrap();
+        let rfq = cfg.rfq.unwrap();
+        assert_eq!((cfg.network.as_str(), rfq.network.as_str()), ("mainnet", "mainnet"));
+        assert!(cfg.engine.max_per_swap <= MAINNET_MAX_PER_SWAP && rfq.max_sol_units <= MAINNET_MAX_PER_SWAP);
+        assert!(cfg.regtest_assets.is_none());
+        let urls = format!("{:?} {:?} {}", cfg.liquid, cfg.second_liquid, cfg.solana_rpc);
+        assert!(!urls.contains("testnet") && !urls.contains("devnet"), "{urls}");
+        let signer: liq2sol_signer::Config =
+            serde_json::from_str(include_str!("../../../deploy/signer.mainnet.example.json")).unwrap();
+        assert_eq!(signer.network, "mainnet");
+        assert!(signer.limits.max_per_swap <= MAINNET_MAX_PER_SWAP);
+        assert!(signer.regtest_assets.is_none());
+        assert!(!format!("{:?} {}", signer.liquid, signer.solana_rpc).contains("testnet"));
+    }
+
+    #[test]
     fn page_to_is_optional_but_checked_when_set() {
         assert_eq!(loaded("no-pager", str::to_string).page_to, None);
         let with = |nostr: &str, relays: &str| {

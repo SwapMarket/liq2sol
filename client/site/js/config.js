@@ -1,4 +1,4 @@
-// What this page talks to: test networks by default, or mainnet when it is chosen in Settings. Endpoints and relays can be changed
+// What this page talks to: mainnet by default, or test networks when they are chosen in Settings. Endpoints and relays can be changed
 // there too. The program, mint, assets and genesis are pinned here per network, and the swap logic holds the maker to them.
 const TESTNET = {
   name: 'testnet',
@@ -84,17 +84,26 @@ const MAINNET = {
 
 export const NETWORKS = { testnet: TESTNET, mainnet: MAINNET };
 
-// The choice lives outside both networks' storage, and only an exact, available name counts.
+// The choice lives outside both networks' storage. Mainnet is the default (user's decision, 2026-11-17): only a stored choice of
+// exactly "testnet" gives test networks. A browser that used this page before mainnet existed, with test swaps and no choice
+// stored, stays on test networks, so its swaps don't disappear from view.
 const CHOICE = 'liq2sol.network';
 
 export const mainnetAvailable = () => !!MAINNET.programId;
 
 function chosen() {
+  if (!mainnetAvailable()) return 'testnet';
   try {
-    return localStorage.getItem(CHOICE) === 'mainnet' && mainnetAvailable() ? 'mainnet' : 'testnet';
+    const stored = localStorage.getItem(CHOICE);
+    if (stored === 'testnet') return 'testnet';
+    if (stored === null && Object.keys(JSON.parse(localStorage.getItem('liq2sol.swaps')) ?? {}).length) {
+      localStorage.setItem(CHOICE, 'testnet');
+      return 'testnet';
+    }
   } catch {
-    return 'testnet';
+    // No storage: nothing to keep, so the default.
   }
+  return 'mainnet';
 }
 
 export const NETWORK = NETWORKS[chosen()];

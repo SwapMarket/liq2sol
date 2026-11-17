@@ -199,6 +199,8 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
     window.addEventListener('wallet-standard:app-ready', ({ detail }) => register(detail));
     window.dispatchEvent(new CustomEvent('wallet-standard:register-wallet', { detail: register }));
   }, who.address);
+  // The page defaults to mainnet. These chains are test chains, so every page starts on test networks unless a test says otherwise.
+  await page.addInitScript(() => { if (localStorage.getItem('liq2sol.network') === null) localStorage.setItem('liq2sol.network', 'testnet'); });
   if (beforeLoad) await beforeLoad(page);
   await page.goto(`http://127.0.0.1:${site.port}/`, { waitUntil: 'commit' });
   return page;
@@ -1216,22 +1218,35 @@ async function pinnedFiles() {
   step('the published page runs as stamped, and refuses a changed script or WebAssembly');
 }
 
+// The test config fills in these chains' endpoints over whichever network was chosen. On mainnet it keeps mainnet's name, so the
+// page holds these test chains to mainnet, and refuses them.
+const mainnetConfig = (p) => p.route('**/js/config.js', async (route) => {
+  const body = (await (await route.fetch()).text()).replace(/\nObject\.assign\(NETWORK, /, '\nconst wasMainnet = NETWORK === NETWORKS.mainnet;$&')
+    + "\nif (wasMainnet) Object.assign(NETWORK, { name: 'mainnet', regtest: false, faucet: null, label: 'Liquid + Solana mainnet' });\n";
+  await route.fulfill({ body, contentType: 'text/javascript' });
+});
+
 async function networkSwitch() {
   const page = await newPage();
   await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
-  // A choice that isn't exactly "mainnet" counts as nothing.
-  await page.evaluate(() => localStorage.setItem('liq2sol.network', 'Mainnet'));
-  await page.reload();
-  await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
-  if (await page.locator('#net.real').count()) throw new Error('a misspelt stored choice was taken as mainnet');
-  await page.evaluate(() => localStorage.removeItem('liq2sol.network'));
-  step('only an exact stored choice of mainnet counts');
+  await page.context().close();
+  // A first visit, with nothing stored, opens on mainnet. These chains aren't mainnet, so it refuses to run, and says so.
+  const first = await newPage({ width: 1200, height: 1000 }, async (p) => {
+    await mainnetConfig(p);
+    await p.addInitScript(() => {
+      if (!sessionStorage.getItem('seen')) {
+        sessionStorage.setItem('seen', '1');
+        localStorage.removeItem('liq2sol.network');
+      }
+    });
+  });
+  await first.locator('#net.real').waitFor({ timeout: 30000 });
+  await first.locator('#banner:not([hidden])', { hasText: 'an endpoint is on another network' }).waitFor({ timeout: 30000 });
+  if (await first.evaluate(() => localStorage.getItem('liq2sol.network')) !== null) throw new Error('a first visit stored a choice');
+  await first.context().close();
+  step('a first visit opens on mainnet');
 
-  const real = await newPage({ width: 1200, height: 1000 }, (p) => p.route('**/js/config.js', async (route) => {
-    const body = (await (await route.fetch()).text()).replace(/\nObject\.assign\(NETWORK, /, '\nconst wasMainnet = NETWORK === NETWORKS.mainnet;$&')
-      + "\nif (wasMainnet) Object.assign(NETWORK, { name: 'mainnet', regtest: false, faucet: null, label: 'Liquid + Solana mainnet' });\n";
-    await route.fulfill({ body, contentType: 'text/javascript' });
-  }));
+  const real = await newPage({ width: 1200, height: 1000 }, mainnetConfig);
   await real.locator('tbody tr').first().waitFor({ timeout: 30000 });
   await real.locator('.star').first().click();
   await real.locator('.star.on').first().waitFor({ timeout: 3000 });
@@ -1257,7 +1272,6 @@ async function networkSwitch() {
   if (await real.locator('#net.real').count()) throw new Error('still marked as mainnet after switching back');
   if (await real.locator('.mainnet-only:visible').count()) throw new Error('the bridge links show on a test network');
   step('switching back brings the test network back as it was');
-  await page.context().close();
   await real.context().close();
 }
 

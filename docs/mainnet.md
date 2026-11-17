@@ -17,6 +17,7 @@ Mainnet support was approved on 2026-11-16, with four decisions by the user: a g
 | Recovery files | Carry their network. A test network's file can't be restored on mainnet, or the reverse. |
 
 | Escrow program | Deployed final on 2026-11-17, at `DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b`, in slot 470557839, with no upgrade authority. Its code (292,184 bytes, sha256 `824b218fba1be90c7d8ecf5a6faac9dd8e0b8b389245d510acd0e61701052e13`) is the build of commit 297cd7c with `--features mainnet`, reproduced independently. Its rent, 1.485 SOL, is locked for good. |
+| Mainnet by default | The page opens on mainnet (user's decision, 2026-11-17). Only a stored choice of test networks, or test swaps from before mainnet, keeps a browser on them. |
 | Mainnet on | The program id is set in `sol::MAINNET_PROGRAM` and the page's `MAINNET.programId`, so the switch works and a maker can be told `mainnet`. On mainnet the menu links to SwapMarket's sol2base and eth2base bridges. |
 
 ## Left to do

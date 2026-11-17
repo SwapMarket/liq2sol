@@ -1,6 +1,6 @@
-# Running a test maker on Debian
+# Running a maker on Debian
 
-For Debian 12 or later, on x86-64, or on arm64 such as a Raspberry Pi 4 or 5 with Raspberry Pi OS 64-bit (Bookworm). A 32-bit OS won't do. This release is for Liquid testnet and Solana devnet only, and both programs refuse to start on mainnet.
+For Debian 12 or later, on x86-64, or on arm64 such as a Raspberry Pi 4 or 5 with Raspberry Pi OS 64-bit (Bookworm). A 32-bit OS won't do. A maker runs on mainnet or on the test networks (Liquid testnet and Solana devnet), as its configs say. For mainnet, read "A mainnet maker" below first.
 
 ## Install
 
@@ -34,7 +34,7 @@ Put these in `/var/lib/liq2sol/first/keys`, owned by `liq2sol`, mode 600:
 | `swap-seed.key` | Derives each swap's key. Without it, open swaps can't be claimed |
 | `nostr.key` | The maker's public identity. Keep it to stay on the vetted list |
 
-Missing Liquid, seed and Nostr keys are generated on first start. `solana.json` must be supplied: make it with `solana-keygen new -o solana.json`, on any machine. Only ever use test keys here.
+Missing Liquid, seed and Nostr keys are generated on first start. `solana.json` must be supplied: make it with `solana-keygen new -o solana.json`. Never use the same keys on mainnet and on a test network.
 
 ## Starting with new keys
 
@@ -84,6 +84,26 @@ The maker also pages when its wallets run low: SOL-USDT or L-USDt below the larg
 ```
 
 One swap ties up about 0.003 SOL, mostly escrow rent that comes back when the escrow closes, and spends up to about 150 sats of L-BTC.
+
+## A mainnet maker
+
+Mainnet swaps move real funds. The release caps one swap at 100 USDT, and both programs refuse to start with a higher limit.
+
+1. **A folder of its own, with new keys.** Never copy a test maker's keys or databases. Repeat the folder steps under Install with a new name, for example `main`, then use the mainnet examples instead:
+   ```sh
+   sudo install -m 600 -o liq2sol -g liq2sol signer.mainnet.example.json /var/lib/liq2sol/main/signer.json
+   sudo install -m 600 -o liq2sol -g liq2sol maker.mainnet.example.json /var/lib/liq2sol/main/maker.json
+   ```
+   Make `solana.json` on the machine itself, with `solana-keygen new -o solana.json`, and write its recovery phrase down offline. Back up the whole `keys/` folder somewhere safe: these keys hold real funds.
+2. **Endpoints.** Put your Helius key in `solana_rpc` in both files, replacing `YOUR_HELIUS_KEY`. Public Solana endpoints rate-limit and keep little history, and the maker reads history after a deadline. For Liquid, your own node is better than the public APIs, and is needed for `fresh_addresses`. The maker calls `elements-cli` with the arguments you give, for example:
+   ```json
+   "liquid": { "Node": { "cli": "/usr/local/bin/elements-cli", "args": ["-chain=liquidv1", "-rpcuser=you", "-rpcpassword=secret"] } },
+   ```
+3. **Prices and limits.** Set `l2s_prices` and `s2l_prices` in `maker.json`. `max_per_swap`, `max_sol_units` and the signer's `max_per_swap` must stay at or under `100000000` (100 USDT). `max_open_l2s` and `max_open_s2l` limit what is locked at once.
+4. **Pages.** Set `page_to` and check it with `test-page` (see "Pages on your phone"). Also have something on another machine notice if the maker stops.
+5. **Start it**, as `liq2sol-signer@main` and `liq2sol-maker@main`. Both check that both chains are mainnet before loading a key. The signer's log gives the addresses to fund: `journalctl -u liq2sol-signer@main | grep "signer ready"`.
+6. **Fund it** with USDt and L-BTC on Liquid, and USDT and SOL on Solana. Start small. SOL pays fees and each escrow's rent, which comes back when the escrow closes.
+7. **Get listed.** Send SwapMarket the key from `maker answering quotes as <key>`. The page shows only vetted makers by default.
 
 ## Several makers on one machine
 

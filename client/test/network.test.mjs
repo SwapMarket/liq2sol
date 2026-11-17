@@ -7,10 +7,11 @@ const LIQUID_MAIN = '1466275836220db2944ca059a3a10ef6fd2ea684b0688d2c379296888a2
 const SOLANA_MAIN = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
 const DEVNET = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 
-// A fresh copy of the module for each stored choice, as a page load gives.
+// A fresh copy of the module for each stored state, as a page load gives.
 let loads = 0;
-async function load(stored) {
+async function load(stored, swaps) {
   const items = new Map(stored === undefined ? [] : [['liq2sol.network', stored]]);
+  if (swaps) items.set('liq2sol.swaps', JSON.stringify(swaps));
   globalThis.localStorage = { getItem: (k) => items.get(k) ?? null, setItem: (k, v) => items.set(k, v) };
   let reloaded = 0;
   globalThis.location = { reload: () => { reloaded += 1; } };
@@ -18,33 +19,35 @@ async function load(stored) {
   return { ...config, items, reloaded: () => reloaded };
 }
 
-test('test networks are the default, and stay it for anything but an exact, available choice', async () => {
-  for (const stored of [undefined, 'testnet', 'Mainnet', 'mainnet ', '', 'null']) {
+test('mainnet is the default, and only an exact stored choice gives test networks', async () => {
+  for (const stored of [undefined, 'mainnet', 'Testnet', 'testnet ', '', 'null']) {
     const c = await load(stored);
-    assert.equal(c.NETWORK.name, 'testnet', String(stored));
-    assert.equal(c.storageKey('liq2sol.swaps'), 'liq2sol.swaps', 'testnet keeps its old storage');
+    assert.equal(c.NETWORK.name, 'mainnet', String(stored));
+    assert.equal(c.storageKey('liq2sol.swaps'), 'liq2sol.swaps.mainnet', 'mainnet has storage of its own');
   }
-  const c = await load('mainnet');
-  if (c.mainnetAvailable()) {
-    assert.equal(c.NETWORK.name, 'mainnet', 'a stored choice of mainnet is taken once it is available');
-    assert.equal(c.storageKey('liq2sol.swaps'), 'liq2sol.swaps.mainnet', 'with storage of its own');
-    c.chooseNetwork('testnet');
-    assert.equal(c.items.get('liq2sol.network'), 'testnet');
-    assert.equal(c.reloaded(), 1, 'switching reloads the page');
-  }
-  assert.equal(c.mainnetAvailable(), !!c.NETWORKS.mainnet.programId);
-  if (!c.mainnetAvailable()) {
-    assert.equal(c.NETWORK.name, 'testnet');
-    assert.throws(() => c.chooseNetwork('mainnet'), /not available/);
-    assert.equal(c.reloaded(), 0);
-  }
-  assert.throws(() => c.chooseNetwork('regtest'), /not available/);
+  const t = await load('testnet');
+  assert.equal(t.NETWORK.name, 'testnet');
+  assert.equal(t.storageKey('liq2sol.swaps'), 'liq2sol.swaps', 'testnet keeps its old storage');
+  t.chooseNetwork('mainnet');
+  assert.equal(t.items.get('liq2sol.network'), 'mainnet');
+  assert.equal(t.reloaded(), 1, 'switching reloads the page');
+  assert.throws(() => t.chooseNetwork('regtest'), /not available/);
 });
 
-test('a browser with no storage still gets test networks', async () => {
+test('a browser with test swaps from before mainnet stays on test networks, and remembers it', async () => {
+  const c = await load(undefined, { abc: { id: 'abc', state: 'fund' } });
+  assert.equal(c.NETWORK.name, 'testnet');
+  assert.equal(c.items.get('liq2sol.network'), 'testnet');
+  // A stored choice wins over that.
+  assert.equal((await load('mainnet', { abc: {} })).NETWORK.name, 'mainnet');
+  // An empty or broken store of swaps doesn't count.
+  assert.equal((await load(undefined, {})).NETWORK.name, 'mainnet');
+});
+
+test('a browser with no storage gets mainnet, the default', async () => {
   globalThis.localStorage = { getItem: () => { throw new Error('blocked'); } };
   const c = await import(`../site/js/config.js?load=${loads += 1}`);
-  assert.equal(c.NETWORK.name, 'testnet');
+  assert.equal(c.NETWORK.name, 'mainnet');
 });
 
 test('mainnet pins the real ids, has no test tools, and caps a swap at 100 USDT', async () => {

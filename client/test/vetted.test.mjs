@@ -13,8 +13,10 @@ test('every listed key can match, because a badly typed one would silently never
   for (const list of Object.values(VETTED_MAKERS)) assert.equal(new Set(list.map((m) => m.key)).size, list.length, 'duplicate key');
 });
 
-test('this build lists test makers only', () => {
-  assert.deepEqual(Object.keys(VETTED_MAKERS), ['testnet']);
+test('makers are listed for test networks and mainnet only, never the same key on both', () => {
+  assert.deepEqual(Object.keys(VETTED_MAKERS).sort(), ['mainnet', 'testnet']);
+  const test = new Set(VETTED_MAKERS.testnet.map((m) => m.key));
+  for (const m of VETTED_MAKERS.mainnet) assert.ok(!test.has(m.key), `${m.name} is on both networks`);
 });
 
 test('only the whole key on the right network is vetted', () => {

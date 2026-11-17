@@ -8,6 +8,10 @@ export const VETTED_MAKERS = {
     { key: 'fb14836a5f084c36c2ec88f07c6016400ed23422b1fc5b77c0973df2e0207c84', name: 'SwapMarket VPS maker' },
     { key: '5d9a02ba557fc7cad0df76416302e4e6d0348a766fcbf21ce8254f3af3322e11', name: 'SwapMarket VPS maker 2' },
   ],
+  mainnet: [
+    // Added 2026-11-17. Its funding addresses are Liquid lq1pqgjnrzr5…egkpgf3dsf6eg3q and Solana 2YUhWxmdv9QAWLKakfXrpcdygAwizy2HC7wyFfJ63YXD.
+    { key: '81651b353e5897b34fcd120bad15216cf570441ad7af991eac585fa269dc9dc5', name: 'SwapMarket maker' },
+  ],
 };
 
 export const vettedMaker = (network, key) => (VETTED_MAKERS[network] ?? []).find((m) => m.key === key) ?? null;

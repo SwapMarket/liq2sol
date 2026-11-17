@@ -77,8 +77,9 @@ Details and sources are in the docs. These are recorded because older assumption
 - **Mainnet decisions (user's, 2026-11-16):** a guarded switch in Settings, with separate storage per network; the escrow program
   immutable from the start; my own review of `musig2`, not an audit; at most 100 USDT a swap (`MAINNET_MAX_PER_SWAP`, the page's
   `maxSwapUnits`), which only a release can raise.
-- **Mainnet stays off until its program id is set** in `sol::MAINNET_PROGRAM` and the page's `MAINNET.programId`. The program is
-  built with its `mainnet` feature, which pins Tether's mint.
+- **The mainnet escrow is `DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b`,** deployed final from 297cd7c with `--features mainnet`
+  (2026-11-17), set in `sol::MAINNET_PROGRAM` and the page's `MAINNET.programId`. It can never change: a fix means a new program id.
+- **`cargo build-sbf` needs `RUSTFLAGS=""`** in this shell too, or rust-lld rejects `-fuse-ld=lld` on a clean build.
 - **Kind 21059 wrappers carry the real time.** Relays drop ephemeral events more than a few seconds old.
 - **The second Solana endpoint is Helius, using an optional key the taker provides** (user's decision, 2026-11-05). Never
   ship a key in the static app.

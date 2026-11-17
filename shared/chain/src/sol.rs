@@ -23,9 +23,10 @@ use solana_transaction_status_client_types::UiTransactionEncoding;
 pub use crate::liquid::SOLANA_MAINNET_GENESIS as MAINNET_GENESIS;
 use crate::liquid::{check_genesis, use_network, Net, NetworkConfig};
 
-/// The escrow program on Solana mainnet. `None` until it is deployed there and made immutable: mainnet can't be selected
-/// before that. It is built from the same source with the program's `mainnet` feature, which pins the mint below.
-pub const MAINNET_PROGRAM: Option<Pubkey> = None;
+/// The escrow program on Solana mainnet, deployed final (no upgrade authority) in slot 470557839 from commit 297cd7c, built with
+/// the program's `mainnet` feature, which pins the mint below. Its code's sha256 is
+/// 824b218fba1be90c7d8ecf5a6faac9dd8e0b8b389245d510acd0e61701052e13, checked against our own build of that commit.
+pub const MAINNET_PROGRAM: Option<Pubkey> = Some(Pubkey::from_str_const("DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b"));
 /// Tether's USDT on Solana mainnet: the legacy Token program, 6 decimals. Checked against the chain's `getAccountInfo`.
 pub const MAINNET_MINT: Pubkey = Pubkey::from_str_const("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
 
@@ -68,6 +69,9 @@ pub fn enter(network: &str, regtest: bool, caps: &[u64], liquid_genesis: &str, s
 /// operator said, checked against what both chains say.
 pub fn select(net: Net, liquid_genesis: &str, solana_genesis: &str) -> Res<()> {
     check_genesis(net, liquid_genesis, solana_genesis)?;
+    if net == Net::Testnet && *ids() != (solana_escrow::id(), solana_escrow::USDT_MINT) {
+        return Err("refusing to start: this process already chose another network".into());
+    }
     if net == Net::Mainnet {
         let program = MAINNET_PROGRAM.ok_or("refusing to start: the escrow program isn't on mainnet yet")?;
         use_network(NetworkConfig::mainnet());

@@ -1219,19 +1219,16 @@ async function pinnedFiles() {
 async function networkSwitch() {
   const page = await newPage();
   await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
-  await openSettings(page);
-  if (!(await page.locator('#switch-network').isDisabled())) throw new Error('mainnet can be chosen with no program there');
-  if (!/not available yet/.test(await page.locator('#network-note').innerText())) throw new Error('no reason given for the disabled switch');
-  await page.evaluate(() => localStorage.setItem('liq2sol.network', 'mainnet'));
+  // A choice that isn't exactly "mainnet" counts as nothing.
+  await page.evaluate(() => localStorage.setItem('liq2sol.network', 'Mainnet'));
   await page.reload();
   await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
-  if (await page.locator('#net.real').count()) throw new Error('a stored choice of mainnet was taken with no program there');
+  if (await page.locator('#net.real').count()) throw new Error('a misspelt stored choice was taken as mainnet');
   await page.evaluate(() => localStorage.removeItem('liq2sol.network'));
-  step('mainnet can\'t be chosen, by the switch or by its stored setting, while it has no escrow program');
+  step('only an exact stored choice of mainnet counts');
 
   const real = await newPage({ width: 1200, height: 1000 }, (p) => p.route('**/js/config.js', async (route) => {
-    const body = (await (await route.fetch()).text()).replace('programId: null,', "programId: 'EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU',")
-      .replace(/\nObject\.assign\(NETWORK, /, '\nconst wasMainnet = NETWORK === NETWORKS.mainnet;$&')
+    const body = (await (await route.fetch()).text()).replace(/\nObject\.assign\(NETWORK, /, '\nconst wasMainnet = NETWORK === NETWORKS.mainnet;$&')
       + "\nif (wasMainnet) Object.assign(NETWORK, { name: 'mainnet', regtest: false, faucet: null, label: 'Liquid + Solana mainnet' });\n";
     await route.fulfill({ body, contentType: 'text/javascript' });
   }));
@@ -1245,6 +1242,10 @@ async function networkSwitch() {
   await real.locator('#net.real').waitFor({ timeout: 30000 });
   await real.locator('#banner:not([hidden])', { hasText: 'set to mainnet, and an endpoint is on another network' }).waitFor({ timeout: 30000 });
   if (await real.locator('.tab[data-tab="faucet"]').isVisible()) throw new Error('the faucet shows on mainnet');
+  for (const name of ['sol2base', 'eth2base']) {
+    const link = real.locator(`a.tab[href="https://swapmarket.github.io/${name}/"]`);
+    if (!(await link.isVisible()) || (await link.getAttribute('target')) !== '_blank') throw new Error(`no ${name} link on mainnet`);
+  }
   if (await real.locator('tbody tr').count()) throw new Error('offers show on a page that refused to run');
   const kept = await real.evaluate(() => [localStorage.getItem('liq2sol.settings'), localStorage.getItem('liq2sol.settings.mainnet'), localStorage.getItem('liq2sol.swaps.mainnet')]);
   if (kept[0] !== testSettings || (kept[1] ?? '').includes('favorites') || kept[2]) throw new Error(`mainnet shares storage with the test network: ${kept}`);
@@ -1254,6 +1255,7 @@ async function networkSwitch() {
   await real.locator('#switch-network', { hasText: 'Switch to test networks' }).click();
   await real.locator('.star.on').first().waitFor({ timeout: 30000 });
   if (await real.locator('#net.real').count()) throw new Error('still marked as mainnet after switching back');
+  if (await real.locator('.mainnet-only:visible').count()) throw new Error('the bridge links show on a test network');
   step('switching back brings the test network back as it was');
   await page.context().close();
   await real.context().close();

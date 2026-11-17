@@ -70,8 +70,8 @@ const MAINNET = {
   heliusTemplate: 'https://mainnet.helius-rpc.com/?api-key=',
   solanaChain: 'solana:mainnet',
   walletConnectChain: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-  // The escrow program, built with its `mainnet` feature and made immutable. Null until it is deployed: mainnet can't be chosen before.
-  programId: null,
+  // The escrow program, built with its `mainnet` feature from commit 297cd7c and deployed final, with no upgrade authority.
+  programId: 'DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b',
   // Tether's USDT on Solana: the legacy Token program, 6 decimals.
   mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
   walletNetwork: 'mainnet-beta',

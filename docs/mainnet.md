@@ -16,11 +16,12 @@ Mainnet support was approved on 2026-11-16, with four decisions by the user: a g
 | Page integrity | The deploy pins every script, the style sheet and the WebAssembly by hash in `index.html` (`client/stamp.mjs`). A changed file is refused, so `index.html` alone is what to check. |
 | Recovery files | Carry their network. A test network's file can't be restored on mainnet, or the reverse. |
 
-Mainnet can't be selected anywhere until the program id below is set. Until then the switch is disabled and a maker told `mainnet` refuses to start.
+| Escrow program | Deployed final on 2026-11-17, at `DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b`, in slot 470557839, with no upgrade authority. Its code (292,184 bytes, sha256 `824b218fba1be90c7d8ecf5a6faac9dd8e0b8b389245d510acd0e61701052e13`) is the build of commit 297cd7c with `--features mainnet`, reproduced independently. Its rent, 1.485 SOL, is locked for good. |
+| Mainnet on | The program id is set in `sol::MAINNET_PROGRAM` and the page's `MAINNET.programId`, so the switch works and a maker can be told `mainnet`. On mainnet the menu links to SwapMarket's sol2base and eth2base bridges. |
 
 ## Left to do
 
-### 1. Deploy the escrow program (the user, with their own keys)
+### 1. Deploy the escrow program (done, kept for the record)
 
 The program needs an address of its own on mainnet. Its keypair is only used for the deploy.
 

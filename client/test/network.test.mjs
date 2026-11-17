@@ -24,8 +24,14 @@ test('test networks are the default, and stay it for anything but an exact, avai
     assert.equal(c.NETWORK.name, 'testnet', String(stored));
     assert.equal(c.storageKey('liq2sol.swaps'), 'liq2sol.swaps', 'testnet keeps its old storage');
   }
-  // Mainnet has no escrow program yet, so even a stored choice of it gives test networks.
   const c = await load('mainnet');
+  if (c.mainnetAvailable()) {
+    assert.equal(c.NETWORK.name, 'mainnet', 'a stored choice of mainnet is taken once it is available');
+    assert.equal(c.storageKey('liq2sol.swaps'), 'liq2sol.swaps.mainnet', 'with storage of its own');
+    c.chooseNetwork('testnet');
+    assert.equal(c.items.get('liq2sol.network'), 'testnet');
+    assert.equal(c.reloaded(), 1, 'switching reloads the page');
+  }
   assert.equal(c.mainnetAvailable(), !!c.NETWORKS.mainnet.programId);
   if (!c.mainnetAvailable()) {
     assert.equal(c.NETWORK.name, 'testnet');

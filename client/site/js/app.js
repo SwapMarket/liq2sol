@@ -1552,6 +1552,8 @@ async function main() {
   $('net').classList.toggle('real', NETWORK.name === 'mainnet');
   document.documentElement.dataset.network = NETWORK.name;
   document.querySelector('.tab[data-tab="faucet"]').hidden = !NETWORK.faucet;
+  // SwapMarket's bridges, for the next hop once funds are on mainnet.
+  for (const a of document.querySelectorAll('.mainnet-only')) a.hidden = NETWORK.name !== 'mainnet';
   engine = new Engine({
     esplora, solana, secondSolana, getWallet: () => wallet, relays: null,
     onChange: () => { if (ui.openOrder) render(); },

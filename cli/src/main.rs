@@ -40,6 +40,8 @@ use solana_sdk::signer::Signer;
 
 /// Base units of the Solana stand-in (6 dp). The Liquid leg is this times 100, exactly.
 const SOL_AMOUNT: u64 = 10;
+/// What `setup` tops each test wallet's stand-in tokens up to. A browser run uses several hundred units, so it lasts many runs.
+const STAND_IN_FLOOR: u64 = 10_000 * SOL_AMOUNT;
 const LIQ_AMOUNT: u64 = SOL_AMOUNT * 100;
 const LIQ_CONFS: u32 = 2;
 /// Slots per wall-clock minute are measured live, never assumed.
@@ -554,8 +556,8 @@ fn run() -> Res<()> {
         ["setup", mint_key] => {
             let net = connect()?;
             let mint = read_keypair_file(mint_key).map_err(|e| e.to_string())?;
-            net.sol.setup_mint(&w.mint_authority, Some(&mint), &[w.taker_sol.pubkey(), w.maker_sol.pubkey()], 100 * SOL_AMOUNT)?;
-            net.sol.top_up_token(&w.mint_authority, &w.maker_sol.pubkey(), 100 * SOL_AMOUNT)?;
+            net.sol.setup_mint(&w.mint_authority, Some(&mint), &[w.taker_sol.pubkey(), w.maker_sol.pubkey()], STAND_IN_FLOOR)?;
+            net.sol.top_up_token(&w.mint_authority, &w.maker_sol.pubkey(), STAND_IN_FLOOR)?;
             println!("stand-in mint {} ready", solana_escrow::USDT_MINT);
         }
         ["coins", role] => {

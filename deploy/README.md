@@ -6,7 +6,9 @@ For Debian 12 or later, on x86-64, or on arm64 such as a Raspberry Pi 4 or 5 wit
 
 ```sh
 # Download a release: the archive for this machine, the checksums, SwapMarket's signature of them, and SwapMarket's key.
-TAG=v0.13   # the latest is at https://github.com/SwapMarket/liq2sol/releases
+# The latest release's tag, as update.sh finds it. Or set one yourself, such as TAG=v0.13.
+TAG=$(wget -qO- "https://api.github.com/repos/SwapMarket/liq2sol/releases?per_page=1" | sed -n '/"tag_name"/{s/.*"tag_name": *"\([^"]*\)".*/\1/p;q;}')
+echo "$TAG"
 ARCH=$(uname -m)   # x86_64, or aarch64 on a Raspberry Pi
 mkdir -p ~/liq2sol-download && cd ~/liq2sol-download
 wget "https://github.com/SwapMarket/liq2sol/releases/download/$TAG/liq2sol-maker-$TAG-$ARCH-linux.tar.gz" \

@@ -1218,6 +1218,27 @@ async function deadMakers() {
   step('a maker that stops publishing drops off a page that is already open');
 }
 
+// A quote counts down, and once its price lapses the page offers a new one instead of an accept the maker would refuse.
+// The suite's maker holds a price for 4 s.
+async function quoteExpiry() {
+  const page = await newPage();
+  await connectTestWallet(page);
+  await page.locator('tbody tr').first().waitFor({ timeout: 30000 });
+  await page.locator('#amount').fill(env.AMOUNT);
+  await page.locator('#go:not(:disabled)').click();
+  await page.locator('#accept').waitFor({ timeout: 30000 });
+  const first = await page.locator('#quote-left').textContent();
+  await page.waitForFunction((was) => document.getElementById('quote-left')?.textContent !== was, first, { timeout: 3000 });
+  await page.locator('#requote').waitFor({ timeout: 10000 });
+  if (await page.locator('#accept').count() || (await page.locator('#quote-left').textContent()) !== 'Expired') throw new Error('an expired price can still be accepted');
+  await page.locator('#requote').click();
+  await page.locator('#accept').waitFor({ timeout: 30000 });
+  await page.locator('.btn.quiet', { hasText: 'Cancel' }).click();
+  await checkNoErrors(page);
+  await page.context().close();
+  step('a quote counts down, and an expired price offers a new one instead of Accept');
+}
+
 // The network switch. The suite's chains aren't mainnet, so a page switched to mainnet must refuse to run, which is the guard
 // that matters: mainnet's name never goes with other chains. Mainnet has no program yet, so one page is told it has.
 // The published page pins every file by hash. It runs as published, and refuses a changed script or WebAssembly.
@@ -1318,6 +1339,7 @@ async function networkSwitch() {
 
 async function look() {
   await deadMakers();
+  await quoteExpiry();
   await phoneWallets();
   await connectOrder();
   await s2lBalance();

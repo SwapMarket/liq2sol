@@ -722,12 +722,16 @@ async function startQuote() {
   }
 }
 
+// The first of the quotes to expire. A maker refuses an accept after it.
+const quoteUntil = (q) => Math.min(...q.fills.map((f) => f.quote.quote_expiry));
+
 function quoteView() {
   const q = ui.quote;
   if (q.status) return h('div', { class: 'card' }, h('h2', {}, 'Getting a quote'), h('p', { class: 'status spin' }, q.status));
   const [from, to] = names[q.direction];
   const sum = (key) => q.fills.reduce((total, f) => total + BigInt(f.quote[key]), 0n);
-  const left = Math.max(0, Math.min(...q.fills.map((f) => f.quote.quote_expiry)) - now());
+  const until = quoteUntil(q);
+  const left = Math.max(0, until - now());
   const many = q.fills.length > 1;
   return h('div', { class: 'card' },
     h('h2', {}, many ? `Review ${q.fills.length} quotes` : 'Review the quote'),
@@ -737,12 +741,13 @@ function quoteView() {
       many ? q.fills.map((f) => h('div', {}, h('dt', { class: 'mono' }, short(f.n.maker)), h('dd', {}, `${show(f.quote.send)} → ${show(f.quote.receive)}`)))
         : h('div', {}, h('dt', {}, 'Maker'), h('dd', { class: 'mono' }, short(q.fills[0].n.maker))),
       h('div', {}, h('dt', {}, 'If a maker never locks'), h('dd', {}, q.direction === 'L2S' ? 'Refund after about 5 hours' : 'Refund after about 6 hours')),
-      h('div', {}, h('dt', {}, 'Price holds for'), h('dd', {}, `${left} s`))),
+      h('div', {}, h('dt', {}, 'Price holds for'), h('dd', { id: 'quote-left', 'data-until': until }, left ? `${left} s` : 'Expired'))),
     many && h('p', { class: 'warn', id: 'not-atomic' }, `These are ${q.fills.length} separate swaps. Each one either completes or refunds by itself, so some may complete while others refund. You ${q.direction === 'L2S' ? 'make one exact payment for each' : 'approve one lock for each'}.`),
     many && q.direction === 'S2L' && h('p', { class: 'note' }, 'All of them pay the same Liquid address, so anyone can see those payments went to one place, though not their amounts.'),
     q.refused.length > 0 && h('p', { class: 'warn', id: 'quote-refused' }, `${q.refused.length} of the quotes didn't come through, so this fills less than you asked for: ${q.refused[0]}`),
     q.direction === 'L2S' && h('p', { class: 'note' }, 'You will need a little L-BTC only if a refund is ever needed.'),
-    h('button', { class: 'btn', id: 'accept', onclick: acceptQuotes }, many ? 'Accept all' : 'Accept'),
+    left ? h('button', { class: 'btn', id: 'accept', onclick: acceptQuotes }, many ? 'Accept all' : 'Accept')
+      : h('button', { class: 'btn', id: 'requote', onclick: () => { clearQuote(); startQuote(); } }, 'Get a new price'),
     h('button', { class: 'btn quiet', onclick: () => { clearQuote(); render(); } }, 'Cancel'));
 }
 
@@ -767,6 +772,7 @@ async function acceptFill(f, q, order, tip) {
 
 async function acceptQuotes() {
   const q = ui.quote;
+  if (!q?.fills || quoteUntil(q) <= now()) return render();
   const order = JSON.parse(W.new_nostr_key()).secret.slice(0, 16);
   try {
     ui.quote = { status: 'Fixing the terms with the maker…' };
@@ -1689,6 +1695,12 @@ async function main() {
   // The current step's timer, between redraws.
   setInterval(() => {
     for (const el of document.querySelectorAll('.step-time.live')) el.textContent = duration(now() - Number(el.dataset.since));
+    const left = document.getElementById('quote-left');
+    if (left) {
+      const secs = Number(left.dataset.until) - now();
+      if (secs > 0) left.textContent = `${secs} s`;
+      else render();
+    }
   }, 1000);
   tickAll();
   // Wallet extensions can register after load, and offers can expire.

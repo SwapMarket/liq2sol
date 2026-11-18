@@ -1601,7 +1601,7 @@ function faucetView() {
     h('div', { class: 'addr' }, NETWORK.usdt));
 }
 
-const HERO = () => h('div', { class: 'hero' }, h('h1', {}, 'Liquid ⇄ Solana Atomic Swaps'), h('p', {}, 'Swap USDt across chains while staying in full control. Nobody can link the two sides.'));
+const HERO = () => h('div', { class: 'hero' }, h('h1', {}, h('img', { class: 'hero-mark', src: 'tether.svg', alt: '', width: 48, height: 48 }), 'Liquid ⇄ Solana Atomic Swaps'), h('p', {}, 'Swap USDt across chains while staying in full control. Nobody can link the two sides.'));
 
 function render() {
   const tab = (location.hash.replace('#', '') || 'swap');

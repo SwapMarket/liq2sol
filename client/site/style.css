@@ -126,6 +126,7 @@ tbody tr.off { opacity: .45; cursor: default; }
 .hero { text-align: center; margin: 40px 0 8px; }
 .hero h1 { margin: 0; font-size: clamp(1.9rem, 6vw, 3.2rem); line-height: 1.12; font-weight: 800; background: linear-gradient(90deg, #eac806, #2084f6); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .hero p { margin: 10px 0 0; color: #e8edf1; }
+.hero-mark { width: .9em; height: .9em; vertical-align: -.08em; margin-right: .3em; }
 
 .list { max-width: 960px; margin: 0 auto; }
 

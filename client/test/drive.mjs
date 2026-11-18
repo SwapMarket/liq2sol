@@ -178,8 +178,10 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
     const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
     const bytes = (h) => Uint8Array.from(h.match(/../g), (x) => parseInt(x, 16));
     const account = { address, publicKey: new Uint8Array(32), chains: ['solana:devnet'], features: [] };
+    // test.trust makes it act as Trust's injected wallet does on Android: legacy transactions fail, and v0 ones sign.
+    const trust = !!localStorage.getItem('test.trust');
     const wallet = {
-      version: '1.0.0', name: 'Test Wallet', icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>', chains: ['solana:devnet'], accounts: [account],
+      version: '1.0.0', name: trust ? 'Trust' : 'Test Wallet', icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>', chains: ['solana:devnet'], accounts: [account],
       features: {
         'standard:connect': { version: '1.0.0', connect: async (input) => {
           window.testWalletSilent = !!input?.silent;
@@ -194,6 +196,8 @@ async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = nu
           signTransaction: async ({ transaction }) => {
             // A person takes a moment to approve.
             await new Promise((r) => setTimeout(r, Number(localStorage.getItem('test.signDelay') ?? 0)));
+            // One signature slot, so the message starts at byte 65.
+            if (trust && !(transaction[65] & 0x80)) throw new TypeError('e.serializeMessage is not a function');
             return [{ signedTransaction: bytes(await window.testWalletSign(hex(transaction))) }];
           },
         },
@@ -518,7 +522,8 @@ async function l2s() {
 }
 
 async function s2l() {
-  const page = await newPage();
+  // As Trust's in-app browser, which can sign only v0 transactions: the lock and the rent reclaim go through as v0.
+  const page = await newPage(undefined, (p) => p.addInitScript(() => localStorage.setItem('test.trust', '1')));
   const to = await walletCli('getnewaddress');
   const file = await startSwap(page, true, to);
   await page.locator('.lock').waitFor();

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500">
+<!-- A round Tether mark for the logo, drawn here: a green disc, and a white T whose stem passes through a flat ring. -->
+<g transform="translate(0 0)">
+  <circle cx="250" cy="250" r="250" fill="#26a17b"/>
+  <ellipse cx="250" cy="236" rx="152" ry="40" fill="none" stroke="#fff" stroke-width="20"/>
+  <path fill="#fff" d="M118 104h264v68H285v230h-70V172h-97z"/>
+</g>
+</svg>

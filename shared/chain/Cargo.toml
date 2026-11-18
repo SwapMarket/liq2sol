@@ -22,7 +22,7 @@ getrandom = "0.2"
 solana-escrow = { path = "../../programs/solana-escrow", features = ["no-entrypoint"], optional = true }
 anchor-lang = { version = "=1.2.2", optional = true }
 anchor-spl = { version = "=1.2.2", optional = true }
-solana-client = { version = "3", optional = true }
+solana-client = { version = "4", optional = true }
 solana-sdk = { version = "3", optional = true }
 solana-commitment-config = { version = "3", optional = true }
 solana-transaction-status-client-types = { version = "3", optional = true }

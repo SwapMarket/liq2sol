@@ -182,8 +182,18 @@ sudo -u liq2sol /opt/liq2sol/liq2sol-maker withdraw /var/lib/liq2sol/main/maker.
 sudo -u liq2sol /opt/liq2sol/liq2sol-maker withdraw /var/lib/liq2sol/main/maker.json solana gas all
 ```
 
-The chain is `liquid` or `solana`, the asset `usdt` or `gas` (L-BTC or SOL), and the amount is in whole units, such as `12.5`,
-or `all`. It refuses while any swap is open, since those may need the funds: try again once `report` shows none open. A Liquid
+The chain is `liquid` or `solana`, the asset `usdt` or `gas` (L-BTC or SOL), and the amount is in whole units, such as `12.5`
+(12.50 USDT), or `all`. It refuses while any swap is open, since those may need the funds. To let them drain, pause the maker
+first: it then takes no new swaps, while open ones carry on.
+
+```sh
+sudo -u liq2sol /opt/liq2sol/liq2sol-maker pause /var/lib/liq2sol/main/maker.json
+# withdraw once `report` shows none open, then:
+sudo -u liq2sol /opt/liq2sol/liq2sol-maker resume /var/lib/liq2sol/main/maker.json
+```
+
+The signer also keeps 0.01 SOL for each S→L swap it has locked on Liquid and not yet claimed on Solana, whatever is asked: without
+SOL to claim the taker's escrow, the taker would refund it and keep the Liquid coin too. A Liquid
 withdrawal that hasn't confirmed yet is sent again, not paid twice, if you ask again. With a vault, USDT on Solana is withdrawn
 by the vault's cold owner instead. Taking all the gas leaves the maker unable to pay fees, so it can't take swaps until you
 fund it again.

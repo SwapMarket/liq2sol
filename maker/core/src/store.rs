@@ -398,6 +398,21 @@ impl Store {
             self.conn.query_row("SELECT value FROM flags WHERE name = 'rollback'", [], |r| r.get(0)).optional()?;
         Ok(value == Some(1))
     }
+
+    /// The operator's pause: no new swaps, while open ones carry on. Set and cleared only by the operator.
+    pub fn set_paused(&self, on: bool) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO flags (name, value) VALUES ('paused', ?1) ON CONFLICT(name) DO UPDATE SET value = ?1",
+            params![on as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn paused(&self) -> Result<bool> {
+        let value: Option<i64> =
+            self.conn.query_row("SELECT value FROM flags WHERE name = 'paused'", [], |r| r.get(0)).optional()?;
+        Ok(value == Some(1))
+    }
 }
 
 /// The signer's ledger, in its own file. It answers `policy::Ledger` and persists each record before signing.
@@ -529,6 +544,21 @@ impl SignerLedger {
     pub fn clear_pending_top_up(&self) -> Result<()> {
         self.conn.execute("DELETE FROM pending_top_up", [])?;
         Ok(())
+    }
+
+    /// S→L swaps we have locked on Liquid and not yet settled, by claiming the taker's escrow or refunding our coin. Each
+    /// needs SOL for its claim's fee until then.
+    pub fn unsettled_s2l_locks(&self) -> Result<u64> {
+        let mut stmt = self.conn.prepare("SELECT record FROM records")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut count = 0;
+        for row in rows {
+            let record: SwapRecord = serde_json::from_str(&row?).map_err(|e| StoreError(e.to_string()))?;
+            if record.direction == Some(Direction::S2L) && record.locked_amount > 0 && !record.solana_claimed && !record.liquid_refunded {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     /// The operator's Liquid withdrawal signed and not yet seen confirmed. A retry sends these bytes, so a withdrawal whose

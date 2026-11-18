@@ -134,6 +134,10 @@ impl Handler {
     /// because reading them takes many chain calls, and a taker asking for a quote shouldn't wait on that. Nothing read yet, or
     /// a failed read, shows nothing available.
     fn available(&mut self) -> (u64, u64) {
+        // Paused by the operator: nothing to offer, so pages route orders elsewhere, while open swaps carry on.
+        if self.store.paused().unwrap_or(false) {
+            return (0, 0);
+        }
         let (solana, liquid) = self.balances.lock().map_or((0, 0), |b| *b);
         let committed = |direction| -> u64 {
             let open = self.store.open_swaps().unwrap_or_default();
@@ -243,6 +247,10 @@ impl Handler {
         if self.negotiations.len() >= self.cfg.max_negotiations {
             return None;
         }
+        if self.store.paused().unwrap_or(false) {
+            let body = Body::RfqReject(Reject { reason: "this maker is paused and takes no new swaps for now".into() });
+            return self.reply(sender, id, body, now).ok().map(|(event, _)| event);
+        }
         let rules = self.rules();
         // Say so, or the taker can only time out and can't tell a refusal from a maker that is gone.
         let Ok(quote) = rules::make_quote(&rules, &request, now) else {
@@ -268,6 +276,11 @@ impl Handler {
             return (answered_id == rumor_id).then(|| event.clone());
         }
         let checked = rules::check_accept(&acc, &n.quote, &n.quote_rumor_id, now).ok()?;
+        // A quote given before the pause doesn't start a swap after it.
+        if self.store.paused().unwrap_or(false) {
+            let body = Body::RfqReject(Reject { reason: "this maker is paused and takes no new swaps for now".into() });
+            return self.reply(sender, id, body, now).ok().map(|(e, _)| e);
+        }
         let (direction, quote) = (n.direction, n.quote.clone());
         match self.terms_for(sender, id, rumor_id, direction, &quote, checked, now) {
             Ok(event) => {

@@ -737,6 +737,16 @@ impl Signer {
     fn withdraw_solana(&self, asset: Asset, amount: Option<u64>) -> Outcome {
         let to = self.withdraw_solana.ok_or("no Solana withdrawal address is set in withdraw_to")?;
         let me = self.solana.pubkey();
+        // An S→L swap we have locked on Liquid is only ours to finish by claiming the taker's escrow, which costs SOL. Without
+        // it the deadline passes, the taker refunds, and keeps our Liquid coin too. So SOL for each stays, whatever is asked.
+        if asset == Asset::Gas {
+            let unsettled = self.ledger.unsettled_s2l_locks().map_err(|e| e.to_string())?;
+            let left = match amount {
+                Some(a) => self.sol.lamports(&me)?.saturating_sub(a),
+                None => 0,
+            };
+            sol_left_is_enough(unsettled, left)?;
+        }
         let tx = match (asset, amount) {
             (_, Some(0)) => return Err("nothing to withdraw".to_string().into()),
             (Asset::Usdt, _) if self.vault_owner.is_some() => {
@@ -1229,6 +1239,21 @@ impl Signer {
     }
 }
 
+/// SOL kept for each S→L swap locked on Liquid and not yet claimed: a claim costs far less, even at the priority fee's cap.
+const SOL_KEPT_PER_S2L_LOCK: u64 = 10_000_000;
+
+/// Whether a SOL withdrawal leaves enough for the S→L swaps still to claim on Solana.
+fn sol_left_is_enough(unsettled: u64, left: u64) -> Result<(), String> {
+    let keep = unsettled.saturating_mul(SOL_KEPT_PER_S2L_LOCK);
+    if unsettled > 0 && left < keep {
+        return Err(format!(
+            "refusing: {unsettled} S→L swaps are locked on Liquid and still need SOL to claim on Solana. Keep at least {:.3} SOL until they settle.",
+            keep as f64 / 1e9
+        ));
+    }
+    Ok(())
+}
+
 /// A withdrawal address must be confidential, so the amount stays hidden, and on this network, or the coins would be lost.
 fn withdrawal_address(s: &str) -> Result<Address, String> {
     let address =
@@ -1393,6 +1418,15 @@ mod tests {
         assert_eq!(cfg.socket, dir.join("run/signer.sock"));
         assert_eq!(cfg.ledger, dir.join("signer.db"));
         assert_eq!(cfg.keys_dir, dir.join("keys"));
+    }
+
+    #[test]
+    fn a_sol_withdrawal_leaves_enough_for_s2l_claims() {
+        assert!(sol_left_is_enough(0, 0).is_ok(), "with nothing to claim, all of it may go");
+        assert!(sol_left_is_enough(1, SOL_KEPT_PER_S2L_LOCK).is_ok());
+        assert!(sol_left_is_enough(1, SOL_KEPT_PER_S2L_LOCK - 1).is_err(), "less than a claim's reserve is refused");
+        assert!(sol_left_is_enough(2, SOL_KEPT_PER_S2L_LOCK).is_err(), "a reserve for each swap");
+        assert!(sol_left_is_enough(u64::MAX, u64::MAX - 1).is_err(), "and no overflow lets it through");
     }
 
     #[test]

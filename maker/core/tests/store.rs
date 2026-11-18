@@ -1,7 +1,8 @@
 //! Restart behaviour: nothing committed is forgotten, and a swap id is never accepted twice.
 
 use liq2sol_maker_core::engine::*;
-use liq2sol_maker_core::store::Store;
+use liq2sol_maker_core::policy::SwapRecord;
+use liq2sol_maker_core::store::{SignerLedger, Store};
 use liq2sol_maker_core::LockPoint;
 
 fn point(n: u8) -> [u8; 33] {
@@ -91,6 +92,44 @@ fn the_rollback_alarm_stays_until_cleared() {
     s.set_rollback(false).unwrap();
     assert!(!s.rollback().unwrap());
     assert_eq!(s.last_tip().unwrap(), None, "the old tip is forgotten, or the alarm would return at once");
+}
+
+#[test]
+fn a_pause_lasts_until_resumed_and_apart_from_the_rollback_alarm() {
+    let p = path("pause");
+    let s = Store::open(&p).unwrap();
+    assert!(!s.paused().unwrap());
+    s.set_paused(true).unwrap();
+    drop(s);
+    let s = Store::open(&p).unwrap();
+    assert!(s.paused().unwrap(), "a pause survives a restart");
+    assert!(!s.rollback().unwrap(), "and is its own flag");
+    s.set_paused(false).unwrap();
+    assert!(!s.paused().unwrap());
+}
+
+#[test]
+fn only_s2l_swaps_locked_on_liquid_and_unsettled_need_sol_kept() {
+    let p = path("unsettled").with_file_name("signer.db");
+    let ledger = SignerLedger::open(&p).unwrap();
+    let record = |direction, locked_amount, solana_claimed, liquid_refunded| SwapRecord {
+        direction: Some(direction),
+        locked_amount,
+        solana_claimed,
+        liquid_refunded,
+        ..SwapRecord::default()
+    };
+    let swaps = [
+        record(Direction::S2L, 10, false, false),
+        record(Direction::S2L, 10, true, false),
+        record(Direction::S2L, 10, false, true),
+        record(Direction::S2L, 0, false, false),
+        record(Direction::L2S, 10, false, false),
+    ];
+    for (n, r) in swaps.iter().enumerate() {
+        ledger.commit(&[n as u8; 32], r, None, None, &[]).unwrap();
+    }
+    assert_eq!(ledger.unsettled_s2l_locks().unwrap(), 1, "only the locked S→L swap not yet claimed nor refunded");
 }
 
 /// The engine works from what it read a moment ago, so it mustn't be able to undo a swap being dropped meanwhile.

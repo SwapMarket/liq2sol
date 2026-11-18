@@ -806,6 +806,9 @@ pub fn report(config_path: &Path) -> Result<(), String> {
     println!("{:<12} {:>12} {:>14.9}", "total", spent.0, spent.1 as f64 / 1e9);
     println!();
     println!("{} open, {} never started.", r.open, r.abandoned);
+    if store.paused().map_err(|e| e.to_string())? {
+        println!("Paused: no new swaps until `resume`.");
+    }
     println!();
     // From the running signer, which holds the keys. The rest of the report needs only the store.
     let balances =
@@ -841,7 +844,9 @@ pub fn withdraw(config_path: &Path, chain: &str, asset: &str, amount: &str) -> R
     let units = if amount.eq_ignore_ascii_case("all") { None } else { Some(parse_units(amount, decimals)?) };
     let open = Store::open(&cfg.db).map_err(|e| e.to_string())?.report().map_err(|e| e.to_string())?.open;
     if open > 0 {
-        return Err(format!("refusing: {open} swaps are still open, and they may need these funds. Try again once the report shows none open."));
+        return Err(format!(
+            "refusing: {open} swaps are still open, and they may need these funds. `pause` stops new ones, so try again once the report shows none open."
+        ));
     }
     let mut signer = Client::connect(&cfg.signer_socket)?;
     let call = Call::Withdraw { chain, asset, amount: units };
@@ -887,6 +892,21 @@ fn parse_units(text: &str, decimals: u32) -> Result<u64, String> {
     let whole: u64 = if whole.is_empty() { 0 } else { whole.parse().map_err(|_| format!("{text} is too large"))? };
     let frac: u64 = if frac.is_empty() { 0 } else { format!("{frac:0<width$}", width = decimals as usize).parse().map_err(|_| format!("{text} isn't an amount"))? };
     whole.checked_mul(scale).and_then(|w| w.checked_add(frac)).filter(|u| *u > 0).ok_or_else(|| format!("{text} is zero or too large"))
+}
+
+/// `liq2sol-maker pause|resume <config>`: stop taking new swaps, or start again. Open swaps carry on either way, so a pause
+/// lets them drain, such as before a withdrawal.
+pub fn set_paused(config_path: &Path, on: bool) -> Result<(), String> {
+    let cfg = load_config(config_path)?;
+    let store = Store::open(&cfg.db).map_err(|e| e.to_string())?;
+    store.set_paused(on).map_err(|e| e.to_string())?;
+    let open = store.report().map_err(|e| e.to_string())?.open;
+    if on {
+        println!("paused: no new swaps. {open} still open, which carry on; withdraw once none are. `resume` starts taking swaps again.");
+    } else {
+        println!("taking new swaps again.");
+    }
+    Ok(())
 }
 
 pub fn clear_rollback(config_path: &Path) -> Result<(), String> {

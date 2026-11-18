@@ -145,7 +145,9 @@ The operator rebalances by hand:
   gets back the side it lacks, and the spread is paid to themselves. Nothing leaves the host.
 - **By withdrawing** (since v0.16). `liq2sol-maker withdraw` sends USDt or gas, an amount or all of it, to `withdraw_to` in
   the signer's config, and only there: the request carries no destination, so whatever reaches the socket can at worst move
-  funds to the operator's own addresses. It refuses while any swap is open (`deploy/README.md`).
+  funds to the operator's own addresses. It refuses while any swap is open (`deploy/README.md`); `liq2sol-maker pause` stops new swaps
+  so open ones drain, and `resume` starts again. Whatever is asked, the signer keeps 0.01 SOL for each S→L swap locked on Liquid
+  and not yet claimed on Solana, since that claim is how the maker gets paid.
 - **By funding**, which needs nothing: send to the maker's addresses.
 
 The brief asks the daemon to rebalance. A narrow automated option could still swap through other liq2sol makers. Adding an

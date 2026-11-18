@@ -1971,6 +1971,26 @@ fn rfq_attacks(w: &mut World) -> Res<()> {
     let answer = too_big.answer(Duration::from_secs(10))?.ok_or("no answer to an amount over the limit")?;
     check(matches!(answer.envelope.body, Body::RfqReject(_)), "an amount over the limit is declined out loud")?;
 
+    // Paused by the operator: new requests are declined, saying so, and a quote given before the pause starts nothing after it.
+    let mut before = RawTaker::new(w)?;
+    before.send(request())?;
+    let (_, quote_id) = before.quote(Duration::from_secs(10))?;
+    w.store.set_paused(true).map_err(|e| e.to_string())?;
+    let mut during = RawTaker::new(w)?;
+    during.send(request())?;
+    let answer = during.answer(Duration::from_secs(10))?.ok_or("no answer while paused")?;
+    check(matches!(&answer.envelope.body, Body::RfqReject(r) if r.reason.contains("paused")), "a paused maker declines a request, saying so")?;
+    let (point, hash) = fresh_id()?;
+    before.send(accept_body(w, quote_id, point)?)?;
+    let answer = before.answer(Duration::from_secs(10))?.ok_or("no answer to an accept while paused")?;
+    check(matches!(&answer.envelope.body, Body::RfqReject(r) if r.reason.contains("paused")), "an earlier quote can't be accepted while paused")?;
+    check(!known(w, &hash)?, "and no swap was registered")?;
+    w.store.set_paused(false).map_err(|e| e.to_string())?;
+    let mut after = RawTaker::new(w)?;
+    after.send(request())?;
+    after.quote(Duration::from_secs(10))?;
+    println!("    ok: paused, the maker declines new swaps and earlier quotes, and quotes again once resumed");
+
     // A taker's message types from a taker are ignored.
     let mut odd = RawTaker::new(w)?;
     odd.send(Body::RfqQuote(msg::Quote { send: Units(1), receive: Units(1), quote_expiry: 0, taker_lock_window: 0 }))?;

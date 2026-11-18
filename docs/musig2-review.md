@@ -7,7 +7,7 @@ Every swap's Liquid leg is a 2-of-2 MuSig2 output, claimed with an adapter signa
 | Check | Result |
 |---|---|
 | The published crate is the tagged source | `src/` from crates.io is identical to the `v0.4.1` tag of `github.com/conduition/musig2`, apart from test vectors, which the crate leaves out. |
-| The crate's own tests, including the BIP327 and BIP340 vectors | All pass on both backends we use: `secp256k1` (libsecp256k1, the maker) and `k256` (the page). |
+| The crate's own tests, including the BIP327 and BIP340 vectors | All pass on libsecp256k1, which the maker and, since 2026-11-18, the page use. They passed on `k256` too while the page used it. |
 | Key aggregation and tweak | `SwapOutput::new` refuses unless the aggregated, tweaked key equals the taproot output key rust-elements derives by its own code. |
 | Nonce generation | `SecNonce::build` follows BIP327's NonceGen: the secret key masked with hashed randomness, then the public key, aggregate key and message. We pass 32 bytes from the OS, the key, the aggregate and the message. |
 | Nonce coefficient and final nonce | `b = H(R1, R2, Q, m)`, and `G` replaces a final nonce at infinity, as BIP327 says. |
@@ -37,7 +37,7 @@ They run in CI on both backends (`unit` in `.github/workflows/suites.yml`). The 
 
 ## What this leaves open
 
-- **Side channels.** The page signs with `k256`, whose big-integer code isn't constant time (RUSTSEC-2026-0387). It signs with a key made for one swap, in the user's own browser. The maker uses libsecp256k1.
+- **Side channels.** Everything signs with libsecp256k1 now. Until 2026-11-18 the page signed with `k256`, whose big-integer code isn't constant time (RUSTSEC-2026-0387), with a key made for one swap, in the user's own browser.
 - **The `secp` crate** underneath, by the same author, wraps both backends. Its arithmetic is covered by the vectors above, and was not read line by line.
 - **Protocol-level proofs.** MuSig2 with adaptors has published security arguments. This review checks that the code matches the construction, not the construction itself.
 - A dependency update needs this review again. The version is pinned with `=0.4.1`.

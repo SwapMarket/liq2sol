@@ -6,7 +6,9 @@ build=${1:?build id}
 mkdir -p /src && cd /src
 tar -xf -
 # Fixed paths and times, so nothing about the machine or the moment reaches the output.
-export CARGO_TARGET_DIR=/build/target SOURCE_DATE_EPOCH=0 RUSTFLAGS="" CARGO_INCREMENTAL=0
+export CARGO_TARGET_DIR=/build/target SOURCE_DATE_EPOCH=0 CARGO_INCREMENTAL=0
+# Unset, so the wasm32 settings in client/wasm/.cargo/config.toml apply.
+unset RUSTFLAGS
 cd client/wasm
 cargo build --locked --release --target wasm32-unknown-unknown >&2
 out=/src/client/site/wasm

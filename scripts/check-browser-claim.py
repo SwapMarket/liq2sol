@@ -2,7 +2,7 @@
 """Stage 1 of the confidential redesign: a real browser builds and signs a whole confidential claim, and a real node judges it.
 
 Needs a Chromium browser (`CHROME`, or Playwright's headless shell) and elementsd:  ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli scripts/check-browser-claim.py
-First: (cd contracts/swapkey-wasm && RUSTFLAGS="" wasm-pack build --target web --out-dir pkg)
+First: (cd contracts/swapkey-wasm && env -u RUSTFLAGS wasm-pack build --target web --out-dir pkg)
 """
 import glob, http.server, json, os, secrets, shutil, socketserver, subprocess, sys, tempfile, threading, time, urllib.parse
 

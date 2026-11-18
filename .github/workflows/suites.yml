@@ -143,8 +143,8 @@ jobs:
             programs/target/deploy/devnet_faucet.so
           if-no-files-found: error
 
-  # The unit tests of every Rust workspace the maker and the page are built from. They need no chain. The swap key's run on
-  # both signing backends: libsecp256k1, which the maker uses, and k256, which the page uses.
+  # The unit tests of every Rust workspace the maker and the page are built from. They need no chain. The maker and the page
+  # both sign with libsecp256k1.
   unit:
     runs-on: ubuntu-24.04
     env:
@@ -168,10 +168,8 @@ jobs:
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal
           rustup default "$RUST_VERSION"
-      - name: Swap key and adapter signatures, on libsecp256k1 and on k256
-        run: |
-          cargo test --locked -p liq2sol-swapkey
-          cargo test --locked -p liq2sol-swapkey --no-default-features --features k256
+      - name: Swap key and adapter signatures, on libsecp256k1
+        run: cargo test --locked -p liq2sol-swapkey
       - name: Chains and network choice
         working-directory: shared/chain
         run: cargo test --locked

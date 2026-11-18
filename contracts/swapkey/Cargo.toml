@@ -7,12 +7,11 @@ license = "MIT"
 publish = false
 
 [features]
-# libsecp256k1, constant time. For anything holding long-lived keys: the maker, signer and CLI.
+# libsecp256k1, constant time, everywhere: the maker, signer, CLI and the page. The page's wasm32 build needs two settings,
+# in client/wasm/.cargo/config.toml. k256 is no longer offered: k256 0.13 brought crypto-bigint 0.5, which isn't constant time
+# (RUSTSEC-2026-0387).
 default = ["secp256k1"]
 secp256k1 = ["musig2/secp256k1"]
-# Pure Rust, for the browser, where libsecp256k1 doesn't build here. k256 0.13 brings crypto-bigint 0.5, which isn't constant time
-# (RUSTSEC-2026-0387). The page signs only with a one-swap key, in the user's own browser.
-k256 = ["musig2/k256"]
 
 [dependencies]
 simplicityhl = "=0.9.0"

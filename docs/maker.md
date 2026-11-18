@@ -174,7 +174,7 @@ It ends with the wallets' balances, which have the final word: USDt and L-BTC on
 ## 7. Dependencies and operations
 
 - Dependencies are pinned and minimal. `.github/workflows/audit.yml` runs `cargo-audit` on every workspace, on each push and weekly, and `cargo-deny` for licences and sources (`deny.toml`). The only accepted advisories are in `programs/`, with their reasons in `programs/.cargo/audit.toml`.
-- MuSig2 signing uses libsecp256k1, not `k256`: `k256` 0.13 pulls in `crypto-bigint` 0.5, which has non-constant-time operations (RUSTSEC-2026-0387).
+- MuSig2 signing uses libsecp256k1, in the maker and the page alike, not `k256`: `k256` 0.13 pulls in `crypto-bigint` 0.5, which has non-constant-time operations (RUSTSEC-2026-0387).
 - `#![forbid(unsafe_code)]` in the daemon's own crates.
 - **Public APIs rate-limit.** On HTTP 429 the maker stops asking that host for its `Retry-After`, or else 15 s, doubling up to
   5 minutes while refusals continue. Other hosts carry on (`shared/chain/src/esplora.rs`).

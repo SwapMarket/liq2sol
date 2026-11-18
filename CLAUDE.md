@@ -38,8 +38,7 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 - **Releases** (`v0.xx`, latest v0.14) are built by `.github/workflows/release.yml` from signed tags, for Debian on x86_64 and aarch64.
   After each build, `scripts/sign-release.sh <tag>` adds `SHA256SUMS.asc`; makers' `deploy/update.sh` installs nothing unsigned.
   `deploy/install.sh` sets up a new maker.
-- **Next** (`docs/mainnet.md` section 2): a reproducible page build, Firefox and Safari, the page's `k256` backend, release hardening
-  and offline recovery (`docs/client.md` section 6).
+- **Next** (`docs/mainnet.md` section 2): Firefox and Safari, an outside audit, and the maker's signer as its own OS user.
 
 ## Design points that are easy to get wrong
 
@@ -91,7 +90,7 @@ Details and sources are in the docs. These are recorded because older assumption
 
 ## Environment notes
 
-- This shell sets `RUSTFLAGS=-C link-arg=-fuse-ld=lld`, which breaks wasm32 links: build wasm with `RUSTFLAGS=""`.
+- This shell sets `RUSTFLAGS=-C link-arg=-fuse-ld=lld`, which breaks wasm32 links: build the page's wasm with `env -u RUSTFLAGS` (as `client/build.sh` does), so `client/wasm/.cargo/config.toml`'s wasm32 settings for libsecp256k1 apply. An empty `RUSTFLAGS` would override them.
 - Tools present: Rust 1.97.1 with `wasm32-unknown-unknown`, clang 18 (wasm32 backend), wasm-pack, Node, Foundry.
 - Regtest tests: `ELEMENTSD=~/bin/elementsd ELEMENTS_CLI=~/bin/elements-cli cargo test -p liq2sol-swapkey --test regtest -- --ignored --nocapture`.
 - Solana program, from `programs/`: `cargo build-sbf --manifest-path solana-escrow/Cargo.toml && cargo test`. It is a separate

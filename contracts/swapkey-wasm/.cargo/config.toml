@@ -1,0 +1,10 @@
+# Only for this crate's browser build (wasm32), the same settings as the page's (client/wasm/.cargo/config.toml).
+[target.wasm32-unknown-unknown]
+# getrandom 0.3 (through musig2's rand) takes randomness from crypto.getRandomValues.
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+[env]
+# secp256k1-sys 0.11.0's stand-in string.h for wasm32 declares memset, memcpy and memcmp but not memmove, which its C code calls.
+# clang knows memmove's signature, and Rust's compiler-builtins provides it to wasm32 as it does the others, so only the missing
+# declaration is let through. Applies to the wasm32 C build only.
+CFLAGS_wasm32_unknown_unknown = "-Wno-error=implicit-function-declaration"

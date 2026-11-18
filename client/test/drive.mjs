@@ -244,10 +244,9 @@ async function checkLogs(page) {
   }
 }
 
-// Settings is in the main menu, which a phone keeps behind the burger.
+// Settings opens from the gear on the swap form or on a swap's card.
 async function openSettings(page) {
-  if (await page.locator('#burger').isVisible()) await page.locator('#burger').click();
-  await page.locator('#menu-settings').click();
+  await page.locator('.gear:visible').first().click();
 }
 
 async function checkSettingsLogs(page) {
@@ -496,7 +495,7 @@ async function l2s() {
   await page.locator('.one-endpoint').waitFor({ state: 'detached', timeout: 5000 });
   await setHelius('');
   await page.locator('.one-endpoint').waitFor({ timeout: 5000 });
-  step('Settings opens from the menu on the claim page, and a second endpoint set there takes effect at once');
+  step('Settings opens from the gear on the claim page, and a second endpoint set there takes effect at once');
   if (!(await page.locator('.claim').isDisabled())) throw new Error('Claim is on with one endpoint and no consent');
   if (await state(page) !== 'ready_claim') throw new Error('claimed with one endpoint and no consent');
   step('with one Solana endpoint and the box unticked, Claim stays off and the secret stays hidden');
@@ -913,6 +912,12 @@ async function cancelling() {
   await page.locator('#recovery-paste-go').click();
   await page.locator('.pay-address').waitFor({ timeout: 10000 });
   step('with no download or clipboard, the text can be copied by hand, and altered text is refused');
+
+  // Nothing changes while the swap waits for a payment, so a check redraws nothing: the card on screen stays the same element.
+  await page.evaluate(() => { window.cardBefore = document.querySelector('.swap-card'); });
+  await new Promise((r) => setTimeout(r, 16000));
+  if (!(await page.evaluate(() => window.cardBefore === document.querySelector('.swap-card') && window.cardBefore.isConnected))) throw new Error('a check with nothing new drew the card again');
+  step('a check with nothing new leaves the swap card as it is, so the page doesn\'t blink');
 
   await page.locator('#cancel-order').click();
   await page.locator('#cancel-keep').click();

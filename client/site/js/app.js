@@ -596,7 +596,11 @@ const form = {
 form.links = h('div', { class: 'send-links' },
   h('span', {}, 'Send Min:'), form.sendMin,
   h('span', {}, 'Max:'), form.sendMax);
+// Settings opens over whatever is showing, from the gear on the swap form or on a swap's card.
+const gear = () => h('button', { class: 'gear', type: 'button', title: 'Settings', 'aria-label': 'Settings', onclick: () => settingsDialog() }, '⚙');
+
 form.el = h('div', { class: 'card' },
+  gear(),
   h('h2', {}, 'Create Atomic Swap'),
   h('p', { class: 'sub' }, 'Trustless and confidential. No server holds anything.'),
   form.links,
@@ -870,6 +874,9 @@ function pasteBox(id, label, onText) {
     }, 'Use this text'));
 }
 
+// Each order's recovery codes, once shown.
+const shownCodes = new Map();
+
 // A phone: its browser may offer only the camera and photos for a file, so recovery can go through pictures too.
 const onPhone = () => matchMedia('(pointer: coarse)').matches;
 
@@ -938,19 +945,23 @@ function recoveryView(swaps) {
     },
   });
   const codes = h('div', { class: 'recovery-codes', hidden: true });
+  const orderKey = swaps[0].order ?? swaps[0].id;
   const showCodes = async () => {
     try {
+      if (!shownCodes.has(orderKey)) shownCodes.set(orderKey, await recoveryCodesView(swaps));
       codes.replaceChildren(
         h('p', { class: 'note' }, swaps.length > 1
           ? `Take a screenshot of each of these ${swaps.length} codes, then choose them all below, to confirm they read back.`
           : 'Take a screenshot of this code, then choose it below, to confirm it reads back.'),
         h('p', { class: 'warn' }, 'A screenshot can move your funds, like the file. Phones often back up photos to the cloud, so keep it out of shared albums, and delete it once the swap is done.'),
-        ...(await recoveryCodesView(swaps)));
+        ...shownCodes.get(orderKey));
       codes.hidden = false;
     } catch (err) {
       fail(err);
     }
   };
+  // Shown once, they stay shown when the card is drawn again, without being made again.
+  if (shownCodes.has(orderKey)) showCodes();
   // Shown only if the browser won't let the page copy, so the text can be selected by hand.
   const shown = h('textarea', { class: 'input recovery-paste', id: 'recovery-text', rows: 4, readOnly: true, spellcheck: false });
   const shownBox = h('div', { hidden: true }, h('p', { class: 'note' }, 'This browser won’t let the page copy. Select all of this text, and copy it yourself:'), shown);
@@ -1236,7 +1247,7 @@ function swapBody(s) {
         !secondSolana() && h('label', { class: 'check' },
           h('input', {
             type: 'checkbox', class: 'one-endpoint', checked: !!settings.allowOneEndpoint,
-            onchange: (e) => { settings.allowOneEndpoint = e.target.checked; saveSettings(settings); claim.disabled = !wallet || !consented(); },
+            onchange: (e) => { settings.allowOneEndpoint = e.target.checked; saveSettings(settings); render(); },
           }),
           'I accept that with only one Solana endpoint this page could be fooled into revealing the secret. (Add a free Helius.dev key in Settings to check two endpoints.)'),
         walletView(),
@@ -1278,6 +1289,7 @@ function swapBody(s) {
 function swapView(s) {
   const [from, to] = names[s.direction];
   return h('div', { class: 'card swap-card', 'data-state': s.state, 'data-id': s.id },
+    gear(),
     h('h2', {}, `${from} → ${to}`),
     h('dl', { class: 'facts' },
       h('div', {}, h('dt', {}, 'You send'), h('dd', {}, s.direction === 'L2S' ? `${show(BigInt(s.terms.liquid_amount) / 100n)} ${from}` : `${show(s.terms.solana_amount)} ${from}`)),
@@ -1290,10 +1302,13 @@ function swapView(s) {
 
 const orderOf = (id) => Object.values(loadSwaps()).filter((s) => (s.order ?? s.id) === id).sort((a, b) => a.id.localeCompare(b.id));
 
-function cancelCard(swaps) {
+function cancelCard(shown) {
+  // The swaps as they are when the button is pressed: a card that looks the same can stay on screen while they move on.
+  const current = () => shown.map((s) => loadSwaps()[s.id]).filter(Boolean);
   const cancel = async (dialog) => {
     dialog?.close();
     dialog?.remove();
+    const swaps = current();
     try {
       // All or none, so no part of an order is dropped while another turns out to be paid.
       const problems = await Promise.all(swaps.map((s) => engine.cancelProblem(s)));
@@ -1307,6 +1322,7 @@ function cancelCard(swaps) {
     }
   };
   const ask = () => {
+    const swaps = current();
     // Until the recovery file is checked, the page hasn't shown where to pay or lock, so there is nothing to warn about.
     if (swaps.every((s) => s.state === 'recovery')) return cancel(null);
     const dialog = h('dialog', {},
@@ -1673,10 +1689,10 @@ function render() {
   document.querySelectorAll('.tab[data-tab]').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
   const view = $('view');
   const below = $('below');
-  // A file picker or a half-typed address shouldn't vanish when the chain is polled.
-  const active = document.activeElement;
-  if (active && (active.classList?.contains('refund-to') || active.type === 'file' || active.tagName === 'TEXTAREA') && view.contains(active)) return;
   const showForm = tab !== 'rescue' && tab !== 'history' && tab !== 'faucet' && !(ui.openOrder && orderOf(ui.openOrder).length) && !ui.quote;
+  // A file picker or a half-typed address shouldn't vanish when the chain is polled. Going back to the form isn't a poll, so it goes ahead.
+  const active = document.activeElement;
+  if (!showForm && active && (active.classList?.contains('refund-to') || active.type === 'file' || active.tagName === 'TEXTAREA') && view.contains(active)) return;
   if (showForm) {
     if (!form.el.isConnected) {
       view.replaceChildren(form.el);
@@ -1685,19 +1701,47 @@ function render() {
     updateForm();
     return;
   }
-  view.replaceChildren();
   below.replaceChildren();
   if (tab === 'rescue') {
-    view.append(rescueView());
+    patch(view, [rescueView()]);
   } else if (tab === 'history') {
-    view.append(...[historyView()].flat());
+    patch(view, [historyView()].flat());
   } else if (tab === 'faucet' && NETWORK.faucet) {
-    view.append(faucetView());
+    patch(view, [faucetView()]);
   } else if (ui.openOrder && orderOf(ui.openOrder).length) {
-    view.append(...orderView(orderOf(ui.openOrder)).flat().filter(Boolean));
+    patch(view, orderView(orderOf(ui.openOrder)).flat().filter(Boolean));
   } else {
-    view.append(quoteView());
+    patch(view, [quoteView()]);
   }
+}
+
+// Puts the new view in place, keeping each part that looks exactly the same as what is shown. A swap's page is drawn again on every
+// check, and History every few seconds, and replacing it all made the page blink. A kept part keeps its old handlers, which act on
+// a swap by its id, or on what can't change any more.
+function patch(parent, nodes) {
+  const old = [...parent.childNodes];
+  nodes.forEach((node, i) => {
+    if (!old[i]) parent.append(node);
+    else if (!morph(old[i], node)) parent.replaceChild(node, old[i]);
+  });
+  for (const extra of old.slice(nodes.length)) extra.remove();
+}
+
+// Makes `old` look like `node` in place, down to the text, and says whether it could. Something a person acts on (a button, link
+// or field) is kept only if it is exactly the same, so its handler is never one for something else.
+const ACTED_ON = new Set(['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT', 'CANVAS', 'DIALOG']);
+function morph(old, node) {
+  if (old.isEqualNode(node)) return true;
+  if (old.nodeType !== node.nodeType || old.nodeName !== node.nodeName) return false;
+  if (old.nodeType === Node.TEXT_NODE) {
+    old.nodeValue = node.nodeValue;
+    return true;
+  }
+  if (old.nodeType !== Node.ELEMENT_NODE || ACTED_ON.has(old.nodeName)) return false;
+  for (const { name } of [...old.attributes]) if (!node.hasAttribute(name)) old.removeAttribute(name);
+  for (const { name, value } of [...node.attributes]) if (old.getAttribute(name) !== value) old.setAttribute(name, value);
+  patch(old, [...node.childNodes]);
+  return true;
 }
 
 // A swap waiting on a slow wallet holds up only itself, and ticks don't pile up behind it.
@@ -1734,11 +1778,6 @@ function navMenu() {
   };
   burger.addEventListener('click', () => set(!menu.classList.contains('open')));
   menu.addEventListener('click', (e) => { if (e.target.closest('a')) set(false); });
-  // Not a page of its own: it opens over whatever is showing.
-  $('menu-settings').addEventListener('click', (e) => {
-    e.preventDefault();
-    settingsDialog();
-  });
 }
 
 // A published page pins its WebAssembly's hash in index.html (client/stamp.mjs), and nothing runs on other bytes. A copy served

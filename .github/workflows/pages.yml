@@ -1,6 +1,6 @@
 # Builds the taker client from source, tests it, and publishes it to https://swapmarket.github.io/liq2sol/.
-# Actions are pinned to exact commits, and the site's JavaScript has no build step, so what is served is what is in this repo,
-# plus WebAssembly built here from the locked dependencies.
+# Actions are pinned to exact commits, and the site's JavaScript has no build step. The WebAssembly and the stamped index.html are
+# built in a pinned container, twice on two machines, so anyone can rebuild a published commit and get the same bytes.
 name: Deploy the client
 
 on:
@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - client/**
+      - scripts/build-page.sh
       - contracts/swapkey/**
       - shared/chain/**
       - shared/rfq/**
@@ -26,7 +27,6 @@ concurrency:
 
 env:
   RUST_VERSION: 1.99.1
-  WASM_PACK_VERSION: 0.13.1
 
 jobs:
   test:
@@ -59,55 +59,64 @@ jobs:
           cargo test --locked
           touch .native-tests-passed
 
+  # The page is built in a pinned container (client/reproducible), so anyone can rebuild a published commit and get the same bytes:
+  # scripts/check-page.sh compares the live site with a rebuild. The toolchain image is kept between runs, keyed by its recipe.
   build:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      # A page-only change reuses the WebAssembly from an earlier run of this workflow. The key covers everything that goes into it
-      # and the versions that build it, so any change to those builds it again.
-      - name: Reuse the WebAssembly if nothing in it changed
-        id: wasm
+      - name: Reuse the toolchain image
+        id: image
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: client/site/wasm
-          key: wasm-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ env.WASM_PACK_VERSION }}-${{ hashFiles('client/build.sh', 'client/wasm/**', 'contracts/swapkey/**', 'shared/chain/**', 'shared/rfq/**', 'programs/solana-escrow/**', 'programs/devnet-faucet/**') }}
-      - name: Reuse wasm-pack
-        id: wasm-pack
-        if: steps.wasm.outputs.cache-hit != 'true'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cargo/bin/wasm-pack
-          key: wasm-pack-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ env.WASM_PACK_VERSION }}
-      - name: Install the Rust toolchain
-        if: steps.wasm.outputs.cache-hit != 'true'
-        run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown
-          rustup default "$RUST_VERSION"
-          sudo apt-get update -q
-          sudo apt-get install -yq clang llvm
-      - name: Install wasm-pack
-        if: steps.wasm.outputs.cache-hit != 'true' && steps.wasm-pack.outputs.cache-hit != 'true'
-        run: cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
-      - name: Build the WebAssembly
-        if: steps.wasm.outputs.cache-hit != 'true'
-        run: client/build.sh
-      # Pins every script, the style sheet and the WebAssembly by hash in index.html, so that file alone is what to check.
-      - name: Stamp the build and pin every file by hash
-        run: node client/stamp.mjs client/site "${GITHUB_SHA::12}"
-      - name: Record what is being published
-        working-directory: client/site
-        run: |
-          find . -type f | sort | xargs sha256sum > /tmp/SHA256SUMS
-          cp /tmp/SHA256SUMS SHA256SUMS
-          cat SHA256SUMS
+          path: /tmp/page-builder.tar
+          key: page-builder-${{ hashFiles('client/reproducible/Dockerfile', 'client/reproducible/build-inside.sh', 'client/wasm/Cargo.lock') }}
+      - name: Load it
+        if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/page-builder.tar
+      - name: Build the page, as anyone can
+        run: scripts/build-page.sh "$GITHUB_SHA" site
+      - name: Keep the toolchain image
+        if: steps.image.outputs.cache-hit != 'true'
+        run: docker save -o /tmp/page-builder.tar $(docker images --format '{{.Repository}}:{{.Tag}}' liq2sol-page-builder)
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
-          path: client/site
+          path: site
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sums
+          path: site/SHA256SUMS
+
+  # The same build on another machine. Nothing is published unless the two agree byte for byte.
+  rebuild:
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Reuse the toolchain image
+        id: image
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /tmp/page-builder.tar
+          key: page-builder-${{ hashFiles('client/reproducible/Dockerfile', 'client/reproducible/build-inside.sh', 'client/wasm/Cargo.lock') }}
+      - name: Load it
+        if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/page-builder.tar
+      - name: Build again
+        run: scripts/build-page.sh "$GITHUB_SHA" site
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sums
+          path: first
+      - name: Compare
+        run: diff first/SHA256SUMS site/SHA256SUMS && echo "the two builds are identical"
 
   deploy:
-    needs: [test, build]
+    needs: [test, build, rebuild]
     runs-on: ubuntu-24.04
     permissions:
       pages: write

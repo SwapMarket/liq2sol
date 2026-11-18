@@ -96,7 +96,10 @@ async function walletConnectClient(projectId) {
 
 function walletConnectWallet(client, session) {
   const chain = NETWORK.walletConnectChain;
-  const address = session.namespaces.solana.accounts.find((a) => a.startsWith(`${chain}:`)).split(':')[2];
+  const account = session.namespaces.solana?.accounts?.find((a) => a.startsWith(`${chain}:`));
+  // Since 2.2x WalletConnect asks for every namespace as optional, so a wallet can approve without sharing a Solana account.
+  if (!account) throw new Error(`${session.peer?.metadata?.name ?? 'The wallet'} connected without sharing a Solana account on this network. ${NETWORK.walletConnectHint}`);
+  const address = account.split(':')[2];
   return {
     name: session.peer.metadata.name,
     address,
@@ -116,7 +119,7 @@ function walletConnectWallet(client, session) {
 export async function connectWalletConnect(projectId, showUri) {
   const client = await walletConnectClient(projectId);
   const { uri, approval } = await client.connect({
-    requiredNamespaces: { solana: { chains: [NETWORK.walletConnectChain], methods: ['solana_signTransaction'], events: [] } },
+    optionalNamespaces: { solana: { chains: [NETWORK.walletConnectChain], methods: ['solana_signTransaction'], events: [] } },
   });
   if (uri) showUri(uri);
   const session = await approval().catch((e) => {

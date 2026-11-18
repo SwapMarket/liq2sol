@@ -89,10 +89,10 @@ jobs:
           name: sums
           path: site/SHA256SUMS
 
-  # The same build on another machine. Nothing is published unless the two agree byte for byte.
+  # The same build on another machine, at the same time. Nothing is published unless the two agree byte for byte. Without a cached
+  # image it builds its own, so the two builds then share nothing but the source.
   rebuild:
     runs-on: ubuntu-24.04
-    needs: build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -108,15 +108,28 @@ jobs:
         run: docker load -i /tmp/page-builder.tar
       - name: Build again
         run: scripts/build-page.sh "$GITHUB_SHA" site
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sums-rebuild
+          path: site/SHA256SUMS
+
+  compare:
+    runs-on: ubuntu-24.04
+    needs: [build, rebuild]
+    steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sums
           path: first
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sums-rebuild
+          path: second
       - name: Compare
-        run: diff first/SHA256SUMS site/SHA256SUMS && echo "the two builds are identical"
+        run: diff first/SHA256SUMS second/SHA256SUMS && echo "the two builds are identical"
 
   deploy:
-    needs: [test, build, rebuild]
+    needs: [test, build, compare]
     runs-on: ubuntu-24.04
     permissions:
       pages: write

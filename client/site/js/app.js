@@ -70,7 +70,7 @@ const names = { L2S: ['L-USDt', 'SOL-USDT'], S2L: ['SOL-USDT', 'L-USDt'] };
 
 function coinPill(name) {
   const liquid = name.startsWith('L');
-  return h('span', { class: 'pill' }, h('span', { class: `coin ${liquid ? 'lq' : 'sol'}` }, liquid ? 'L' : 'S'), name);
+  return h('span', { class: 'pill' }, h('img', { class: 'coin', src: liquid ? 'liquid.svg' : 'solana.svg', alt: '', width: 26, height: 26 }), name);
 }
 
 function fail(e) {

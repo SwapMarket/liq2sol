@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<!-- Solana's three slanted bars, drawn here. -->
+<defs><linearGradient id="g" x1="4" y1="27" x2="29" y2="5" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#9945ff"/><stop offset="1" stop-color="#14f195"/></linearGradient></defs>
+<g fill="url(#g)">
+  <path d="M9 5h20l-5 6H4z"/>
+  <path d="M4 13h20l5 6H9z"/>
+  <path d="M9 21h20l-5 6H4z"/>
+</g>
+</svg>

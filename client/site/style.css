@@ -46,9 +46,8 @@ main { max-width: 960px; margin: 0 auto; padding: 14px 16px 16px; }
 .row { position: relative; border: 1px dashed var(--dim); border-radius: 12px; background: var(--deep); padding: 10px; margin-top: 8px; display: flex; align-items: center; gap: 10px; }
 .row.to { border-color: rgb(232 203 43 / 60%); }
 .pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--edge); border-radius: 999px; padding: 6px 14px 6px 8px; color: var(--text); font-weight: 600; white-space: nowrap; font-size: .92rem; }
-.coin { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: .78rem; font-weight: 800; color: #08131f; }
-.coin.lq { background: #46b3a3; }
-.coin.sol { background: #a98bf0; }
+/* The chain's icon: client/site/liquid.svg or solana.svg. */
+.coin { width: 26px; height: 26px; display: block; flex: none; }
 .amount { flex: 1; min-width: 0; text-align: right; background: none; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 1.7rem; padding: 0; }
 .amount::placeholder { color: var(--dim); }
 .amount[readonly] { color: var(--muted); }

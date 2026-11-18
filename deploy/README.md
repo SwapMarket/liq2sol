@@ -168,4 +168,4 @@ sudo bash update.sh
 
 `keys/` and both `.db` files. With `fresh_addresses` on, `signer.db` is also how the signer finds the coins at its newer addresses. Prices, limits and API endpoints are in `maker.json`. Restart both services after changing a config.
 
-Liquid's public APIs rate-limit by IP. If the logs show `status code 429`, change the endpoints in both configs.
+Liquid's public APIs rate-limit by IP. From v0.14 the maker waits when one refuses (`status code 429` in the logs) and tries again later. If it keeps happening, use your own Elements node, or change the endpoints in both configs.

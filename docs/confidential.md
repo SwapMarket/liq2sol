@@ -147,7 +147,7 @@ Devnet also found what the local validator had hidden by timing: a lock signed r
 
 - Firefox and Safari, and a real wallet paying a confidential address of this form.
 - A real restart for E14, as on `main`.
-- An audit of `musig2` 0.4.1's adaptor code.
+- An outside audit of `musig2` 0.4.1's adaptor code. The user chose the project's own review instead ([musig2-review.md](musig2-review.md)).
 - A taker's own refund from a daemon-run swap. The refund leaf is proven on testnet through the CLI.
 
 ## Open choices

@@ -1,6 +1,6 @@
 # RFQ over Nostr
 
-Status: Phase 1 design, for review.
+Status: built in `shared/rfq`, and in use on mainnet and the test networks.
 
 Nostr carries discovery and negotiation only. **No message here can move funds**: a forged, replayed or withheld message
 can at worst waste time. Safety comes from the client deriving every address and verifying every lock on-chain.

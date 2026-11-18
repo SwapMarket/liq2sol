@@ -3,6 +3,9 @@
 Checked on 2026-11-05 against current source and live endpoints. Each item links to where it was verified.
 Anything not confirmed from a primary source is marked **UNVERIFIED**.
 
+This is a dated record, kept as checked. Rows about the Simplicity HTLC (`contracts/liquid/src/htlc.simf`) describe the first design,
+which the confidential design replaced ([confidential.md](confidential.md)); their **UNVERIFIED** marks no longer block anything.
+
 ## 1. SimplicityHL
 
 | Item | Finding | Source |

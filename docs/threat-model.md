@@ -1,6 +1,6 @@
 # Threat model
 
-Status: Phase 1 design, for review. "Protocol" below refers to [protocol.md](protocol.md).
+Status: written for the Phase 1 design, and its mitigations are built. [confidential.md](confidential.md) and [mainnet.md](mainnet.md) record what changed since. "Protocol" below refers to [protocol.md](protocol.md).
 
 ## 1. Assets
 

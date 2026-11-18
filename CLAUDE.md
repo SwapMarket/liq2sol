@@ -24,18 +24,22 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
 - **Licences (user's decision, 2026-11-07):** `client/` is AGPL-3.0-only (`client/LICENSE`), because it copies code from `SwapMarket/swapmarket.github.io`, which is AGPL. Everything else is MIT (`LICENSE`), so makers can modify the daemon without publishing their changes. Never copy AGPL code outside `client/`.
 - End commit messages with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
-## Status (2026-11-07)
+## Status (2026-11-18)
 
 - **Phases 0 and 1: done.** `docs/assumptions.md` has every finding and the UNVERIFIED list. The user accepted D1–D10 (`docs/protocol.md`
   section 9) on 2026-11-05.
-- **Phase 2: built, on testnet.** The confidential design (`docs/confidential.md`) replaced the Simplicity HTLC: a MuSig2 taproot output,
+- **Phase 2: built.** The confidential design (`docs/confidential.md`) replaced the Simplicity HTLC: a MuSig2 taproot output,
   adapter-signed claims, blinded coins and a Simplicity refund leaf. Contracts, signer, daemon, RFQ over Nostr, CLI and the static client are
   all built and tested, including failure scenarios, signer attacks and mutation checks.
-- **Live:** the page at https://swapmarket.github.io/liq2sol/, deployed by `.github/workflows/pages.yml`, with a faucet tab on test builds.
-  The escrow is on devnet at `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU` (key `programs/.keys/escrow-confidential-program.json`).
-  Maker releases (`v0.0x`) are built by `.github/workflows/release.yml` from signed tags, for Debian on x86_64 and aarch64 (Raspberry Pi 4 or 5, 64-bit OS), and run on the user's VPS. After each build, `scripts/sign-release.sh <tag>` adds `SHA256SUMS.asc`; makers' `deploy/update.sh` installs nothing unsigned.
-- **Next:** real wallets on real phones, Firefox and Safari, then the mainnet blockers: maker priority fees, `cargo-deny` and `cargo-audit` in
-  CI, a `musig2` audit, release hardening and offline recovery (`docs/client.md` section 6, `docs/confidential.md` "Not yet covered").
+- **Live on mainnet since 2026-11-17** (`docs/mainnet.md`): the page at https://swapmarket.github.io/liq2sol/, deployed by
+  `.github/workflows/pages.yml`, opens on mainnet, with test networks and their faucet behind Settings. The devnet escrow is
+  `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU` (key `programs/.keys/escrow-confidential-program.json`). The user's mainnet maker
+  (`main`) runs on a Raspberry Pi 4 with its own Elements node; the test makers run on their VPS. The user has done several mainnet swaps.
+- **Releases** (`v0.xx`, latest v0.14) are built by `.github/workflows/release.yml` from signed tags, for Debian on x86_64 and aarch64.
+  After each build, `scripts/sign-release.sh <tag>` adds `SHA256SUMS.asc`; makers' `deploy/update.sh` installs nothing unsigned.
+  `deploy/install.sh` sets up a new maker.
+- **Next** (`docs/mainnet.md` section 2): a reproducible page build, Firefox and Safari, the page's `k256` backend, release hardening
+  and offline recovery (`docs/client.md` section 6).
 
 ## Design points that are easy to get wrong
 

@@ -1,6 +1,6 @@
 # Taker client
 
-Status: built in [client/](../client), and tested in a real browser against the real daemon. A fully static web app with no backend. Hosting and release hardening (section 6) are not done yet.
+Status: built in [client/](../client), tested in a real browser against the real daemon, and live at https://swapmarket.github.io/liq2sol/, on mainnet by default. A fully static web app with no backend. Of section 6, SRI and the CSP are in place; reproducible builds, signed page hashes and an IPFS mirror are not.
 
 ## 1. Architecture
 
@@ -122,6 +122,12 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **Before a quote.** L→S checks the wallet has SOL for each claim. S→L checks it has the SOL-USDT for the order and SOL for each lock. Both stop before asking any maker.
 
+**A quote's time.** "Price holds for" counts down each second to the first of an order's quotes to expire. At zero, Accept gives way to Get a new price, because the maker would refuse an accept after its quote's expiry (`shared/rfq/src/rules.rs`). The count uses the device's clock, so a press in the last second or two can still be refused.
+
+**A swap under way.** Each step shows how long it took, and the current one counts up. The addresses involved link to the explorers. While the maker is due to act, the page counts Liquid confirmations: "Your payment has 1/2 confirmations" on L→S, and "The maker locked on Liquid: 1/2 confirmations" on S→L. A wallet request shows a panel saying where to approve it.
+
+**Steps that wait.** Each swap's steps run one at a time (`withSwap`), so a request that never answered would hold back everything after it. Every chain request gives up after 30 s. A pressed Claim or Lock turns at once into what it is doing, and can't be pressed twice.
+
 **Restoring from a file.** The file is saved before a swap starts, so it can't say how far the swap got. A restored swap reads both chains first: payment history on Liquid, and the lock's account and history on Solana. Until that succeeds, no step that spends is offered. A browser that already knows the swap keeps its own record.
 
 **Early refund.** While waiting for the maker, the taker can ask it to refund now (`docs/protocol.md`). On L→S the maker first cancels, at once, and the page then asks for the same fee coin as a timed refund and an address. Its button stays off until the fee coin is confirmed. The page answers no claim offer while cancelling. On S→L it is one message, offered only until the maker's coin appears, and a finished or refunded S→L card offers the lock's rent back. A refusal or silence puts the page back where it was.
@@ -138,7 +144,7 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **Offers expire.** Each carries an expiry, set by the maker's `offer_ttl_secs`. The book drops an offer when it passes, on an open page as well as a new one, so a dead maker disappears at most that long after its last offer.
 
-**Cancelling.** While every part of an order is at the recovery, pay or lock step, Cancel replaces Back. It asks first, and reads the chains: a payment or a lock's history refuses it, and so does not being able to read them. A cancelled swap can be forgotten from History, or picked up by Rescue if a payment arrives after all.
+**Cancelling.** While every part of an order is at the recovery, pay or lock step, Cancel replaces Back. At the recovery step it cancels at once, because the page hasn't shown where to pay or lock yet. After that it asks first, and reads the chains: a payment or a lock's history refuses it, and so does not being able to read them. A cancelled swap can be forgotten from History, or picked up by Rescue if a payment arrives after all.
 
 **Recovery as text.** A wallet's browser usually can't save or pick files, so the recovery file can also be copied as text and pasted back, with the same checks. If the browser blocks copying, the text is shown to select by hand. Rescue takes pasted text too.
 

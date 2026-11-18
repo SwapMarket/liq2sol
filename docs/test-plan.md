@@ -1,6 +1,6 @@
 # Test plan
 
-Status: Phase 1 design, for review. No mainnet keys or funds at any stage. Tests use self-issued stand-in assets:
+Status: the suites below are built, and run on GitHub on every push that touches code (`.github/workflows/suites.yml`). No mainnet keys or funds at any stage. Tests use self-issued stand-in assets:
 an issued asset on Liquid testnet and an SPL mint on devnet.
 
 ## 1. Environments

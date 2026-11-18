@@ -1,6 +1,6 @@
 # Maker daemon
 
-Status: Phase 1 design, for review. Rust. Each maker runs its own; there is no central operator. This is the main
+Status: built in [maker/](../maker), released as signed binaries (`deploy/README.md`), and running on mainnet since 2026-11-17. Rust. Each maker runs its own; there is no central operator. This is the main
 attack surface because it holds hot keys, so it should do little and expose nothing.
 
 ## 1. Components
@@ -67,7 +67,7 @@ needed.
   why a maker should run its own node.
 - An optional remote signer or HSM can replace it later.
 - Keys and nonces are never logged. The swap log contains secrets only after they are public.
-- **Testnet and devnet only at this stage.** Mainnet key ceremony is out of scope until after audit.
+- **Mainnet keys are made on the maker's own machine** by `deploy/install.sh` or by hand (`deploy/README.md`), never by this project. A mainnet maker gets a new folder and new keys, never a test maker's, and `"network": "mainnet"` in both configs (`docs/mainnet.md` section 3).
 
 ## 3. Pre-lock checks
 
@@ -176,5 +176,10 @@ It ends with the wallets' balances, which have the final word: USDt and L-BTC on
 - Dependencies are pinned and minimal. `.github/workflows/audit.yml` runs `cargo-audit` on every workspace, on each push and weekly, and `cargo-deny` for licences and sources (`deny.toml`). The only accepted advisories are in `programs/`, with their reasons in `programs/.cargo/audit.toml`.
 - MuSig2 signing uses libsecp256k1, not `k256`: `k256` 0.13 pulls in `crypto-bigint` 0.5, which has non-constant-time operations (RUSTSEC-2026-0387).
 - `#![forbid(unsafe_code)]` in the daemon's own crates.
+- **Public APIs rate-limit.** On HTTP 429 the maker stops asking that host for its `Retry-After`, or else 15 s, doubling up to
+  5 minutes while refusals continue. Other hosts carry on (`shared/chain/src/esplora.rs`).
+- **Through its own node,** the maker finds coins with `scantxoutset`. To find what spent a coin, it asks `gettxout` first and,
+  if the coin is spent, reads only the blocks from the coin's own block up. Before v0.14 it walked down from the tip, which on
+  mainnet meant millions of blocks and a frozen maker.
 - Runs under systemd with sandboxing: `NoNewPrivileges`, `ProtectSystem=strict`, a private `/tmp`, syscall filter.
 - Parsers for Nostr, Esplora and RPC data are fuzzed, because all of it is attacker-reachable input.

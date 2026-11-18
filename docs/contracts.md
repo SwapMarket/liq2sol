@@ -1,6 +1,6 @@
 # Contracts
 
-Status: Phase 1 design, for review. Decisions `Dn` refer to [protocol.md](protocol.md) section 9.
+Status: built and deployed. The mainnet escrow, `DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b`, is final and can't change. Decisions `Dn` refer to [protocol.md](protocol.md) section 9.
 
 ## 1. Liquid swap output
 

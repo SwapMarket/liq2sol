@@ -191,6 +191,10 @@ jobs:
       - name: Quotes over Nostr
         working-directory: shared/rfq
         run: cargo test --locked
+      # The release runs these too; here they fail a push, before anything is tagged.
+      - name: The maker's rules, signer and daemon
+        working-directory: maker
+        run: cargo test --locked
 
   # Once, for every job: the binaries and test binaries keep the paths they were built at, which are the same on every runner.
   build:

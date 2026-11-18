@@ -876,7 +876,8 @@ fn broadcast_liquid(cfg: &Config, text: &str) -> Result<String, String> {
 fn parse_units(text: &str, decimals: u32) -> Result<u64, String> {
     let (whole, frac) = text.split_once('.').unwrap_or((text, ""));
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if !(digits(whole) || (whole.is_empty() && digits(frac))) || (!frac.is_empty() && !digits(frac)) {
+    // A point must have digits after it: "1." is more likely a slip than 1.
+    if !(digits(whole) || (whole.is_empty() && digits(frac))) || (text.contains('.') && !digits(frac)) {
         return Err(format!("{text} isn't an amount: use a number such as 12.5, or all"));
     }
     if frac.len() > decimals as usize {

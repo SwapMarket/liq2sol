@@ -282,7 +282,7 @@ jobs:
           echo "$HOME/solana-release/bin" >> "$GITHUB_PATH"
           echo "ELEMENTSD=$HOME/elements/bin/elementsd" >> "$GITHUB_ENV"
           echo "ELEMENTS_CLI=$HOME/elements/bin/elements-cli" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: matrix.browser != ''
         with:
           node-version: 24

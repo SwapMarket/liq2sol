@@ -161,7 +161,8 @@ const shots = mkdtempSync(path.join(env.SHOTS_DIR ?? tmpdir(), 'client-'));
 console.log(`    screenshots in ${shots}`);
 
 async function newPage(viewport = { width: 1200, height: 1000 }, beforeLoad = null, phone = false, who = { address: ownerAddress, key: privateKey }) {
-  const context = await browser.newContext({ acceptDownloads: true, viewport, permissions: ['clipboard-read', 'clipboard-write'], ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+  const { deviceScaleFactor, ...size } = viewport;
+  const context = await browser.newContext({ acceptDownloads: true, viewport: size, ...(deviceScaleFactor ? { deviceScaleFactor } : {}), permissions: ['clipboard-read', 'clipboard-write'], ...(phone ? { hasTouch: true, isMobile: true } : {}) });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -959,6 +960,7 @@ async function cancelling() {
 
   const early = await newPage();
   await upToRecovery(early, false);
+  if (await early.locator('#show-codes').count()) throw new Error('QR codes offered on a computer');
   await early.locator('#cancel-order').click();
   await early.locator('#cancel-order').waitFor({ state: 'detached', timeout: 10000 });
   if (await early.locator('#cancel-confirm').count()) throw new Error('asked to confirm a cancel before the address was shown');
@@ -967,6 +969,44 @@ async function cancelling() {
   await checkNoErrors(early);
   await early.context().close();
   step('a swap cancelled before its recovery file is checked goes without a warning');
+
+  // A phone whose browser offers only the camera and photos: the recovery goes out as QR codes, and a screenshot of one reads back,
+  // both to unlock the next step and in Rescue, on a browser that has never seen the swap.
+  // A coarse pointer, while test.coarse is set: the test wallet connects as on a computer first.
+  const asPhone = (page) => page.addInitScript(() => {
+    const real = window.matchMedia.bind(window);
+    window.matchMedia = (q) => real(q === '(pointer: coarse)' && localStorage.getItem('test.coarse') ? 'all' : q);
+  });
+  // A phone screen's pixel density, so the screenshot is as sharp as a real one.
+  const phoneScreen = { width: 400, height: 860, deviceScaleFactor: 3 };
+  const phoneish = await newPage(phoneScreen, asPhone);
+  await upToRecovery(phoneish, false);
+  await phoneish.evaluate(() => localStorage.setItem('test.coarse', '1'));
+  await phoneish.reload();
+  await phoneish.locator('#show-codes').click({ timeout: 30000 });
+  const code = phoneish.locator('.recovery-code canvas');
+  await code.waitFor({ timeout: 10000 });
+  await phoneish.screenshot({ path: path.join(shots, 'recovery-codes-phone.png'), fullPage: true });
+  const shot = path.join(shots, `recovery-code-${Date.now()}.png`);
+  await code.screenshot({ path: shot });
+  if (await phoneish.locator('.pay-address').count()) throw new Error('showing the codes unlocked the next step');
+  await phoneish.locator('#recovery-file').setInputFiles(shot);
+  await phoneish.locator('.pay-address').waitFor({ timeout: 15000 });
+  step('on a phone, the recovery shows as a QR code, and its screenshot unlocks the next step');
+  const elsewhere = await newPage(phoneScreen, (p) => asPhone(p).then(() => p.addInitScript(() => localStorage.setItem('test.coarse', '1'))));
+  await elsewhere.locator('#burger').click();
+  await elsewhere.locator('.tab[data-tab="rescue"]').click();
+  await elsewhere.locator('#rescue-file').setInputFiles(shot);
+  await elsewhere.locator('.swap-card[data-state="fund"]').waitFor({ timeout: 30000 });
+  const [here, there] = await Promise.all([phoneish, elsewhere].map((p) => p.locator('.pay-address').innerText()));
+  if (here !== there) throw new Error(`the screenshot restored another address: ${there} for ${here}`);
+  await elsewhere.locator('#burger').click();
+  await elsewhere.locator('.tab[data-tab="rescue"]').click();
+  await elsewhere.locator('#rescue-file').setInputFiles({ name: 'cat.png', mimeType: 'image/png', buffer: Buffer.from(await phoneish.screenshot({ clip: { x: 0, y: 0, width: 200, height: 120 } })) });
+  await elsewhere.locator('#banner:not([hidden])', { hasText: 'No QR code could be read' }).waitFor({ timeout: 10000 });
+  await checkNoErrors(phoneish);
+  await Promise.all([phoneish, elsewhere].map((p) => p.context().close()));
+  step('Rescue takes the screenshot on a browser that never saw the swap, derives the same address, and refuses a picture without a code');
 
   const lock = await newPage();
   await startSwap(lock, true, await walletCli('getnewaddress'));

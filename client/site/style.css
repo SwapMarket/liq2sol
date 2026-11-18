@@ -92,6 +92,11 @@ dl { margin: 0; }
 .addr { font: .82rem/1.35 ui-monospace, "Noto Mono", Menlo, monospace; overflow-wrap: anywhere; background: var(--deep); border: 1px dashed var(--dim); border-radius: 10px; padding: 8px 10px; margin-top: 8px; text-align: center; }
 .qr { display: flex; justify-content: center; margin-top: 10px; }
 .qr svg { width: 188px; height: 188px; background: #fff; border-radius: 10px; padding: 6px; }
+.recovery-codes figure { margin: 14px 0; }
+.recovery-codes figcaption { text-align: center; color: var(--muted); font-size: .85rem; margin-top: 4px; }
+/* Big and sharp, with its own white border, so a screenshot of it reads back. */
+.recovery-code { display: flex; justify-content: center; }
+.recovery-code canvas { display: block; }
 
 .swap-card, .back, #recovery-card { margin-bottom: 14px; }
 .back { background: none; border: 0; box-shadow: none; padding: 0; }

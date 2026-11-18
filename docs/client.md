@@ -193,6 +193,13 @@ is safely kept, so the UI says so plainly.
 
 **Rescue.** The page's Rescue tab picks a swap up from the file on any device, and refunds need no maker or relay. Addresses are derived again from the file, not read from it.
 
+**As pictures, on phones.** A wallet's browser often offers only the camera and photos for a file. On a phone the recovery card can
+show the recovery as QR codes instead, one per swap, to keep as screenshots: each holds that swap's recovery without what is derived
+again (addresses, scripts, escrow), deflated, about 1.2 KB, as raw bytes. Choosing the screenshots does the read-back check, and Rescue
+takes them too; either way they go through `readRecovery`, checksum included. The page reads them with jsQR 1.4.0, which can't decode
+QR version 23 (every other version from 15 to 40 reads), so the page never makes one. Codes are drawn in the screen's own pixels:
+a scaled image blurred the squares' edges, and screenshots of it didn't read.
+
 **If the site is gone:** each release carries the page, signed and reproducible, to serve on your own machine (`client/reproducible/OFFLINE.md`). Its Rescue tab works the same there. A single-file `recovery.html` that runs from disk, and a `liq2sol-recover` CLI, are not built.
 
 ## 5. L-BTC handling

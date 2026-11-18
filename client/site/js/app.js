@@ -7,7 +7,7 @@ import { Relays } from './relay.js';
 import { CANCELLABLE, Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
 import { captureConsole, clearLogs, log, logsCount, logsText } from './logs.js';
-import { makeRecovery, offerDownload, readRecovery } from './recovery.js';
+import { makeRecovery, offerDownload, readRecovery, readRecoveryFiles, recoveryCodes } from './recovery.js';
 import { vettedMaker } from './vetted.js';
 import { connectExtension, connectWalletConnect, extensionWallets, openInWallets, restoreWalletConnect } from './wallet.js';
 
@@ -870,9 +870,56 @@ function pasteBox(id, label, onText) {
     }, 'Use this text'));
 }
 
+// A phone: its browser may offer only the camera and photos for a file, so recovery can go through pictures too.
+const onPhone = () => matchMedia('(pointer: coarse)').matches;
+
+// A QR code drawn in the screen's own pixels, each square a whole number of them, with the 4-square white border readers need. A
+// screenshot of it is then exact on any phone; a scaled image or SVG blurred the squares' edges, and readers gave up.
+function codeCanvas(qr, label) {
+  const squares = qr.getModuleCount() + 8;
+  const dpr = window.devicePixelRatio || 1;
+  const wanted = Math.min(480, document.documentElement.clientWidth - 64) * dpr;
+  const unit = Math.max(2, Math.floor(wanted / squares));
+  const canvas = h('canvas', { role: 'img', 'aria-label': label });
+  canvas.width = canvas.height = unit * squares;
+  canvas.style.width = canvas.style.height = `${(unit * squares) / dpr}px`;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  g.fillStyle = '#000';
+  for (let r = 0; r < squares - 8; r++) for (let c = 0; c < squares - 8; c++) if (qr.isDark(r, c)) g.fillRect((c + 4) * unit, (r + 4) * unit, unit, unit);
+  return canvas;
+}
+
+// The recovery as QR codes, one per swap, to keep as screenshots. Their bytes go in as they are, not as text.
+async function recoveryCodesView(swaps) {
+  const { qrcode } = await import('../vendor/qrcode.js');
+  const codes = await recoveryCodes(swaps);
+  const usual = qrcode.stringToBytes;
+  try {
+    qrcode.stringToBytes = (s) => Array.from(s, (c) => c.charCodeAt(0));
+    return codes.map((bytes, i) => {
+      // jsQR, which reads them back, can't decode version 23 (109 squares a side), while it reads every other version: version 24
+      // instead. Measured over versions 15 to 40; phone scanners read 23 fine.
+      const make = (version) => {
+        const qr = qrcode(version, 'L');
+        qr.addData(String.fromCharCode(...bytes), 'Byte');
+        qr.make();
+        return qr;
+      };
+      let qr = make(0);
+      if (qr.getModuleCount() === 4 * 23 + 17) qr = make(24);
+      const box = h('div', { class: 'recovery-code' }, codeCanvas(qr, `Recovery QR code${codes.length > 1 ? ` ${i + 1} of ${codes.length}` : ''}`));
+      return h('figure', {}, box, codes.length > 1 && h('figcaption', {}, `Swap ${i + 1} of ${codes.length}`));
+    });
+  } finally {
+    qrcode.stringToBytes = usual;
+  }
+}
+
 function recoveryView(swaps) {
-  const accept = async (text) => {
-    const read = await readRecovery(text);
+  const accept = async (text) => acceptSwaps(await readRecovery(text));
+  const acceptSwaps = async (read) => {
     const has = (s) => read.some((r) => r.id === s.id && r.secrets.lock_secret === s.secrets.lock_secret);
     if (!swaps.every(has)) throw new Error('That recovery file is for a different swap.');
     await Promise.all(swaps.map((s) => withSwap(s.id, (fresh) => engine.set(fresh, { state: fresh.direction === 'L2S' ? 'fund' : 'lock', recovery_saved: true }))));
@@ -881,15 +928,29 @@ function recoveryView(swaps) {
     render();
   };
   const pick = h('input', {
-    type: 'file', accept: '.json,application/json', class: 'input', id: 'recovery-file',
+    type: 'file', accept: '.json,application/json,image/*', multiple: true, class: 'input', id: 'recovery-file',
     onchange: async (e) => {
       try {
-        await accept(await e.target.files[0].text());
+        await acceptSwaps(await readRecoveryFiles([...e.target.files]));
       } catch (err) {
         fail(err);
       }
     },
   });
+  const codes = h('div', { class: 'recovery-codes', hidden: true });
+  const showCodes = async () => {
+    try {
+      codes.replaceChildren(
+        h('p', { class: 'note' }, swaps.length > 1
+          ? `Take a screenshot of each of these ${swaps.length} codes, then choose them all below, to confirm they read back.`
+          : 'Take a screenshot of this code, then choose it below, to confirm it reads back.'),
+        h('p', { class: 'warn' }, 'A screenshot can move your funds, like the file. Phones often back up photos to the cloud, so keep it out of shared albums, and delete it once the swap is done.'),
+        ...(await recoveryCodesView(swaps)));
+      codes.hidden = false;
+    } catch (err) {
+      fail(err);
+    }
+  };
   // Shown only if the browser won't let the page copy, so the text can be selected by hand.
   const shown = h('textarea', { class: 'input recovery-paste', id: 'recovery-text', rows: 4, readOnly: true, spellcheck: false });
   const shownBox = h('div', { hidden: true }, h('p', { class: 'note' }, 'This browser won’t let the page copy. Select all of this text, and copy it yourself:'), shown);
@@ -909,7 +970,11 @@ function recoveryView(swaps) {
     h('h2', {}, 'Save your recovery file'),
     h('p', { class: 'warn' }, 'This file can move your funds, so treat it like money. It is the only way back if this browser loses its data. Never share it: no maker or support person ever needs it.'),
     h('button', { class: 'btn', id: 'download', onclick: async () => offerDownload(await makeRecovery(swaps), `liq2sol-recovery-${swaps[0].order ?? swaps[0].id.slice(0, 8)}.json`) }, swaps.length > 1 ? `Download the recovery file for all ${swaps.length} swaps` : 'Download recovery file'),
-    h('label', { class: 'field' }, h('span', {}, 'Then choose the file you saved, to confirm it is intact. The next step stays hidden until you do.'), pick),
+    onPhone() && h('button', { class: 'btn quiet', id: 'show-codes', onclick: showCodes }, swaps.length > 1 ? 'Or save it as pictures: show QR codes' : 'Or save it as a picture: show a QR code'),
+    codes,
+    h('label', { class: 'field' }, h('span', {}, onPhone()
+      ? 'Then choose the file, or the screenshots, to confirm they are intact. The next step stays hidden until you do.'
+      : 'Then choose the file you saved, to confirm it is intact. The next step stays hidden until you do.'), pick),
     h('h4', {}, 'Can’t download? A wallet’s browser usually can’t.'),
     h('p', { class: 'note' }, 'Copy the same thing as text, and save it somewhere private, such as a password manager. Other apps can sometimes read what you copy, so clear it from your clipboard afterwards.'),
     h('button', { class: 'btn quiet', id: 'copy-recovery', onclick: copy }, 'Copy it as text'),
@@ -1267,8 +1332,8 @@ function orderView(swaps) {
 
 // ---- Rescue and history ----
 function rescueView() {
-  const restore = async (text) => {
-    const swaps = await readRecovery(text);
+  const restore = async (text) => restoreSwaps(await readRecovery(text));
+  const restoreSwaps = async (swaps) => {
     const known = loadSwaps();
     for (const raw of swaps) {
       ui.openOrder = raw.order ?? raw.id;
@@ -1285,10 +1350,10 @@ function rescueView() {
     render();
   };
   const pick = h('input', {
-    type: 'file', accept: '.json,application/json', class: 'input', id: 'rescue-file',
+    type: 'file', accept: '.json,application/json,image/*', multiple: true, class: 'input', id: 'rescue-file',
     onchange: async (e) => {
       try {
-        await restore(await e.target.files[0].text());
+        await restoreSwaps(await readRecoveryFiles([...e.target.files]));
       } catch (err) {
         fail(err);
       }
@@ -1297,7 +1362,7 @@ function rescueView() {
   return h('div', { class: 'card' },
     h('h2', {}, 'Rescue'),
     h('p', { class: 'sub' }, 'Pick up a swap on any device, with its recovery file. No maker, relay or server is needed for a refund.'),
-    h('label', { class: 'field' }, h('span', {}, 'Your recovery file'), pick),
+    h('label', { class: 'field' }, h('span', {}, 'Your recovery file, or screenshots of its QR codes'), pick),
     pasteBox('rescue-paste', 'Or paste its text', restore));
 }
 

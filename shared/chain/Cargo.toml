@@ -16,7 +16,7 @@ native = ["liq2sol-swapkey/secp256k1", "dep:solana-escrow", "dep:anchor-lang", "
 
 [dependencies]
 liq2sol-swapkey = { path = "../../contracts/swapkey", default-features = false }
-rand = "0.8"
+rand = "0.10"
 simplicityhl = "=0.9.0"
 getrandom = "0.2"
 solana-escrow = { path = "../../programs/solana-escrow", features = ["no-entrypoint"], optional = true }

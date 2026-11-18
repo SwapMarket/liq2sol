@@ -32,7 +32,7 @@ jobs:
           done
           jq -e '.chain == "liquidtestnet"' info.json
           sudo -u elements test -r /var/lib/elements-ci/elements.conf
-          test "$(stat -c %a /var/lib/elements-ci/elements.conf)" = 600
-          grep -qx 'txindex=1' /var/lib/elements-ci/elements.conf
+          test "$(sudo stat -c %a /var/lib/elements-ci/elements.conf)" = 600
+          sudo grep -qx 'txindex=1' /var/lib/elements-ci/elements.conf
           if sudo deploy/install-elements.sh testnet --datadir /var/lib/elements-ci; then echo 'a second run went ahead'; exit 1; fi
           sudo systemctl stop elementsd.service

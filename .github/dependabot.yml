@@ -1,0 +1,51 @@
+# Dependency updates. Every PR runs the suites like any push, and each update is a supply-chain change to review before merging.
+# Version updates wait 14 days after a release, so a hijacked release has time to be caught; security updates don't wait.
+# programs/ gets no version updates: the mainnet escrow is immutable, and that workspace is pinned to Rust 1.95 and Anchor's
+# template lockfile, so bumps there change nothing deployed. Alerts still cover it.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /cli
+      - /client/wasm
+      - /maker
+      - /shared/chain
+      - /shared/rfq
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /client
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      tools:
+        update-types: [minor, patch]
+
+  # Actions are pinned by commit; updates move the pin and its version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        update-types: [minor, patch]
+
+  # The page's reproducible build image, pinned by digest. A new digest rebuilds the toolchain image and changes the page's bytes.
+  - package-ecosystem: docker
+    directory: /client/reproducible
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14

@@ -22,7 +22,7 @@ use liq2sol_chain::swap::{answer_claim, TakerClaim};
 use liq2sol_maker_core::engine::{Config as EngineConfig, Direction};
 use liq2sol_maker_core::policy::{Limits, Refusal};
 use liq2sol_maker_core::LockPoint;
-use liq2sol_signer::{unhex, Call, Client, Config, LiquidSource, Reply, SwapTerms, MAX_REQUEST_BYTES};
+use liq2sol_signer::{unhex, Asset, Call, Chain, Client, Config, LiquidSource, Reply, SwapTerms, WithdrawTo, MAX_REQUEST_BYTES};
 use liq2sol_swapkey::{
     nonce_bytes, nonce_from, point_of, secret_from_solana, share_bytes, share_from, solana_point_of, solana_value,
     Nonce,
@@ -208,6 +208,7 @@ fn the_signer_process_resists_a_compromised_engine() {
         priority: Default::default(),
         close_after_slots: 400_000,
         fresh_addresses: false,
+        withdraw_to: WithdrawTo::default(),
     };
     let config_path = root.join("signer.json");
     std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
@@ -291,6 +292,7 @@ fn the_signer_process_resists_a_compromised_engine() {
     drop(client);
     drop(signer);
     vault_cap(&world, &config, &root, &private);
+    withdrawals(&world, &config, &root, &private);
 
     // Stop the node before deleting its directory.
     drop(world);
@@ -987,6 +989,118 @@ fn vault_cap(world: &World, config: &Config, root: &Path, private: &Path) {
     };
     assert!(world.sol.send(&[withdraw], &operator, &[]).is_err(), "the hot key can't withdraw");
     println!("    ok: the hot key can't withdraw from the vault");
+}
+
+/// The operator's withdrawals: only ever to `withdraw_to`, whatever the request says, and all of it when asked. Its own keys, so
+/// "all" empties a throwaway wallet rather than the maker's devnet one.
+fn withdrawals(world: &World, config: &Config, root: &Path, private: &Path) {
+    println!("\n==> Withdrawals go only where the config says");
+    let operator = read_keypair_file(config.keys_dir.join("solana.json")).unwrap();
+    let keys = root.join("withdraw-keys");
+    std::fs::create_dir_all(&keys).unwrap();
+    let hot = Keypair::new();
+    solana_sdk::signature::write_keypair_file(&hot, keys.join("solana.json")).unwrap();
+    world.sol.send(&[sol::sol_transfer_ix(&operator.pubkey(), &hot.pubkey(), 20_000_000)], &operator, &[]).unwrap();
+    world.sol.send(&sol::usdt_transfer_ixs(&operator.pubkey(), &hot.pubkey(), 3 * SOL_AMOUNT), &operator, &[]).unwrap();
+
+    let cold_liquid = Wallet {
+        key: keypair_from(&random32().unwrap()).unwrap(),
+        blinding: SecretKey::from_slice(&random32().unwrap()).unwrap(),
+    };
+    let cold_solana = Keypair::new().pubkey();
+    let base = Config { keys_dir: keys.clone(), ..config.clone() };
+    let start = |name: &str, to: WithdrawTo| {
+        let cfg = Config {
+            socket: private.join(format!("{name}.sock")),
+            ledger: root.join(format!("{name}.db")),
+            withdraw_to: to,
+            ..base.clone()
+        };
+        let path = root.join(format!("{name}.json"));
+        std::fs::write(&path, serde_json::to_string(&cfg).unwrap()).unwrap();
+        (path, cfg.socket)
+    };
+    let refuses_to_start = |name: &str, to: WithdrawTo, why: &str| {
+        let (path, _) = start(name, to);
+        let out = Command::new(env!("CARGO_BIN_EXE_liq2sol-signer")).arg(&path).output().unwrap();
+        assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains(why), "{name}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    let plain = cold_liquid.address().to_unconfidential().to_string();
+    refuses_to_start("w-plain", WithdrawTo { liquid: Some(plain), solana: None }, "must be a confidential address");
+    // The same key's address in mainnet's format: valid, confidential, and for another network.
+    let mut mainnet = cold_liquid.address();
+    mainnet.params = &AddressParams::LIQUID;
+    refuses_to_start("w-other", WithdrawTo { liquid: Some(mainnet.to_string()), solana: None }, "another network");
+    println!("    ok: refuses to start with an unblinded or another network's Liquid address");
+
+    let (path, socket) = start("w-none", WithdrawTo::default());
+    let none = SignerProcess::start(&path, &socket);
+    let mut client = Client::connect(&socket).unwrap();
+    for chain in [Chain::Liquid, Chain::Solana] {
+        let reply = client.call(&Call::Withdraw { chain, asset: Asset::Usdt, amount: None }).unwrap();
+        assert!(matches!(&reply, Reply::Failed(e) if e.contains("withdrawal address")), "{chain:?}: {reply:?}");
+    }
+    drop(client);
+    drop(none);
+    println!("    ok: without withdraw_to, nothing can be withdrawn");
+
+    let to = WithdrawTo { liquid: Some(cold_liquid.address().to_string()), solana: Some(cold_solana.to_string()) };
+    let (path, socket) = start("w", to);
+    let _signer = SignerProcess::start(&path, &socket);
+    let mut client = Client::connect(&socket).unwrap();
+    let Reply::Identity { liquid_address, .. } = client.call(&Call::Identity).unwrap() else { panic!() };
+    world.node.fund(&liquid_address, 300_000, "bitcoin");
+    world.node.fund(&liquid_address, 10 * LIQ_AMOUNT, &config.regtest_assets.as_ref().unwrap().0);
+    world.node.mine(1);
+    world.top_up(&mut client);
+    let cold_coins = || world.chain.secret_coins_at(&[(cold_liquid.address(), cold_liquid.blinding)]).unwrap();
+    let held = |asset| cold_coins().iter().filter(|c| c.secrets.asset == asset).map(|c| c.secrets.value).sum::<u64>();
+
+    let first = client.call(&Call::Withdraw { chain: Chain::Liquid, asset: Asset::Usdt, amount: Some(3 * LIQ_AMOUNT) }).unwrap();
+    let Reply::Liquid(hex) = first else { panic!("{first:?}") };
+    let again = client.call(&Call::Withdraw { chain: Chain::Liquid, asset: Asset::Usdt, amount: None }).unwrap();
+    assert_eq!(again, Reply::EarlierWithdrawal(hex.clone()), "until it confirms, the same bytes, and nothing new signed");
+    world.chain.broadcast(&deserialize(&unhex(&hex).unwrap()).unwrap()).unwrap();
+    world.node.mine(1);
+    assert_eq!(held(usdt()), 3 * LIQ_AMOUNT);
+    println!("    ok: a Liquid USDt withdrawal pays the configured address, and a retry resends it rather than paying twice");
+
+    // A caller naming its own destination: the field isn't part of the request, so it changes nothing.
+    let thief = Wallet {
+        key: keypair_from(&random32().unwrap()).unwrap(),
+        blinding: SecretKey::from_slice(&random32().unwrap()).unwrap(),
+    };
+    let sneaky = format!(r#"{{"Withdraw":{{"chain":"Liquid","asset":"Usdt","amount":null,"to":"{}"}}}}"#, thief.address());
+    let line = client.call_raw(format!("{sneaky}\n").as_bytes()).unwrap();
+    let Reply::Liquid(hex) = serde_json::from_str(&line).unwrap() else { panic!("{line}") };
+    world.chain.broadcast(&deserialize(&unhex(&hex).unwrap()).unwrap()).unwrap();
+    world.node.mine(1);
+    assert_eq!(held(usdt()), 10 * LIQ_AMOUNT, "all of it reached the configured address");
+    assert!(world.chain.secret_coins_at(&[(thief.address(), thief.blinding)]).unwrap().is_empty(), "and none the named one");
+    println!("    ok: all of the USDt went to the configured address, though the request named another");
+
+    let reply = client.call(&Call::Withdraw { chain: Chain::Liquid, asset: Asset::Gas, amount: None }).unwrap();
+    let Reply::Liquid(hex) = reply else { panic!("{reply:?}") };
+    world.chain.broadcast(&deserialize(&unhex(&hex).unwrap()).unwrap()).unwrap();
+    world.node.mine(1);
+    let Reply::Balances { liquid_usdt, liquid_lbtc_sats, free_fee_coins, .. } = client.call(&Call::Balances).unwrap() else { panic!() };
+    assert_eq!((liquid_usdt, liquid_lbtc_sats, free_fee_coins), (0, 0, 0), "nothing is left, the free fee coins included");
+    assert!(held(lbtc()) > 250_000, "the L-BTC arrived, less fees");
+    println!("    ok: all the L-BTC went too, the free fee coins included, and the wallet is empty");
+
+    let mut solana_sent = |asset, amount| {
+        let reply = client.call(&Call::Withdraw { chain: Chain::Solana, asset, amount }).unwrap();
+        world.send_solana(&solana_tx(reply)).unwrap();
+    };
+    solana_sent(Asset::Usdt, Some(SOL_AMOUNT));
+    assert_eq!(world.sol.token_balance(&sol::ata(&cold_solana)).unwrap(), SOL_AMOUNT);
+    solana_sent(Asset::Usdt, None);
+    assert_eq!(world.sol.token_balance(&sol::ata(&cold_solana)).unwrap(), 3 * SOL_AMOUNT);
+    assert_eq!(world.sol.token_balance(&sol::ata(&hot.pubkey())).unwrap(), 0);
+    solana_sent(Asset::Gas, None);
+    assert_eq!(world.sol.lamports(&hot.pubkey()).unwrap(), 0, "every lamport went, less the exact fee");
+    assert!(world.sol.lamports(&cold_solana).unwrap() > 15_000_000);
+    println!("    ok: Solana USDT, some then all, and then all the SOL, went to the configured address");
 }
 
 /// Collect on Solana, then try to take the Liquid coin back too.

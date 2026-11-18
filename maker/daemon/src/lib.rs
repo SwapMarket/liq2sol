@@ -823,6 +823,71 @@ pub fn report(config_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `liq2sol-maker withdraw <config> <liquid|solana> <usdt|gas> <amount|all>`: the operator moves funds out, always to
+/// `withdraw_to` in the signer's config. Refused while any swap is open: taking gas could leave the maker unable to claim, and
+/// taking USDT could fail a lock it has promised.
+pub fn withdraw(config_path: &Path, chain: &str, asset: &str, amount: &str) -> Result<(), String> {
+    let cfg = load_config(config_path)?;
+    let (chain, decimals_usdt, decimals_gas, gas_name) = match chain {
+        "liquid" => (liq2sol_signer::Chain::Liquid, 8, 8, "L-BTC"),
+        "solana" => (liq2sol_signer::Chain::Solana, 6, 9, "SOL"),
+        _ => return Err("the chain is liquid or solana".into()),
+    };
+    let (asset, decimals, name) = match asset {
+        "usdt" => (liq2sol_signer::Asset::Usdt, decimals_usdt, "USDT"),
+        "gas" => (liq2sol_signer::Asset::Gas, decimals_gas, gas_name),
+        _ => return Err("the asset is usdt or gas".into()),
+    };
+    let units = if amount.eq_ignore_ascii_case("all") { None } else { Some(parse_units(amount, decimals)?) };
+    let open = Store::open(&cfg.db).map_err(|e| e.to_string())?.report().map_err(|e| e.to_string())?.open;
+    if open > 0 {
+        return Err(format!("refusing: {open} swaps are still open, and they may need these funds. Try again once the report shows none open."));
+    }
+    let mut signer = Client::connect(&cfg.signer_socket)?;
+    let call = Call::Withdraw { chain, asset, amount: units };
+    let what = units.map_or_else(|| format!("all the {name}"), |_| format!("{amount} {name}"));
+    match signer.call(&call)? {
+        Reply::Liquid(text) => println!("sent {what}: Liquid transaction {}", broadcast_liquid(&cfg, &text)?),
+        Reply::EarlierWithdrawal(text) => println!(
+            "an earlier Liquid withdrawal, {}, isn't confirmed yet, so it was sent again and nothing new was signed. Ask again once it confirms.",
+            broadcast_liquid(&cfg, &text)?
+        ),
+        Reply::Solana(text) => {
+            let tx: SolanaTx = bincode::deserialize(&unhex(&text)?).map_err(|e| e.to_string())?;
+            println!("sent {what}: Solana transaction {}", Sol::new(&cfg.solana_rpc).send_signed(&tx)?);
+        }
+        Reply::Failed(e) => return Err(format!("the signer didn't withdraw: {e}")),
+        other => return Err(format!("the signer didn't withdraw: {other:?}")),
+    }
+    Ok(())
+}
+
+fn broadcast_liquid(cfg: &Config, text: &str) -> Result<String, String> {
+    let tx: LiquidTx = deserialize(&unhex(text)?).map_err(|e| e.to_string())?;
+    match source(&cfg.liquid).broadcast(&tx) {
+        Ok(_) => {}
+        Err(e) if e.contains("already") || e.contains("txn-mempool-conflict") => {}
+        Err(e) => return Err(e),
+    }
+    Ok(tx.txid().to_string())
+}
+
+/// A decimal amount in whole units, such as 12.5, in base units. More decimals than the asset has are refused, not rounded.
+fn parse_units(text: &str, decimals: u32) -> Result<u64, String> {
+    let (whole, frac) = text.split_once('.').unwrap_or((text, ""));
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !(digits(whole) || (whole.is_empty() && digits(frac))) || (!frac.is_empty() && !digits(frac)) {
+        return Err(format!("{text} isn't an amount: use a number such as 12.5, or all"));
+    }
+    if frac.len() > decimals as usize {
+        return Err(format!("{text} has more than {decimals} decimals"));
+    }
+    let scale = 10u64.pow(decimals);
+    let whole: u64 = if whole.is_empty() { 0 } else { whole.parse().map_err(|_| format!("{text} is too large"))? };
+    let frac: u64 = if frac.is_empty() { 0 } else { format!("{frac:0<width$}", width = decimals as usize).parse().map_err(|_| format!("{text} isn't an amount"))? };
+    whole.checked_mul(scale).and_then(|w| w.checked_add(frac)).filter(|u| *u > 0).ok_or_else(|| format!("{text} is zero or too large"))
+}
+
 pub fn clear_rollback(config_path: &Path) -> Result<(), String> {
     let cfg = load_config(config_path)?;
     let store = Store::open(&cfg.db).map_err(|e| e.to_string())?;
@@ -876,6 +941,18 @@ pub fn run(config_path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn withdrawal_amounts_are_read_exactly() {
+        assert_eq!(parse_units("12.5", 6), Ok(12_500_000));
+        assert_eq!(parse_units("0.00000001", 8), Ok(1));
+        assert_eq!(parse_units(".5", 9), Ok(500_000_000));
+        assert_eq!(parse_units("3", 8), Ok(300_000_000));
+        assert!(parse_units("0.0000001", 6).is_err(), "more decimals than the asset has is refused, not rounded");
+        for bad in ["", ".", "1.", "-1", "1e3", "1,5", "abc", "0", "0.000", "99999999999999999999"] {
+            assert!(parse_units(bad, 6).is_err(), "{bad:?} is refused");
+        }
+    }
 
     fn try_loaded(folder: &str, edit: impl Fn(&str) -> String) -> Result<Config, String> {
         let dir = std::env::temp_dir().join(format!("liq2sol-config-{}-{folder}", std::process::id()));

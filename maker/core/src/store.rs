@@ -416,6 +416,7 @@ impl SignerLedger {
              CREATE TABLE IF NOT EXISTS fee_coins (swap BLOB PRIMARY KEY, outpoint TEXT NOT NULL UNIQUE);
              CREATE TABLE IF NOT EXISTS used_coins (outpoint TEXT PRIMARY KEY);
              CREATE TABLE IF NOT EXISTS pending_top_up (id INTEGER PRIMARY KEY CHECK (id = 1), raw_tx BLOB NOT NULL);
+             CREATE TABLE IF NOT EXISTS pending_withdrawal (id INTEGER PRIMARY KEY CHECK (id = 1), raw_tx BLOB NOT NULL);
              CREATE TABLE IF NOT EXISTS addresses (idx INTEGER PRIMARY KEY, swap BLOB UNIQUE);",
         )?;
         Ok(Self { conn })
@@ -527,6 +528,27 @@ impl SignerLedger {
 
     pub fn clear_pending_top_up(&self) -> Result<()> {
         self.conn.execute("DELETE FROM pending_top_up", [])?;
+        Ok(())
+    }
+
+    /// The operator's Liquid withdrawal signed and not yet seen confirmed. A retry sends these bytes, so a withdrawal whose
+    /// broadcast failed is sent again rather than paid twice, and its coins stay marked meanwhile.
+    pub fn pending_withdrawal(&self) -> Result<Option<Vec<u8>>> {
+        Ok(self.conn.query_row("SELECT raw_tx FROM pending_withdrawal WHERE id = 1", [], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_pending_withdrawal(&self, raw_tx: &[u8], spends: &[String]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for outpoint in spends {
+            tx.execute("INSERT OR IGNORE INTO used_coins (outpoint) VALUES (?1)", params![outpoint])?;
+        }
+        tx.execute("INSERT OR REPLACE INTO pending_withdrawal (id, raw_tx) VALUES (1, ?1)", params![raw_tx])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn clear_pending_withdrawal(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM pending_withdrawal", [])?;
         Ok(())
     }
 

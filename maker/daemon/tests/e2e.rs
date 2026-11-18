@@ -1083,6 +1083,7 @@ fn build_world(root: &Path) -> World {
         close_after_slots: 30,
         // Every scenario runs with fresh addresses, as a careful operator with its own node would.
         fresh_addresses: true,
+        withdraw_to: Default::default(),
     };
     let signer_path = root.join("signer.json");
     std::fs::write(&signer_path, serde_json::to_string(&signer_cfg).unwrap()).unwrap();

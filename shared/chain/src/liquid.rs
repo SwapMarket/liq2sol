@@ -224,6 +224,21 @@ fn pay_fee(inputs: usize, blinded_outputs: usize) -> u64 {
     (60 + 60 * inputs as u64 + 80 * blinded_outputs as u64) / 5
 }
 
+/// All the L-BTC in these coins, less the fee, to `to`, which also takes any change, so nothing is left behind. The fee is
+/// sized as `pay_from_coins_with` sizes it: one payment and room for one change output.
+pub fn sweep_lbtc_with(
+    coins: &[SecretCoin],
+    to: &Address,
+    key_for: impl Fn(&simplicityhl::elements::Script) -> Option<Keypair>,
+    genesis: BlockHash,
+) -> Res<Transaction> {
+    let lbtc_coins: Vec<SecretCoin> = coins.iter().filter(|c| c.secrets.asset == lbtc()).cloned().collect();
+    let total = lbtc_coins.iter().try_fold(0u64, |sum, c| sum.checked_add(c.secrets.value)).ok_or("amount overflow")?;
+    let fee = pay_fee(lbtc_coins.len(), 2);
+    let amount = total.checked_sub(fee).filter(|a| *a > 0).ok_or_else(|| format!("{total} sats of L-BTC don't cover the {fee}-sat fee"))?;
+    pay_from_coins_with(&lbtc_coins, to, key_for, vec![Payment { asset: lbtc(), amount, address: to.clone() }], genesis)
+}
+
 /// A signed payment from these coins, which the caller chose, such as a wallet's coins without those promised to a swap. Every
 /// output but the L-BTC fee is blinded.
 pub fn pay_from_coins(

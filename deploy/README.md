@@ -164,6 +164,30 @@ sudo -u liq2sol /opt/liq2sol/liq2sol-maker report /var/lib/liq2sol/first/maker.j
 
 It prints, per day and direction, swaps, volume and USDT spread earned, then L-BTC and SOL spent, then what the wallets hold now. It is safe while the maker runs. An escrow's rent counts as spent until closing it brings it back. Costs are recorded when a transaction is sent, so one that never lands still counts. Treat them as close estimates, and the balances, which come from the running signer, as the final word.
 
+## Withdraw
+
+The maker can send its funds out, but only to addresses you set in `signer.json`, so nothing that reaches the signer can choose
+where they go. Use your own wallets, ideally cold ones: a confidential Liquid address (`lq1…`, or `tlq1…` on testnet) and a Solana
+address.
+
+```json
+"withdraw_to": { "liquid": "lq1qq…", "solana": "YourSolanaAddress…" }
+```
+
+Restart the signer after setting them. The signer refuses to start with an unconfidential address or one for another network.
+Then, as the user the services run as:
+
+```sh
+sudo -u liq2sol /opt/liq2sol/liq2sol-maker withdraw /var/lib/liq2sol/main/maker.json liquid usdt 50
+sudo -u liq2sol /opt/liq2sol/liq2sol-maker withdraw /var/lib/liq2sol/main/maker.json solana gas all
+```
+
+The chain is `liquid` or `solana`, the asset `usdt` or `gas` (L-BTC or SOL), and the amount is in whole units, such as `12.5`,
+or `all`. It refuses while any swap is open, since those may need the funds: try again once `report` shows none open. A Liquid
+withdrawal that hasn't confirmed yet is sent again, not paid twice, if you ask again. With a vault, USDT on Solana is withdrawn
+by the vault's cold owner instead. Taking all the gas leaves the maker unable to pay fees, so it can't take swaps until you
+fund it again.
+
 ## Update
 
 ```sh

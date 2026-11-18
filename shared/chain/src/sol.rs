@@ -268,6 +268,26 @@ impl Sol {
         Ok(Transaction::new_signed_with_payer(ixs, Some(&payer.pubkey()), &all, hash))
     }
 
+    /// The whole of a SOL balance, sent on, with a fee set beforehand so the amount can be everything else: a plain transfer
+    /// needs a known, small compute budget. Fails if the simulation does, or if the fee would take it all.
+    pub fn build_sweep(&self, payer: &Keypair, to: &Pubkey, floor: u64, cap: u64) -> Res<Transaction> {
+        let recent: Vec<u64> = self
+            .rpc
+            .get_recent_prioritization_fees(&[payer.pubkey(), *to])
+            .map(|fees| fees.iter().map(|f| f.prioritization_fee).collect())
+            .unwrap_or_default();
+        let price = priority_price(&recent, floor, cap);
+        let budget = budget_ixs(SWEEP_COMPUTE_UNITS, price);
+        let fee = LAMPORTS_PER_SIGNATURE + (u128::from(SWEEP_COMPUTE_UNITS) * u128::from(price)).div_ceil(1_000_000) as u64;
+        let all = self.lamports(&payer.pubkey())?;
+        let amount = all.checked_sub(fee).filter(|a| *a > 0).ok_or_else(|| format!("{all} lamports don't cover the {fee}-lamport fee"))?;
+        let mut ixs = budget.to_vec();
+        ixs.push(sol_transfer_ix(&payer.pubkey(), to, amount));
+        let tx = self.build(&ixs, payer, &[])?;
+        self.simulate(&tx)?;
+        Ok(tx)
+    }
+
     /// With a compute limit just above what a simulation used, and a priority fee from what recently landed on the same
     /// accounts, between `floor` and `cap` micro-lamports per unit. Fails if the simulation does, so nothing doomed is signed.
     pub fn build_prioritized(&self, ixs: &[Instruction], payer: &Keypair, signers: &[&Keypair], floor: u64, cap: u64) -> Res<Transaction> {
@@ -603,6 +623,40 @@ pub fn extend_ix(recipient: &Pubkey, address: &Pubkey, new_deadline: u64) -> Ins
     let data = solana_escrow::instruction::Extend { new_deadline }.data();
     Instruction { program_id: program_id(), accounts, data }
 }
+
+/// What one signature costs. The priority fee comes on top.
+pub const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
+
+/// A system transfer plus the two budget instructions, with room to spare: a transfer uses 150 units, each budget one 150.
+const SWEEP_COMPUTE_UNITS: u32 = 1_000;
+
+pub fn sol_transfer_ix(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction {
+    anchor_lang::solana_program::system_instruction::transfer(from, to, lamports)
+}
+
+/// Stand-in USDT or Tether's, from `from`'s token account to `to`'s, which is made first if it isn't there yet, paid by `from`.
+/// TransferChecked, so a wrong mint or decimals can't go through.
+pub fn usdt_transfer_ixs(from: &Pubkey, to: &Pubkey, amount: u64) -> [Instruction; 2] {
+    let mut data = vec![12u8];
+    data.extend_from_slice(&amount.to_le_bytes());
+    data.push(USDT_DECIMALS);
+    [
+        create_ata_ix(from, to),
+        Instruction {
+            program_id: TOKEN_PROGRAM,
+            accounts: vec![
+                AccountMeta::new(ata(from), false),
+                AccountMeta::new_readonly(usdt_mint(), false),
+                AccountMeta::new(ata(to), false),
+                AccountMeta::new_readonly(*from, true),
+            ],
+            data,
+        },
+    ]
+}
+
+/// Tether's mint and the stand-in both have 6.
+const USDT_DECIMALS: u8 = 6;
 
 fn create_ata_ix(payer: &Pubkey, owner: &Pubkey) -> Instruction {
     Instruction {

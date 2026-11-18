@@ -87,6 +87,30 @@ pub struct Config {
     /// address. Off by default. It needs `liquid` to be our own node: an API would see one IP asking about every address.
     #[serde(default)]
     pub fresh_addresses: bool,
+    /// Where the operator's withdrawals go: a confidential Liquid address and a Solana address, both the operator's own and
+    /// ideally cold. Only here, never in a request, so nothing reaching the socket can choose where funds go. Without one, that
+    /// chain's withdrawals are refused.
+    #[serde(default)]
+    pub withdraw_to: WithdrawTo,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WithdrawTo {
+    pub liquid: Option<String>,
+    pub solana: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Chain {
+    Liquid,
+    Solana,
+}
+
+/// The stablecoin, or what pays fees: L-BTC on Liquid, SOL on Solana.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Asset {
+    Usdt,
+    Gas,
 }
 
 pub fn default_network() -> String {
@@ -236,6 +260,13 @@ pub enum Call {
     DepositToVault {
         amount: u64,
     },
+    /// The operator's withdrawal, in the chain's base units, or all of it. It always goes to `withdraw_to` in the config: this
+    /// carries no destination, so a compromised caller can at worst move funds to the operator's own address.
+    Withdraw {
+        chain: Chain,
+        asset: Asset,
+        amount: Option<u64>,
+    },
     Extend {
         taker_solana: String,
         lock_point: LockPoint,
@@ -291,6 +322,8 @@ pub enum Reply {
     Secret([u8; 32]),
     /// A signed Liquid transaction, in hex. The caller broadcasts it.
     Liquid(String),
+    /// An earlier Liquid withdrawal, signed and not yet seen confirmed: the same bytes, to send again. Nothing new was signed.
+    EarlierWithdrawal(String),
     /// A signed Solana transaction, bincode-encoded, in hex. The caller broadcasts it.
     Solana(String),
     Refused(Refusal),
@@ -381,6 +414,8 @@ pub struct Signer {
     priority: PriorityFees,
     close_after_slots: u64,
     sessions: HashMap<[u8; 32], OpenSession>,
+    withdraw_liquid: Option<Address>,
+    withdraw_solana: Option<Pubkey>,
 }
 
 /// Refuse, or fail, without signing anything.
@@ -433,6 +468,14 @@ impl Signer {
                 lbtc: AssetId::from_str(lbtc_id).map_err(|e| e.to_string())?,
             });
         }
+        // A bad address is a mistake in the config, not an outage, so it refuses: anything else is retried for ever.
+        let withdraw_liquid = cfg.withdraw_to.liquid.as_deref().map(withdrawal_address).transpose()?;
+        let withdraw_solana = cfg
+            .withdraw_to
+            .solana
+            .as_deref()
+            .map(|s| parse_pubkey(s).map_err(|e| format!("refusing to start: withdraw_to.solana: {e}")))
+            .transpose()?;
         std::fs::create_dir_all(&cfg.keys_dir).map_err(|e| e.to_string())?;
         std::fs::set_permissions(&cfg.keys_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
         let wallet_secrets = (
@@ -463,6 +506,8 @@ impl Signer {
             priority: cfg.priority,
             close_after_slots: cfg.close_after_slots,
             sessions: HashMap::new(),
+            withdraw_liquid,
+            withdraw_solana,
         })
     }
 
@@ -638,6 +683,85 @@ impl Signer {
         let owner = self.vault_owner.ok_or("no vault is configured")?;
         // The destination is fixed to our own vault, so this needs no limit.
         self.solana_reply(&[sol::vault_deposit_ix(&self.solana.pubkey(), &owner, amount)])
+    }
+
+    /// To the operator's own address, from `withdraw_to`. One at a time, and a retry gets the same bytes, like a top-up. It
+    /// spends only coins nothing else has a claim on: fee coins promised to a swap stay, and so do coins a payment has used.
+    fn withdraw_liquid(&self, asset: Asset, amount: Option<u64>) -> Outcome {
+        let to = self.withdraw_liquid.clone().ok_or("no Liquid withdrawal address is set in withdraw_to")?;
+        if let Some(raw) = self.ledger.pending_withdrawal().map_err(|e| e.to_string())? {
+            let tx: LiquidTx = deserialize(&raw).map_err(|e| e.to_string())?;
+            if !self.chain.is_confirmed(&tx.txid()).unwrap_or(false) {
+                return Ok(Reply::EarlierWithdrawal(hex(&raw)));
+            }
+            self.ledger.clear_pending_withdrawal().map_err(|e| e.to_string())?;
+        }
+        let wallets = self.wallets()?;
+        let key_for = |s: &simplicityhl::elements::Script| Self::key_for(&wallets, s);
+        let mut coins = self.payable_coins()?;
+        let tx = match (asset, amount) {
+            (_, Some(0)) => return Err("nothing to withdraw".to_string().into()),
+            (Asset::Usdt, amount) => {
+                let held: u64 = coins.iter().filter(|c| c.secrets.asset == usdt()).map(|c| c.secrets.value).sum();
+                let amount = amount.unwrap_or(held);
+                if amount == 0 {
+                    return Err("there is no USDt to withdraw".to_string().into());
+                }
+                liquid::pay_from_coins_with(
+                    &coins,
+                    &self.receive_address(None)?,
+                    key_for,
+                    vec![Payment { asset: usdt(), amount, address: to }],
+                    self.genesis,
+                )?
+            }
+            (Asset::Gas, Some(amount)) => liquid::pay_from_coins_with(
+                &coins,
+                &self.receive_address(None)?,
+                key_for,
+                vec![Payment { asset: liquid::lbtc(), amount, address: to }],
+                self.genesis,
+            )?,
+            // All of it, the fee coins nothing is promised to included.
+            (Asset::Gas, None) => {
+                coins.extend(self.free_fee_coins(self.wallet_coins()?)?);
+                liquid::sweep_lbtc_with(&coins, &to, key_for, self.genesis)?
+            }
+        };
+        let raw = serialize(&tx);
+        self.ledger.set_pending_withdrawal(&raw, &spends_of(&tx)).map_err(|e| e.to_string())?;
+        Ok(Reply::Liquid(hex(&raw)))
+    }
+
+    /// To the operator's own address, from `withdraw_to`. With a vault, the tokens are under its cold owner, who withdraws them.
+    fn withdraw_solana(&self, asset: Asset, amount: Option<u64>) -> Outcome {
+        let to = self.withdraw_solana.ok_or("no Solana withdrawal address is set in withdraw_to")?;
+        let me = self.solana.pubkey();
+        let tx = match (asset, amount) {
+            (_, Some(0)) => return Err("nothing to withdraw".to_string().into()),
+            (Asset::Usdt, _) if self.vault_owner.is_some() => {
+                return Err("the tokens are in the vault, which only its cold owner can withdraw from".to_string().into())
+            }
+            (Asset::Usdt, amount) => {
+                let amount = match amount {
+                    Some(a) => a,
+                    None => self.sol.token_balance(&sol::ata(&me))?,
+                };
+                if amount == 0 {
+                    return Err("there is no USDT to withdraw".to_string().into());
+                }
+                self.sol.build_prioritized(&sol::usdt_transfer_ixs(&me, &to, amount), &self.solana, &[], self.priority.floor, self.priority.cap)?
+            }
+            (Asset::Gas, Some(amount)) => self.sol.build_prioritized(
+                &[sol::sol_transfer_ix(&me, &to, amount)],
+                &self.solana,
+                &[],
+                self.priority.floor,
+                self.priority.cap,
+            )?,
+            (Asset::Gas, None) => self.sol.build_sweep(&self.solana, &to, self.priority.floor, self.priority.cap)?,
+        };
+        Ok(Reply::Solana(hex(&bincode::serialize(&tx).map_err(|e| e.to_string())?)))
     }
 
     fn escrow(&self, address: &Pubkey) -> Result<Option<Escrow>, String> {
@@ -1090,6 +1214,8 @@ impl Signer {
             Call::RefundSolana { lock_point } => self.refund_solana(*lock_point),
             Call::CloseEscrow { lock_point } => self.close_escrow(*lock_point),
             Call::DepositToVault { amount } => self.deposit_to_vault(*amount),
+            Call::Withdraw { chain: Chain::Liquid, asset, amount } => self.withdraw_liquid(*asset, *amount),
+            Call::Withdraw { chain: Chain::Solana, asset, amount } => self.withdraw_solana(*asset, *amount),
             Call::Extend { taker_solana, lock_point, new_deadline } => {
                 self.extend(taker_solana, *lock_point, *new_deadline)
             }
@@ -1101,6 +1227,19 @@ impl Signer {
             Err(Stop::Failed(e)) => Reply::Failed(e),
         }
     }
+}
+
+/// A withdrawal address must be confidential, so the amount stays hidden, and on this network, or the coins would be lost.
+fn withdrawal_address(s: &str) -> Result<Address, String> {
+    let address =
+        Address::from_str(s).map_err(|e| format!("refusing to start: withdraw_to.liquid isn't a Liquid address: {e}"))?;
+    if address.params != liquid::network().params {
+        return Err("refusing to start: withdraw_to.liquid is for another network".into());
+    }
+    if !address.is_blinded() {
+        return Err("refusing to start: withdraw_to.liquid must be a confidential address".into());
+    }
+    Ok(address)
 }
 
 fn parse_pubkey(s: &str) -> Result<Pubkey, String> {
@@ -1298,6 +1437,7 @@ mod tests {
             | Reply::EarlyRefundShare { .. }
             | Reply::Secret(_)
             | Reply::Liquid(_)
+            | Reply::EarlierWithdrawal(_)
             | Reply::Solana(_)
             | Reply::Refused(_)
             | Reply::Failed(_) => {}

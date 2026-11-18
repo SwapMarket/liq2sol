@@ -135,13 +135,21 @@ to lose in a single incident.
 Each completed swap moves inventory from one chain to the other. Rebalancing needs a venue, and every venue adds trust
 and exposes keys, so **v1 automates nothing that moves funds**. The daemon:
 
-- Widens the spread on the direction that drains the scarcer side.
-- Stops quoting a direction when inventory falls below a threshold.
-- Alerts the operator, who moves funds by hand using cold keys.
+- Offers each direction only up to what it can pay there, less what open swaps are counting on (`available_*`), so a side
+  that runs dry stops filling. It doesn't change its prices with its balance.
+- Alerts the operator when what pays fees, L-BTC or SOL, runs low (`balance_alarms`). It doesn't alert on USDt.
 
-The brief asks the daemon to rebalance. A narrow automated option can be added after testnet, such as swapping through
-other liq2sol makers. Adding an exchange API key to the host would add a new secret and a new attack path, so it's not
-recommended.
+The operator rebalances by hand:
+
+- **Through liq2sol itself.** The operator swaps against their own maker from the page, with their own wallets: the maker
+  gets back the side it lacks, and the spread is paid to themselves. Nothing leaves the host.
+- **By withdrawing** (since v0.16). `liq2sol-maker withdraw` sends USDt or gas, an amount or all of it, to `withdraw_to` in
+  the signer's config, and only there: the request carries no destination, so whatever reaches the socket can at worst move
+  funds to the operator's own addresses. It refuses while any swap is open (`deploy/README.md`).
+- **By funding**, which needs nothing: send to the maker's addresses.
+
+The brief asks the daemon to rebalance. A narrow automated option could still swap through other liq2sol makers. Adding an
+exchange API key to the host would add a new secret and a new attack path, so it's not recommended.
 
 ## 6. Monitoring
 

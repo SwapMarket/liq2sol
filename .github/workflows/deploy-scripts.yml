@@ -3,7 +3,7 @@ name: Check the deploy scripts
 on:
   push:
     branches: [main]
-    paths: ['deploy/**', 'scripts/test-install-elements.sh', '.github/workflows/deploy-scripts.yml']
+    paths: ['deploy/**', 'scripts/test-install-elements.sh', 'scripts/test-withdraw-usdt.sh', '.github/workflows/deploy-scripts.yml']
   workflow_dispatch:
 
 permissions:
@@ -16,9 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Lint
-        run: shellcheck -S warning deploy/*.sh scripts/test-install-elements.sh
+        run: shellcheck -S warning deploy/*.sh scripts/test-install-elements.sh scripts/test-withdraw-usdt.sh
       - name: Refuses anything but Elements' signed release
         run: scripts/test-install-elements.sh
+      - name: Withdraws only with no swap open, and always resumes the maker
+        run: scripts/test-withdraw-usdt.sh
       # A real install, on testnet: the service starts, answers on its own port with the password it printed, and is on the
       # right chain. A second run must change nothing.
       - name: Installs and runs a node

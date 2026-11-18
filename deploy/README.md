@@ -192,6 +192,15 @@ sudo -u liq2sol /opt/liq2sol/liq2sol-maker pause /var/lib/liq2sol/main/maker.jso
 sudo -u liq2sol /opt/liq2sol/liq2sol-maker resume /var/lib/liq2sol/main/maker.json
 ```
 
+Or let `withdraw-usdt.sh` do all of that, USDT only: it pauses the maker unless you had, waits up to an hour for open swaps to
+finish, withdraws, and resumes, even if the withdrawal fails or you press Ctrl-C.
+
+```sh
+wget https://raw.githubusercontent.com/SwapMarket/liq2sol/main/deploy/withdraw-usdt.sh
+sudo bash withdraw-usdt.sh solana 50          # 50.00 USDT from maker main
+sudo bash withdraw-usdt.sh liquid all second  # all the USDt of maker second
+```
+
 The signer also keeps 0.01 SOL for each S→L swap it has locked on Liquid and not yet claimed on Solana, whatever is asked: without
 SOL to claim the taker's escrow, the taker would refund it and keep the Liquid coin too. A Liquid
 withdrawal that hasn't confirmed yet is sent again, not paid twice, if you ask again. With a vault, USDT on Solana is withdrawn

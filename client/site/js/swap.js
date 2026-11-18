@@ -16,6 +16,14 @@ export const FINISHED = ['done', 'refunded', 'expired', 'cancelled'];
 // Nothing has been paid or locked in these, as far as this page knows. cancelProblem asks the chains.
 export const CANCELLABLE = ['recovery', 'fund', 'lock'];
 
+// The step a swap is at, for its card: its state, except that waiting for Liquid confirmations is a step of its own. L→S waits
+// for the payment's before the maker locks, and S→L for the maker's lock's before signing the claim.
+export function phase(s) {
+  if (s.state !== 'await_maker') return s.state;
+  if (s.direction === 'L2S') return (s.coin?.confirmations ?? 0) < NETWORK.liquidConfirmations ? 'confirming' : 'await_maker';
+  return s.maker_locked ? 'maker_confirms' : 'await_maker';
+}
+
 const swapArgs = (s) => ({
   direction: s.direction, maker_key: s.terms.maker_key, taker_key: s.secrets.taker_key,
   blinding_key: s.secrets.blinding_key, lock_height: s.terms.lock_height,
@@ -49,10 +57,10 @@ export class Engine {
     if (s.logged_state !== s.state) {
       log('info', `swap ${s.id.slice(0, 8)} ${s.direction}: ${s.logged_state ?? 'new'} -> ${s.state}`, s.status ?? '');
       s.logged_state = s.state;
-      // When each step began, for the timers on the swap's card. A state reached again keeps its first time.
-      s.step_at = { ...s.step_at };
-      s.step_at[s.state] ??= Math.floor(Date.now() / 1000);
     }
+    // When each step began, for the timers on the swap's card. A step reached again keeps its first time.
+    const step = phase(s);
+    if (!s.step_at?.[step]) s.step_at = { ...s.step_at, [step]: Math.floor(Date.now() / 1000) };
     saveSwap(s);
     this.onChange(s);
   }
@@ -246,7 +254,7 @@ export class Engine {
     const late = this.checkEscrow(await this.solana.escrow(s.escrow_address), s, await this.solana.slot());
     if (late) throw new Error(`The secret stays hidden: ${late}.`);
     await this.solana.simulate(signed);
-    this.set(s, { status: 'Sending the claim…', claim_sig: await this.solana.send(signed) });
+    this.set(s, { status: '', claim_sig: await this.solana.send(signed), claim_sent_at: now() });
   }
 
   // ---- S to L ----

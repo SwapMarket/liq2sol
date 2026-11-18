@@ -17,8 +17,9 @@ done
 sleep 20
 
 cd "$root/programs"
-cargo build-sbf --arch v3 --manifest-path solana-escrow/Cargo.toml
-cargo build-sbf --arch v3 --manifest-path devnet-faucet/Cargo.toml
+# RUSTFLAGS is cleared: this shell's -fuse-ld=lld is refused by rust-lld on a fresh build.
+RUSTFLAGS="" cargo build-sbf --arch v3 --manifest-path solana-escrow/Cargo.toml
+RUSTFLAGS="" cargo build-sbf --arch v3 --manifest-path devnet-faucet/Cargo.toml
 solana program deploy --use-rpc -u "$SOLANA_RPC" -k "$deployer" \
   --program-id "$keys/escrow-confidential-program.json" target/deploy/solana_escrow.so
 solana program deploy --use-rpc -u "$SOLANA_RPC" -k "$deployer" \

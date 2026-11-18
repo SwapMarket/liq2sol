@@ -508,9 +508,32 @@ async function l2s() {
   if (await page.locator('.claim').count()) throw new Error('Claim can be pressed twice');
   await page.unroute(slow);
   step('a pressed Claim says so at once, even while the endpoint is slow');
+  // Once sent, the card says so until Solana shows it, rather than offering the button again as if the press hadn't counted.
+  await page.locator('.claim-sent, .swap-card[data-state="done"]').first().waitFor({ timeout: 60000 });
+  if (await page.locator('.swap-card[data-state="ready_claim"] .claim').count()) throw new Error('Claim was offered again once the claim was sent');
   await waitState(page, 'done');
+  step('a sent claim says it is waiting for Solana, and the swap finishes without another press');
   await page.screenshot({ path: path.join(shots, 'done.png') });
   step('claimed on Solana');
+  const l2sSteps = await page.locator('.swap-card[data-state="done"] .steps li').allInnerTexts();
+  const paid = l2sSteps.findIndex((t) => t.startsWith('Pay the swap address'));
+  if (!l2sSteps[paid + 1]?.startsWith('Your payment confirms') || !l2sSteps[paid + 2]?.startsWith('The maker locks on Solana')) throw new Error(`the steps were ${l2sSteps.join(' | ')}`);
+  step('waiting for the payment\'s confirmations is a step of its own, between paying and the maker\'s lock');
+  // A finished swap's button says OK, and it brings the form back, as the logo does from a swap's page.
+  await page.locator('#order-back', { hasText: 'OK' }).click();
+  await page.locator('#amount').waitFor({ timeout: 5000 });
+  await page.locator('.tab[data-tab="history"]').click();
+  await page.locator('.history-item .history-row').first().click();
+  await page.locator('.history-item').first().getByRole('button', { name: 'Open' }).click();
+  await page.locator('.swap-card[data-state="done"]').waitFor({ timeout: 5000 });
+  await page.locator('a.logo').click();
+  await page.locator('#amount').waitFor({ timeout: 5000 });
+  if (await page.locator('.swap-card').count()) throw new Error('the logo left the swap on the page');
+  // Folded again, as the History checks below expect to find it.
+  await page.locator('.tab[data-tab="history"]').click();
+  await page.locator('.history-item .history-row').first().click();
+  await page.locator('.tab[data-tab="swap"]').click();
+  step('OK on a finished swap, and the logo from any swap, bring back a working swap form');
   await checkLogs(page);
   step('the log has the swap’s steps, and none of its secrets');
   await reportSwaps(page);
@@ -536,6 +559,10 @@ async function s2l() {
   if (loseBroadcastReply) throw new Error('the claim was never published through the page');
   await page.screenshot({ path: path.join(shots, 's2l-done.png') });
   step('the page signed with the maker, and its claim confirmed on Liquid, even with the reply to its broadcast lost');
+  const s2lSteps = await page.locator('.swap-card[data-state="done"] .steps li').allInnerTexts();
+  const makerLocked = s2lSteps.findIndex((t) => t.startsWith('The maker locks on Liquid'));
+  if (!s2lSteps[makerLocked + 1]?.startsWith('The maker\'s lock confirms') || !s2lSteps[makerLocked + 2]?.startsWith('Sign the claim together')) throw new Error(`the steps were ${s2lSteps.join(' | ')}`);
+  step('waiting for the maker\'s lock to confirm is a step of its own, before signing the claim');
   const swap = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps')))[0]);
   if (!(swap.maker_confirmations >= 2)) throw new Error(`the maker's lock was counted at ${swap.maker_confirmations} confirmations`);
   const tx = JSON.parse(await cli('getrawtransaction', swap.claim_txid, '1'));

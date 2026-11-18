@@ -4,7 +4,7 @@ import { NETWORK, checkGenesis, chooseNetwork, mainnetAvailable } from './config
 import { Esplora, Solana, hexToBytes } from './chain.js';
 import { bpsAt, effectivePrice, planOrder, sendLimits } from './plan.js';
 import { Relays } from './relay.js';
-import { CANCELLABLE, Engine, FINISHED, deriveSwap, rulesJson } from './swap.js';
+import { CANCELLABLE, Engine, FINISHED, deriveSwap, phase, rulesJson } from './swap.js';
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
 import { captureConsole, clearLogs, log, logsCount, logsText } from './logs.js';
 import { makeRecovery, offerDownload, readRecovery, readRecoveryFiles, recoveryCodes } from './recovery.js';
@@ -54,6 +54,8 @@ const show = (u) => {
 const STEP = 10000n;
 const sizeUp = (u) => (((BigInt(u) + STEP - 1n) / STEP) * STEP);
 const sizeDown = (u) => ((BigInt(u) / STEP) * STEP);
+// A limit as 1,000.00, or exactly, if rounding it to cents wouldn't fill.
+const limitText = (u) => (BigInt(u) % STEP === 0n ? size(u) : show(u));
 const size = (u) => {
   const v = BigInt(u);
   return `${(v / 1000000n).toLocaleString('en-US')}.${((v % 1000000n) / STEP).toString().padStart(2, '0')}`;
@@ -203,7 +205,11 @@ function currentLimits() {
   const out = { min: whole(min) ? min : limits.min, max: whole(max) ? max : limits.max };
   // S→L can't send more than the connected wallet holds.
   const holds = ui.direction === 'S2L' && wallet && walletUsdt.address === wallet.address ? walletUsdt.units : null;
-  if (holds !== null && holds < out.max) return { ...out, max: holds, capped: true };
+  if (holds !== null && holds < out.max) {
+    // In whole cents too, so it reads like the rest: the most the wallet holds that still fills.
+    const cents = sizeDown(holds);
+    return { ...out, max: cents >= out.min && whole(cents) ? cents : holds, capped: true };
+  }
   return out;
 }
 
@@ -642,8 +648,8 @@ function updateForm() {
   form.limits = currentLimits();
   form.links.hidden = !form.limits;
   if (form.limits) {
-    setText(form.sendMin, show(form.limits.min), 'The smallest order the makers shown below can fill');
-    setText(form.sendMax, show(form.limits.max), form.limits.capped
+    setText(form.sendMin, limitText(form.limits.min), 'The smallest order the makers shown below can fill');
+    setText(form.sendMax, limitText(form.limits.max), form.limits.capped
       ? 'All the SOL-USDT this wallet holds. The makers shown below could fill more.'
       : ui.direction === 'S2L' && wallet ? 'The largest order the makers shown below can fill. This wallet holds at least that.'
         : ui.direction === 'S2L' ? 'The largest order the makers shown below can fill. Connect a wallet to cap it at what you hold.'
@@ -808,8 +814,8 @@ async function acceptQuotes() {
 
 // ---- A swap under way ----
 const FLOW = {
-  L2S: [['recovery', 'Save the recovery file'], ['fund', 'Pay the swap address'], ['await_maker', 'The maker locks on Solana'], ['ready_claim', 'Claim on Solana'], ['done', 'Done']],
-  S2L: [['recovery', 'Save the recovery file'], ['lock', 'Lock on Solana'], ['await_maker', 'The maker locks on Liquid'], ['signing', 'Sign the claim together'], ['claiming', 'Publish the claim'], ['done', 'Done']],
+  L2S: [['recovery', 'Save the recovery file'], ['fund', 'Pay the swap address'], ['confirming', 'Your payment confirms'], ['await_maker', 'The maker locks on Solana'], ['ready_claim', 'You claim on Solana'], ['done', 'Done']],
+  S2L: [['recovery', 'Save the recovery file'], ['lock', 'You lock on Solana'], ['await_maker', 'The maker locks on Liquid'], ['maker_confirms', 'The maker\'s lock confirms'], ['signing', 'Sign the claim together'], ['claiming', 'Publish the claim'], ['done', 'Done']],
 };
 
 // "45s", "3m 05s", "1h 02m".
@@ -822,7 +828,7 @@ function duration(secs) {
 
 function stepsView(s) {
   const flow = FLOW[s.direction];
-  const at = flow.findIndex(([k]) => k === s.state);
+  const at = flow.findIndex(([k]) => k === phase(s));
   // A refund leaves this path, and a list with nothing marked would only confuse.
   if (at < 0 && s.state !== 'done') return null;
   const began = (k) => s.step_at?.[k] ?? (k === 'recovery' ? s.created_at : undefined);
@@ -1071,6 +1077,8 @@ function act(id, fn, label) {
       pressed.delete(id);
     }
     render();
+    // A claim or lock just sent: look again soon, not at the next poll, so the swap moves on as soon as the chain shows it.
+    if (label) setTimeout(() => tickAll(), 3000);
   };
 }
 
@@ -1247,7 +1255,12 @@ function swapBody(s) {
     case 'ready_claim': {
       // With one endpoint, the claim waits for the box. The engine refuses without it too.
       const consented = () => !!secondSolana() || !!settings.allowOneEndpoint;
-      const claim = stepButton(s, 'claim', 'Claim on Solana', !wallet || !consented(), (fresh) => engine.claimOnSolana(fresh), 'Checking the escrow before the claim…');
+      // Sent and not yet seen: no button, or it looks as if the press didn't count. One that hasn't landed in 90 s can be sent again,
+      // which is safe, since its secret is public once sent.
+      const sent = s.claim_sig && now() - (s.claim_sent_at ?? 0) < 90;
+      const claim = sent
+        ? h('p', { class: 'status spin claim-sent' }, 'Claim sent. Waiting for Solana to confirm it…')
+        : stepButton(s, 'claim', s.claim_sig ? 'Claim on Solana again' : 'Claim on Solana', !wallet || !consented(), (fresh) => engine.claimOnSolana(fresh), 'Checking the escrow before the claim…');
       return [
         h('p', { class: 'good' }, `The maker locked ${show(s.terms.solana_amount)} ${to} for you.`),
         !secondSolana() && h('label', { class: 'check' },
@@ -1344,7 +1357,7 @@ function cancelCard(shown) {
 
 function orderView(swaps) {
   const waiting = swaps.filter((s) => s.state === 'recovery');
-  const back = h('div', { class: 'card back' }, h('button', { class: 'btn quiet', onclick: () => { ui.openOrder = null; render(); } }, 'Back'));
+  const back = h('div', { class: 'card back' }, h('button', { class: 'btn quiet', id: 'order-back', onclick: () => { ui.openOrder = null; render(); } }, swaps.every((s) => FINISHED.includes(s.state)) ? 'OK' : 'Back'));
   // Back would leave it open in the history for ever, with nothing to do but wait.
   const end = swaps.every((s) => CANCELLABLE.includes(s.state)) ? cancelCard(swaps) : back;
   if (waiting.length) return [recoveryView(waiting), end];
@@ -1702,12 +1715,20 @@ function render() {
   if (showForm) {
     if (!form.el.isConnected) {
       view.replaceChildren(form.el);
+      view.dataset.view = 'form';
       below.replaceChildren(book.el, HERO());
     }
     updateForm();
     return;
   }
   below.replaceChildren();
+  // In place only within one view. Switching starts afresh: patching the form's own card into a swap's had left the form element
+  // on the page in disguise, so Back, finding it there, never brought the form back.
+  const which = tab === 'rescue' || tab === 'history' || (tab === 'faucet' && NETWORK.faucet) ? tab : ui.openOrder ? `order:${ui.openOrder}` : 'quote';
+  if (view.dataset.view !== which || form.el.isConnected) {
+    view.replaceChildren();
+    view.dataset.view = which;
+  }
   if (tab === 'rescue') {
     patch(view, [rescueView()]);
   } else if (tab === 'history') {
@@ -1776,6 +1797,14 @@ function tickAll() {
 }
 
 function navMenu() {
+  // The logo always opens a new swap, even from a swap's page, where the address doesn't change.
+  document.querySelector('a.logo').addEventListener('click', (e) => {
+    e.preventDefault();
+    ui.openOrder = null;
+    if (ui.quote) clearQuote();
+    if (location.hash !== '#swap') location.hash = '#swap';
+    render();
+  });
   const burger = $('burger');
   const menu = $('collapse');
   const set = (open) => {

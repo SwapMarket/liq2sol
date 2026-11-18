@@ -252,7 +252,8 @@ fn quotes_respect_limits() {
     let at = |a| make_quote(&r, &Request { amount: Units(a), ..request() }, NOW);
     assert_eq!(at(1_000_000_001), Err(Refused::OutOfLimits));
     assert_eq!(at(9_999), Err(Refused::OutOfLimits));
-    assert_eq!(at(10_000), Err(Refused::OutOfLimits), "the payout would be under the minimum");
+    assert!(at(10_000).is_ok(), "the minimum is what the taker sends, so it fills although the payout is less");
+    assert_eq!(at(9_999), Err(Refused::OutOfLimits), "and nothing under it");
     assert!(at(1_000_000_000).is_ok());
     let huge = MakerRules { max_sol_units: u64::MAX, ..maker_rules() };
     assert_eq!(

@@ -34,8 +34,8 @@ function fillFor(m, wanted, room, maxSpreadBps) {
     const payable = sendFor(room, bps);
     if (send <= payable) {
       const receive = receiveFor(send, bps);
-      // A maker refuses anything below its minimum, on either side of the trade.
-      if (send <= 0n || send < m.min || receive < m.min) return null;
+      // A maker refuses an order below its minimum, which is what the taker sends (shared/rfq rules.rs).
+      if (send <= 0n || send < m.min) return null;
       if ((send - receive) * 10000n > send * BigInt(maxSpreadBps)) return null;
       return { maker: m.maker, bps, send, receive };
     }
@@ -106,17 +106,11 @@ function moveToFitLeftover(fills, left, makers, used, maxSpreadBps) {
   return best;
 }
 
-// The smallest amount this maker takes whole. Its minimum applies to both sides, and the step and rounding move with the size.
+// The smallest amount this maker takes whole. Its minimum is what the taker sends, and the step and rounding move with the size.
 function smallestFor(m, maxSpreadBps) {
   let send = m.min > 1n ? m.min : 1n;
   for (let tries = 0; tries < 64 && send <= m.max; tries++) {
-    const bps = bpsAt(m.tiers, send);
-    if (bps === null) return null;
-    const needed = (m.min * 10000n + keep(bps) - 1n) / keep(bps);
-    if (needed > send) {
-      send = needed;
-      continue;
-    }
+    if (bpsAt(m.tiers, send) === null) return null;
     const fill = fillFor(m, send, m.available, maxSpreadBps);
     if (fill?.send === send) return send;
     send += 1n;

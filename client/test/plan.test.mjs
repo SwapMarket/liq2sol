@@ -34,7 +34,7 @@ test('the fills add up exactly, and nobody is asked for more than they can pay',
     }
     for (const f of p.fills) {
       const m = makers.find((x) => x.maker === f.maker);
-      assert.ok(f.send <= m.max && f.send >= m.min && f.receive >= m.min, `${f.maker} ${f.send}`);
+      assert.ok(f.send <= m.max && f.send >= m.min, `${f.maker} ${f.send}`);
       assert.equal(f.receive, receiveFor(f.send, m.tiers[0].bps));
     }
   }
@@ -112,11 +112,11 @@ test('the effective price is what the fills really pay, not the quoted step', ()
   assert.equal(effectivePrice([{ send: 2_000n, receive: 1_994n }, { send: 1_000n, receive: 997n }]).toFixed(4), '1.0030');
 });
 
-test('send limits: the minimum counts both sides of the trade, and the maximum what makers can pay', () => {
+test('send limits: the minimum is what the taker sends, and the maximum what makers can pay', () => {
   const limits = sendLimits([maker('a', 30, 2000n, 100000n, 1000n)]);
-  assert.equal(limits.min, 1004n, '1000 is the minimum, but it must also pay out 1000');
-  assert.equal(receiveFor(limits.min, 30) >= 1000n, true);
-  assert.equal(receiveFor(limits.min - 1n, 30) < 1000n, true);
+  assert.equal(limits.min, 1000n, 'an order of exactly the minimum fills, though it pays out less');
+  assert.equal(receiveFor(limits.min, 30) < 1000n, true);
+  assert.equal(planOrder(999n, [maker('a', 30, 2000n, 100000n, 1000n)]).unfilled, 999n, 'and nothing under it');
   assert.equal(limits.max, 2000n, 'its largest single swap');
   assert.equal(sendLimits([]), null);
   assert.equal(sendLimits([maker('dry', 30, 1000n, 0n)]), null, 'a maker that can pay nothing');
@@ -181,8 +181,7 @@ test('a fill gives up some of its size, when what’s left is below the next mak
   assert.equal(p.unfilled, 0n, 'all of it fills');
   assert.deepEqual(p.fills.map((f) => f.maker), ['top', 'bottom']);
   assert.equal(p.fills[0].send + p.fills[1].send, 30_000_000n);
-  assert.ok(p.fills[1].receive >= bottom.min, 'the second maker’s minimum, on what it pays too');
-  assert.ok(p.fills[1].send < 10_100_000n, 'only as much as that needs, so the cheaper maker keeps the rest');
+  assert.equal(p.fills[1].send, bottom.min, 'the second maker gets exactly its minimum, which is what the taker sends');
   assert.equal(planOrder(25_000_000n, [top, bottom]).fills.length, 1, 'no split when one maker can take it all');
 });
 

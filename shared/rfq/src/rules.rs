@@ -105,7 +105,9 @@ pub fn make_quote(r: &MakerRules, request: &Request, now: u64) -> Result<Quote, 
     };
     let bps = bps_for(tiers, request).ok_or(Refused::OutOfLimits)?;
     let (send, receive) = price(request, bps).ok_or(Refused::OutOfLimits)?;
-    if send.max(receive) > r.max_sol_units || send.min(receive) < r.min_sol_units {
+    // The minimum is what the taker sends, so an order of exactly the minimum fills (user's decision, 2026-11-18). The maximum and
+    // the mainnet cap still hold for both sides.
+    if send.max(receive) > r.max_sol_units || send < r.min_sol_units {
         return Err(Refused::OutOfLimits);
     }
     if send.checked_mul(100).is_none() || receive.checked_mul(100).is_none() {

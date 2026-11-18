@@ -930,7 +930,7 @@ async function recoveryCodesView(swaps) {
       };
       let qr = make(0);
       if (qr.getModuleCount() === 4 * 23 + 17) qr = make(24);
-      const box = markEnlargeable(h('div', { class: 'recovery-code' }, codeCanvas(qr, `Recovery QR code${codes.length > 1 ? ` ${i + 1} of ${codes.length}` : ''}`)));
+      const box = markEnlargeable(h('div', { class: 'recovery-code' }, codeCanvas(qr, `Recovery QR code${codes.length > 1 ? ` ${i + 1} of ${codes.length}` : ''}`)), swapLines(swaps[i]));
       return h('figure', {}, box, codes.length > 1 && h('figcaption', {}, `Swap ${i + 1} of ${codes.length}`));
     });
   } finally {
@@ -960,7 +960,7 @@ function recoveryView(swaps) {
   });
   const codes = h('div', { class: 'recovery-codes', hidden: true });
   const orderKey = swaps[0].order ?? swaps[0].id;
-  const showCodes = async () => {
+  const showCodes = async (full = true) => {
     try {
       if (!shownCodes.has(orderKey)) shownCodes.set(orderKey, await recoveryCodesView(swaps));
       codes.replaceChildren(
@@ -970,12 +970,15 @@ function recoveryView(swaps) {
         h('p', { class: 'warn' }, 'A screenshot can move your funds, like the file. Phones often back up photos to the cloud, so keep it out of shared albums, and delete it once the swap is done.'),
         ...shownCodes.get(orderKey));
       codes.hidden = false;
+      // Straight to full screen, ready to screenshot, one code at a time.
+      const boxes = [...codes.querySelectorAll('.recovery-code')];
+      if (full && boxes.length) enlarge(boxes[0], boxes.slice(1));
     } catch (err) {
       fail(err);
     }
   };
-  // Shown once, they stay shown when the card is drawn again, without being made again.
-  if (shownCodes.has(orderKey)) showCodes();
+  // Shown once, they stay shown when the card is drawn again, without being made again, and without opening full screen again.
+  if (shownCodes.has(orderKey)) showCodes(false);
   // Shown only if the browser won't let the page copy, so the text can be selected by hand.
   const shown = h('textarea', { class: 'input recovery-paste', id: 'recovery-text', rows: 4, readOnly: true, spellcheck: false });
   const shownBox = h('div', { hidden: true }, h('p', { class: 'note' }, 'This browser won’t let the page copy. Select all of this text, and copy it yourself:'), shown);
@@ -995,7 +998,7 @@ function recoveryView(swaps) {
     h('h2', {}, 'Save your recovery file'),
     h('p', { class: 'warn' }, 'This file can move your funds, so treat it like money. It is the only way back if this browser loses its data. Never share it: no maker or support person ever needs it.'),
     h('button', { class: 'btn', id: 'download', onclick: async () => offerDownload(await makeRecovery(swaps), `liq2sol-recovery-${swaps[0].order ?? swaps[0].id.slice(0, 8)}.json`) }, swaps.length > 1 ? `Download the recovery file for all ${swaps.length} swaps` : 'Download recovery file'),
-    onPhone() && h('button', { class: 'btn quiet', id: 'show-codes', onclick: showCodes }, swaps.length > 1 ? 'Or save it as pictures: show QR codes' : 'Or save it as a picture: show a QR code'),
+    onPhone() && h('button', { class: 'btn quiet', id: 'show-codes', onclick: () => showCodes() }, swaps.length > 1 ? 'Or save it as pictures: show QR codes' : 'Or save it as a picture: show a QR code'),
     codes,
     h('label', { class: 'field' }, h('span', {}, onPhone()
       ? 'Then choose the file, or the screenshots, to confirm they are intact. The next step stays hidden until you do.'
@@ -1067,28 +1070,60 @@ async function qrView(text) {
 
 // Any QR code fills the screen when tapped, in white, as large as fits, for a phone held at a distance or a screenshot. It opens
 // as its own layer, over the dialog if it is in one, so the page redrawing underneath doesn't shrink it. A tap or Escape closes it.
-function markEnlargeable(box) {
+// What a recovery code's screenshot says above the code, so it can be told apart from others later.
+function swapLines(s) {
+  const [from, to] = names[s.direction];
+  const send = s.direction === 'L2S' ? BigInt(s.terms.liquid_amount) / 100n : BigInt(s.terms.solana_amount);
+  const receive = s.direction === 'L2S' ? BigInt(s.terms.solana_amount) : BigInt(s.terms.liquid_amount) / 100n;
+  return [
+    `${from} → ${to} · You send ${show(send)} ${from}, you receive ${show(receive)} ${to}`,
+    `Recovery for swap ${(s.order ?? s.id).slice(0, 8)} · ${new Date(s.created_at * 1000).toLocaleString()}`,
+  ];
+}
+
+function markEnlargeable(box, lines = []) {
+  if (lines.length) box.dataset.details = lines.join('\n');
   box.dataset.enlarge = '';
   box.title = 'Tap to enlarge';
   box.tabIndex = 0;
   return box;
 }
 
-function enlarge(box) {
-  const canvas = box.querySelector('canvas');
-  const code = canvas ? h('img', { src: canvas.toDataURL(), alt: '' }) : box.querySelector('svg')?.cloneNode(true);
-  if (!code) return;
-  const layer = h('div', { class: 'qr-full', role: 'dialog', 'aria-label': 'QR code, enlarged. Tap to close.', tabIndex: 0 }, code);
+// One code, or several in turn: a tap shows the next, so each can be screenshotted alone, and the last tap closes. Escape closes.
+function enlarge(box, rest = []) {
+  const all = [box, ...rest];
+  let at = 0;
+  const layer = h('div', { class: 'qr-full', role: 'dialog', tabIndex: 0 });
+  const show = () => {
+    const canvas = all[at].querySelector('canvas');
+    const code = canvas ? h('img', { src: canvas.toDataURL(), alt: '' }) : all[at].querySelector('svg')?.cloneNode(true);
+    const more = all.length > 1 ? `Swap ${at + 1} of ${all.length}${at + 1 < all.length ? ' · tap for the next' : ''}` : '';
+    layer.setAttribute('aria-label', `QR code, enlarged${more ? `, ${more}` : ''}. Tap to ${at + 1 < all.length ? 'see the next' : 'close'}.`);
+    const details = all[at].dataset.details;
+    layer.replaceChildren(...[
+      details && h('div', { class: 'qr-full-details' }, details.split('\n').map((line) => h('p', {}, line))),
+      code,
+      more && h('p', { class: 'qr-full-caption' }, more),
+    ].filter(Boolean));
+  };
   const close = () => { layer.remove(); box.focus(); };
-  layer.onclick = close;
+  const next = () => {
+    if (at + 1 < all.length) {
+      at += 1;
+      show();
+    } else close();
+  };
+  layer.onclick = next;
   layer.onkeydown = (e) => {
     if (['Escape', 'Enter', ' '].includes(e.key)) {
       // Escape would otherwise also close the dialog underneath.
       e.preventDefault();
       e.stopPropagation();
-      close();
+      if (e.key === 'Escape') close();
+      else next();
     }
   };
+  show();
   (box.closest('dialog') ?? document.body).append(layer);
   layer.focus();
 }

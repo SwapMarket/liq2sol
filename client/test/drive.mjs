@@ -1032,15 +1032,19 @@ async function cancelling() {
   await phoneish.evaluate(() => localStorage.setItem('test.coarse', '1'));
   await phoneish.reload();
   await phoneish.locator('#show-codes').click({ timeout: 30000 });
-  const code = phoneish.locator('.recovery-code canvas');
+  // It opens full screen at once, which is what a person screenshots.
+  const code = phoneish.locator('.qr-full > img');
   await code.waitFor({ timeout: 10000 });
-  await phoneish.screenshot({ path: path.join(shots, 'recovery-codes-phone.png'), fullPage: true });
-  await phoneish.locator('.recovery-code[data-enlarge]').click();
-  await phoneish.locator('.qr-full > img').waitFor({ timeout: 5000 });
-  await phoneish.keyboard.press('Escape');
-  await phoneish.locator('.qr-full').waitFor({ state: 'detached', timeout: 5000 });
+  // Above the code, what the swap is, so a screenshot can be told apart from others later.
+  const details = await phoneish.locator('.qr-full-details').innerText();
+  if (!/L-USDt → SOL-USDT · You send .+ L-USDt, you receive .+ SOL-USDT/.test(details) || !/Recovery for swap \w{8} · /.test(details)) throw new Error(`the details read: ${details}`);
+  await phoneish.screenshot({ path: path.join(shots, 'recovery-code-full.png') });
   const shot = path.join(shots, `recovery-code-${Date.now()}.png`);
   await code.screenshot({ path: shot });
+  await phoneish.keyboard.press('Escape');
+  await phoneish.locator('.qr-full').waitFor({ state: 'detached', timeout: 5000 });
+  await phoneish.locator('.recovery-code canvas').waitFor({ timeout: 5000 });
+  await phoneish.screenshot({ path: path.join(shots, 'recovery-codes-phone.png'), fullPage: true });
   if (await phoneish.locator('.pay-address').count()) throw new Error('showing the codes unlocked the next step');
   await phoneish.locator('#recovery-file').setInputFiles(shot);
   await phoneish.locator('.pay-address').waitFor({ timeout: 15000 });

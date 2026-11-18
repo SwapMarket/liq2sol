@@ -1,0 +1,38 @@
+name: Check the deploy scripts
+
+on:
+  push:
+    branches: [main]
+    paths: ['deploy/**', 'scripts/test-install-elements.sh', '.github/workflows/deploy-scripts.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  elements:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Lint
+        run: shellcheck -S warning deploy/*.sh scripts/test-install-elements.sh
+      - name: Refuses anything but Elements' signed release
+        run: scripts/test-install-elements.sh
+      # A real install, on testnet: the service starts, answers on its own port with the password it printed, and is on the
+      # right chain. A second run must change nothing.
+      - name: Installs and runs a node
+        run: |
+          sudo deploy/install-elements.sh testnet --datadir /var/lib/elements-ci | tee out.txt
+          password=$(sed -n 's/^  --elements-rpc liq2sol://p' out.txt)
+          test -n "$password"
+          for _ in $(seq 60); do
+            /usr/local/bin/elements-cli -chain=liquidtestnet -rpcuser=liq2sol -rpcpassword="$password" getblockchaininfo > info.json 2>/dev/null && break
+            sleep 2
+          done
+          jq -e '.chain == "liquidtestnet"' info.json
+          sudo -u elements test -r /var/lib/elements-ci/elements.conf
+          test "$(stat -c %a /var/lib/elements-ci/elements.conf)" = 600
+          grep -qx 'txindex=1' /var/lib/elements-ci/elements.conf
+          if sudo deploy/install-elements.sh testnet --datadir /var/lib/elements-ci; then echo 'a second run went ahead'; exit 1; fi
+          sudo systemctl stop elementsd.service

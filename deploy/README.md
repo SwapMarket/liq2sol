@@ -14,6 +14,26 @@ sudo bash install.sh main --helius YOUR_HELIUS_KEY --page-to npub1... --page-rel
 
 `main` is the maker's folder name. Add `testnet` after it for a test maker. `--page-to` and `--page-relay` are optional (see "Pages on your phone"). With your own Elements node on the same machine, add `--elements-rpc USER:PASSWORD` (its `rpcuser` and `rpcpassword`), and `--elements-cli PATH` or `--elements-port N` if they aren't `/usr/local/bin/elements-cli` and the default port. The script checks the node answers on the right chain, points both configs at it, keeps a public API as the maker's second source, and turns on `fresh_addresses`. If the node isn't answering yet, the maker is set up but not started. Then back up `/var/lib/liq2sol/main/keys`, fund the addresses, set prices in `maker.json`, and restart the maker. It never touches a maker folder that exists. Updates are `sudo /opt/liq2sol/update.sh`.
 
+## Your own Elements node
+
+A maker reads Liquid better from its own node: public APIs rate-limit, and `fresh_addresses` needs one. `install-elements.sh`
+downloads Elements, installs it only if the release's signature by Elements' release key checks out, and runs it as
+`elementsd.service`, as user `elements`. Run it before `install.sh`, which then takes the password it prints:
+
+```sh
+sudo apt install curl gpgv
+wget https://raw.githubusercontent.com/SwapMarket/liq2sol/main/deploy/install-elements.sh
+wget https://raw.githubusercontent.com/SwapMarket/liq2sol/main/deploy/elements-release-key.gpg
+sudo bash install-elements.sh mainnet --datadir /mnt/ssd/elements
+```
+
+Leave out `--datadir` for `/var/lib/elements`. A first sync takes hours, or days on a Raspberry Pi. Install the maker meanwhile
+with `--no-start`, and start it once the node has caught up: a node still syncing answers with an old chain. The script never
+replaces a node already set up.
+
+A node you set up yourself needs `txindex=1`, because the maker looks up confirmed transactions by id, and `validatepegin=0` unless
+it has a bitcoind. Without `txindex`, adding it later rebuilds the index, which takes a while.
+
 ## Install by hand
 
 ```sh

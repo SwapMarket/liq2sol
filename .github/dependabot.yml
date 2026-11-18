@@ -1,4 +1,5 @@
-# Dependency updates. Every PR runs the suites like any push, and each update is a supply-chain change to review before merging.
+# Dependency updates. Every PR gets the builds and unit tests (the chain suites run once it is on main), and each update is a
+# supply-chain change to review before merging. Major versions of crates and npm packages are left to planned upgrades.
 # Version updates wait 14 days after a release, so a hijacked release has time to be caught; security updates don't wait.
 # programs/ gets no version updates: the mainnet escrow is immutable, and that workspace is pinned to Rust 1.95 and Anchor's
 # template lockfile, so bumps there change nothing deployed. Alerts still cover it.
@@ -17,6 +18,10 @@ updates:
     cooldown:
       default-days: 14
     open-pull-requests-limit: 5
+    # A major version changes an API, so it is a planned upgrade (the Solana 4.x crates, rand, ureq), not a weekly PR.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -27,6 +32,9 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       tools:
         update-types: [minor, patch]

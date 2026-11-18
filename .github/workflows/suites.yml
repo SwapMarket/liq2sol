@@ -22,6 +22,20 @@ on:
       - cli/**
       - scripts/ci-mint-account.py
       - .github/workflows/suites.yml
+  # A pull request, such as Dependabot's, gets the builds and unit tests, so its checks say whether it even compiles. The
+  # scenarios on real chains run once it is on main.
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - maker/**
+      - shared/**
+      - contracts/**
+      - programs/**
+      - client/**
+      - cli/**
+      - scripts/ci-mint-account.py
+      - .github/workflows/suites.yml
   workflow_dispatch:
 
 permissions:
@@ -50,6 +64,7 @@ jobs:
   # Which suites this push needs: only the browser jobs when nothing but the page's script, styles or browser test changed.
   # Anything else, including the page's WebAssembly (built from the maker's crates), a manual run or a new branch, runs all.
   changes:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
@@ -234,6 +249,7 @@ jobs:
           if-no-files-found: error
 
   suite:
+    if: github.event_name != 'pull_request'
     needs: [changes, programs, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 45

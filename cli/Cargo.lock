@@ -2381,7 +2381,7 @@ dependencies = [
  "anchor-spl",
  "getrandom 0.2.17",
  "liq2sol-swapkey",
- "rand 0.8.8",
+ "rand 0.10.3",
  "serde_json",
  "simplicityhl",
  "solana-client",
@@ -2400,7 +2400,7 @@ dependencies = [
  "anchor-spl",
  "liq2sol-chain",
  "liq2sol-swapkey",
- "rand 0.8.8",
+ "rand 0.10.3",
  "serde_json",
  "simplicityhl",
  "solana-client",
@@ -2415,7 +2415,7 @@ name = "liq2sol-swapkey"
 version = "0.1.0"
 dependencies = [
  "musig2",
- "rand 0.8.8",
+ "rand 0.10.3",
  "serde_json",
  "simplicityhl",
 ]

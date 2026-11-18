@@ -7,10 +7,10 @@
     "vendor": "esbuild vendor-src/walletconnect.js --bundle --format=esm --minify --target=es2020 --define:global=globalThis --outfile=site/vendor/walletconnect.js && esbuild vendor-src/qrcode.js --bundle --format=esm --minify --target=es2020 --outfile=site/vendor/qrcode.js && esbuild vendor-src/jsqr.js --bundle --format=esm --minify --target=es2020 --outfile=site/vendor/jsqr.js"
   },
   "devDependencies": {
-    "@walletconnect/sign-client": "2.17.2",
-    "esbuild": "0.24.0",
+    "@walletconnect/sign-client": "2.26.0",
+    "esbuild": "0.28.2",
     "jsqr": "1.4.0",
-    "playwright-core": "1.58.0",
+    "playwright-core": "1.64.1",
     "qrcode-generator": "1.4.4"
   }
 }

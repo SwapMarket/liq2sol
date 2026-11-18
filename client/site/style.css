@@ -94,6 +94,11 @@ dl { margin: 0; }
 .addr { font: .82rem/1.35 ui-monospace, "Noto Mono", Menlo, monospace; overflow-wrap: anywhere; background: var(--deep); border: 1px dashed var(--dim); border-radius: 10px; padding: 8px 10px; margin-top: 8px; text-align: center; }
 .qr { display: flex; justify-content: center; margin-top: 10px; }
 .qr svg { width: 188px; height: 188px; background: #fff; border-radius: 10px; padding: 6px; }
+.qr[data-enlarge], .recovery-code[data-enlarge] { cursor: zoom-in; }
+/* A QR code, tapped: the whole screen, black, with the code as large as fits on its own white square, whose margin is the quiet
+   zone scanners need. Crisp squares, so a screenshot still reads. */
+.qr-full { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: #000; cursor: zoom-out; }
+.qr-full > svg, .qr-full > img { box-sizing: border-box; width: min(94vw, 94vh); height: min(94vw, 94vh); padding: min(3vw, 3vh); background: #fff; image-rendering: pixelated; }
 .recovery-codes figure { margin: 14px 0; }
 .recovery-codes figcaption { text-align: center; color: var(--muted); font-size: .85rem; margin-top: 4px; }
 /* Big and sharp, with its own white border, so a screenshot of it reads back. */

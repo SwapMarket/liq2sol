@@ -76,6 +76,8 @@ function coinPill(name) {
 }
 
 function fail(e) {
+  // Closing a dialog to stop is the person's own choice, not a failure.
+  if (e?.closedByUser) return;
   log('error', e);
   const banner = $('banner');
   banner.textContent = (e?.message ?? String(e)).split('api-key=')[0];
@@ -522,9 +524,14 @@ async function walletConnect() {
     h('button', { class: 'btn quiet', onclick: () => dialog.close() }, 'Close'));
   document.body.append(dialog);
   dialog.showModal();
+  // Closing the dialog ends this attempt. Otherwise it waited on for the phone, and every connect button, waiting for it,
+  // did nothing until a reload. A phone that approves afterwards is ignored.
+  const closed = new Promise((_, reject) => {
+    dialog.addEventListener('close', () => reject(Object.assign(new Error('closed'), { closedByUser: true })), { once: true });
+  });
   try {
     const { qrcode } = await import('../vendor/qrcode.js');
-    return await connectWalletConnect(settings.walletConnectProject || NETWORK.walletConnectProject, (uri) => {
+    return await Promise.race([closed, connectWalletConnect(settings.walletConnectProject || NETWORK.walletConnectProject, (uri) => {
       const qr = qrcode(0, 'L');
       qr.addData(uri);
       qr.make();
@@ -533,6 +540,7 @@ async function walletConnect() {
       box.removeAttribute('role');
       box.removeAttribute('aria-label');
       box.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2, scalable: true });
+      markEnlargeable(box);
       // The same request for a wallet on this device, which can't scan its own screen.
       if (matchMedia('(pointer: coarse)').matches) {
         box.after(
@@ -540,7 +548,7 @@ async function walletConnect() {
           h('p', { class: 'note' }, 'Your phone only lists wallets that handle these links. If yours isn’t there, close this and open the page in the wallet’s own browser.'),
         );
       }
-    });
+    })]);
   } finally {
     dialog.close();
     dialog.remove();
@@ -922,7 +930,7 @@ async function recoveryCodesView(swaps) {
       };
       let qr = make(0);
       if (qr.getModuleCount() === 4 * 23 + 17) qr = make(24);
-      const box = h('div', { class: 'recovery-code' }, codeCanvas(qr, `Recovery QR code${codes.length > 1 ? ` ${i + 1} of ${codes.length}` : ''}`));
+      const box = markEnlargeable(h('div', { class: 'recovery-code' }, codeCanvas(qr, `Recovery QR code${codes.length > 1 ? ` ${i + 1} of ${codes.length}` : ''}`)));
       return h('figure', {}, box, codes.length > 1 && h('figcaption', {}, `Swap ${i + 1} of ${codes.length}`));
     });
   } finally {
@@ -1054,8 +1062,48 @@ async function qrView(text) {
   qr.make();
   const box = h('div', { class: 'qr' });
   box.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2, scalable: true });
+  return markEnlargeable(box);
+}
+
+// Any QR code fills the screen when tapped, in white, as large as fits, for a phone held at a distance or a screenshot. It opens
+// as its own layer, over the dialog if it is in one, so the page redrawing underneath doesn't shrink it. A tap or Escape closes it.
+function markEnlargeable(box) {
+  box.dataset.enlarge = '';
+  box.title = 'Tap to enlarge';
+  box.tabIndex = 0;
   return box;
 }
+
+function enlarge(box) {
+  const canvas = box.querySelector('canvas');
+  const code = canvas ? h('img', { src: canvas.toDataURL(), alt: '' }) : box.querySelector('svg')?.cloneNode(true);
+  if (!code) return;
+  const layer = h('div', { class: 'qr-full', role: 'dialog', 'aria-label': 'QR code, enlarged. Tap to close.', tabIndex: 0 }, code);
+  const close = () => { layer.remove(); box.focus(); };
+  layer.onclick = close;
+  layer.onkeydown = (e) => {
+    if (['Escape', 'Enter', ' '].includes(e.key)) {
+      // Escape would otherwise also close the dialog underneath.
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    }
+  };
+  (box.closest('dialog') ?? document.body).append(layer);
+  layer.focus();
+}
+
+document.addEventListener('click', (e) => {
+  const box = e.target.closest?.('[data-enlarge]');
+  if (box) enlarge(box);
+});
+document.addEventListener('keydown', (e) => {
+  const box = e.target.closest?.('[data-enlarge]');
+  if (box && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    enlarge(box);
+  }
+});
 
 // A button's action on one swap, in turn with everything else touching it.
 // A button pressed for a swap, until its step ends. The step can wait behind a check already running for the swap, so the

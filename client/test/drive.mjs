@@ -479,6 +479,15 @@ async function l2s() {
     if (cls === '.pay-address' ? copied !== shown : !(shown.startsWith(`${copied} `) && /^\d+\.\d{8}$/.test(copied))) throw new Error(`${shown} copied ${copied}`);
   }
   step('clicking the amount or the address copies it, with a notification');
+  // Tapped, a QR code fills the screen as its own layer, so the 15 s redraw underneath leaves it be; a tap closes it.
+  await page.locator('.qr[data-enlarge]').first().click();
+  await page.locator('.qr-full > svg').waitFor({ timeout: 5000 });
+  await page.evaluate(() => window.dispatchEvent(new HashChangeEvent('hashchange')));
+  await new Promise((r) => setTimeout(r, 1000));
+  if (!(await page.locator('.qr-full').isVisible())) throw new Error('a redraw closed the enlarged code');
+  await page.locator('.qr-full').click();
+  await page.locator('.qr-full').waitFor({ state: 'detached', timeout: 5000 });
+  step('the payment QR code fills the screen when tapped, and a tap closes it');
   await pay(address, amountSats(env.AMOUNT), env.USDT);
   step(`paid ${env.AMOUNT} from the node's wallet to the address the page derived`);
   await page.locator('.confirmations', { hasText: /Your payment has [0-2]\/2 confirmations/ }).waitFor({ timeout: 60000 });
@@ -698,6 +707,13 @@ async function walletConnectWait() {
   await page.locator('dialog .spinner').waitFor({ timeout: 2000 });
   const turning = await page.locator('dialog .spinner').evaluate((e) => getComputedStyle(e).animationName);
   if (turning !== 'spin') throw new Error(`the spinner isn't animated: ${turning}`);
+  // Closing it ends the attempt, without a message, and Connect works again, with no reload.
+  await page.locator('dialog .btn', { hasText: 'Close' }).click();
+  await page.locator('dialog').waitFor({ state: 'detached', timeout: 5000 });
+  if (await page.locator('#banner:not([hidden])').count()) throw new Error('closing the dialog showed an error');
+  await page.locator('#go', { hasText: 'Connect a Solana wallet' }).click();
+  await page.locator('dialog .spinner').waitFor({ timeout: 2000 });
+  step('closing the WalletConnect dialog stops it quietly, and Connect works again at once');
   release();
   await page.locator('dialog').waitFor({ state: 'detached', timeout: 10000 });
   await page.locator('#banner').waitFor({ timeout: 5000 });
@@ -1019,6 +1035,10 @@ async function cancelling() {
   const code = phoneish.locator('.recovery-code canvas');
   await code.waitFor({ timeout: 10000 });
   await phoneish.screenshot({ path: path.join(shots, 'recovery-codes-phone.png'), fullPage: true });
+  await phoneish.locator('.recovery-code[data-enlarge]').click();
+  await phoneish.locator('.qr-full > img').waitFor({ timeout: 5000 });
+  await phoneish.keyboard.press('Escape');
+  await phoneish.locator('.qr-full').waitFor({ state: 'detached', timeout: 5000 });
   const shot = path.join(shots, `recovery-code-${Date.now()}.png`);
   await code.screenshot({ path: shot });
   if (await phoneish.locator('.pay-address').count()) throw new Error('showing the codes unlocked the next step');

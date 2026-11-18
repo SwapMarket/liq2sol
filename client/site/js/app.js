@@ -393,15 +393,20 @@ function watched(w, phone) {
   return {
     ...w,
     sign: async (tx) => {
+      // A wallet that never answers would hold this swap's steps for ever, its checks included. A signature reveals nothing until
+      // the page sends it, so giving up on one is safe, and the step can be tried again.
+      let stop;
+      const stopped = new Promise((_, reject) => { stop = () => reject(new Error(`Stopped waiting for ${w.name}. Nothing was sent, so try again when it is ready.`)); });
       const note = h('div', { id: 'wallet-wait', role: 'alertdialog', 'aria-live': 'assertive' },
         h('div', { class: 'spinner' }),
         h('strong', {}, `Approve in ${w.name}`),
         h('p', {}, phone
           ? `The request is waiting in ${w.name} on your phone. Open the app to approve it. Nothing happens on this page until you do.`
-          : `${w.name} has a transaction for you to approve, in its own window. If you don't see it, open ${w.name} from the browser's toolbar.`));
+          : `${w.name} has a transaction for you to approve, in its own window. If you don't see it, open ${w.name} from the browser's toolbar.`),
+        h('button', { class: 'btn quiet', id: 'wallet-stop', onclick: () => stop() }, 'Stop waiting'));
       document.body.append(note);
       try {
-        return await w.sign(tx);
+        return await Promise.race([w.sign(tx), stopped]);
       } finally {
         note.remove();
       }
@@ -1214,6 +1219,7 @@ function swapView(s) {
       h('div', {}, h('dt', {}, 'You receive'), h('dd', {}, s.direction === 'L2S' ? `${show(s.terms.solana_amount)} ${to}` : `${show(BigInt(s.terms.liquid_amount) / 100n)} ${to}`))),
     stepsView(s),
     swapBody(s),
+    !FINISHED.includes(s.state) && tickProblems.has(s.id) && h('p', { class: 'note tick-problem' }, `Can't check this swap right now, so it tries again shortly: ${tickProblems.get(s.id)}`),
     !FINISHED.includes(s.state) && addressesView(s));
 }
 
@@ -1632,6 +1638,9 @@ function render() {
 // A swap waiting on a slow wallet holds up only itself, and ticks don't pile up behind it.
 const ticking = new Set();
 
+// Why a swap couldn't be checked last time, shown on its card until a check works again.
+const tickProblems = new Map();
+
 function tickAll() {
   for (const s of Object.values(loadSwaps())) {
     // An expired L→S swap gets one look per visit, in case a coin reached it after all (Engine.tick).
@@ -1639,7 +1648,12 @@ function tickAll() {
     if ((FINISHED.includes(s.state) && !recheck) || ticking.has(s.id)) continue;
     ticking.add(s.id);
     withSwap(s.id, (fresh) => engine.tick(fresh))
-      .catch((e) => console.warn('tick', e.message))
+      .then(() => { if (tickProblems.delete(s.id)) render(); })
+      .catch((e) => {
+        console.warn('tick', e.message);
+        tickProblems.set(s.id, e.message.slice(0, 160));
+        render();
+      })
       .finally(() => ticking.delete(s.id));
   }
 }

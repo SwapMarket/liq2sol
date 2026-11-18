@@ -1208,6 +1208,13 @@ async function faucet() {
   const page = await newPage(undefined, null, false, who);
   await page.goto(`http://127.0.0.1:${site.port}/#faucet`);
   await page.locator('#faucet-connect').click();
+  // A wallet that never answers: Stop waiting frees the page, and nothing is sent.
+  await page.evaluate(() => localStorage.setItem('test.signDelay', '600000'));
+  await page.locator('#drip').click();
+  await page.locator('#wallet-stop').click({ timeout: 15000 });
+  await page.locator('#banner:not([hidden])', { hasText: 'Stopped waiting for Test Wallet' }).waitFor({ timeout: 5000 });
+  await page.locator('#wallet-wait').waitFor({ state: 'detached', timeout: 5000 });
+  step('a wallet that never answers can be given up on, and nothing is sent');
   await page.evaluate(() => localStorage.setItem('test.signDelay', '2000'));
   await page.locator('#drip').click();
   const waiting = page.locator('#wallet-wait', { hasText: 'Approve in Test Wallet' });

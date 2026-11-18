@@ -1,6 +1,6 @@
 # Taker client
 
-Status: built in [client/](../client), tested in a real browser against the real daemon, and live at https://swapmarket.github.io/liq2sol/, on mainnet by default. A fully static web app with no backend. Of section 6, SRI, the CSP and reproducible builds are in place; signed page hashes and an IPFS mirror are not.
+Status: built in [client/](../client), tested in a real browser against the real daemon, and live at https://swapmarket.github.io/liq2sol/, on mainnet by default. A fully static web app with no backend. Of section 6, SRI, the CSP, reproducible builds and signed page archives are in place; an IPFS mirror is not.
 
 ## 1. Architecture
 
@@ -193,7 +193,7 @@ is safely kept, so the UI says so plainly.
 
 **Rescue.** The page's Rescue tab picks a swap up from the file on any device, and refunds need no maker or relay. Addresses are derived again from the file, not read from it.
 
-**Not built yet:** a single-file `recovery.html` that runs from disk, and a `liq2sol-recover` CLI. Until then a local copy served over HTTP is the way to recover if the site is gone.
+**If the site is gone:** each release carries the page, signed and reproducible, to serve on your own machine (`client/reproducible/OFFLINE.md`). Its Rescue tab works the same there. A single-file `recovery.html` that runs from disk, and a `liq2sol-recover` CLI, are not built.
 
 ## 5. L-BTC handling
 
@@ -216,9 +216,9 @@ Per D3:
 | Pinned dependencies | `Cargo.lock` and a package lockfile with integrity hashes. `--locked` and `npm ci`. Dependency changes require review. Minimal count. |
 | SRI | At deploy, `client/stamp.mjs` pins every script (an import map's `integrity`, allowed by its own hash in the CSP), the style sheet and the WASM (a `wasm-sha256` meta tag, checked by `app.js` before running it) in `index.html`. Browsers without import-map integrity run the page unchecked. The browser test checks that a changed script or WASM is refused. |
 | CSP | `default-src 'self'; connect-src` limited to `'self'`, `https:` and `wss:`, since endpoints are user-configurable; `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`, on testnet and mainnet (user's decision, 2026-11-06); no inline scripts; `frame-src` allows only WalletConnect's verify servers, whose hidden frame proves the page's domain to the wallet (blocked, every wallet says "Cannot verify"). **`unsafe-eval` is there for wallets:** Phantom's injected scripts call `new Function`, and without it every wallet message fails with "Internal JSON-RPC error" (found in Opera). A page can't exempt one extension. Our own code never evaluates strings, and inline and outside scripts stay blocked. Set by meta tag, because GitHub Pages can't set headers. |
-| Release hashes | Signed `SHA256SUMS` with the SwapMarket key on each GitHub release. Includes the CMR of each template version. |
+| Release hashes | **Done.** Each maker release also carries `liq2sol-page-<tag>.tar.gz`, the page built reproducibly at that tag, so the release's `SHA256SUMS`, signed by hand with the SwapMarket key (`scripts/sign-release.sh`), covers it too. The CMR is fixed by the template version in the source. |
 | IPFS mirror | Each release is pinned, with its CID in the release notes. |
-| Run locally | Release zip, `python3 -m http.server`, or `recovery.html` from disk. |
+| Run locally | **Done.** The release's page archive, served with `python3 -m http.server`, as its `OFFLINE.md` says. A single-file `recovery.html` that runs from disk is not built. |
 | Hosting risk | A compromised GitHub account can replace the site. The page can't verify itself, so users who care should use a hash-checked local copy or an IPFS CID. The UI links to these instructions. |
 
 No analytics, no external fonts, no CDN. Program ID, asset ID, mint and template CMR are pinned per network in the

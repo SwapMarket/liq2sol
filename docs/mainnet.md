@@ -36,7 +36,7 @@ An immutable program can never be fixed. A bug means a new program, a new addres
 
 ### 2. Still open, with mainnet on
 
-- **A reproducible page build: done** (`client/reproducible/README.md`). `scripts/check-page.sh` rebuilds the live page's commit and compares every file.
+- **A reproducible page build: done** (`client/reproducible/README.md`). `scripts/check-page.sh` rebuilds the live page's commit and compares every file. Each release also carries the page, signed, to run locally if the site is gone (`client/reproducible/OFFLINE.md`).
 - **The page's signing backend.** It uses `k256`, which isn't constant time (`client/wasm/.cargo/audit.toml`). The key lasts one swap and stays in the user's browser.
 - **Real wallets on real phones.** Trust Wallet has been used on mainnet. Firefox and Safari are still untested.
 - **Vetted makers.** The mainnet list in `client/site/js/vetted.js` has SwapMarket's own maker only.

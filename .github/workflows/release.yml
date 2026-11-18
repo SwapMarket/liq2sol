@@ -1,4 +1,5 @@
-# Builds the maker for Debian when a version tag is pushed, and publishes it as a pre-release with checksums.
+# Builds the maker for Debian when a version tag is pushed, and the taker page reproducibly, and publishes them as a pre-release
+# with checksums.
 # It builds in Debian 12, because a binary needs a glibc no newer than the machine it runs on. Actions are pinned to exact commits.
 # x86-64, and arm64 for a Raspberry Pi 4 or 5 with a 64-bit OS, each built natively on its own kind of runner.
 name: Release the maker
@@ -54,8 +55,40 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # The page at this tag, built reproducibly (client/reproducible), so the signed SHA256SUMS covers it too, and anyone can run it
+  # on their own machine if the site is ever gone: see OFFLINE.md inside it.
+  page:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # The deploy keeps the toolchain image; without it, this builds it, which takes about 20 minutes.
+      - name: Reuse the toolchain image
+        id: image
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /tmp/page-builder.tar
+          key: page-builder-${{ hashFiles('client/reproducible/Dockerfile', 'client/reproducible/build-inside.sh', 'client/wasm/Cargo.lock') }}
+      - name: Load it
+        if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/page-builder.tar
+      - name: Build the page, as anyone can
+        run: |
+          name="liq2sol-page-${GITHUB_REF_NAME}"
+          scripts/build-page.sh "$GITHUB_SHA" "dist/$name"
+          cp client/reproducible/OFFLINE.md client/LICENSE "dist/$name/"
+          cd dist
+          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - "$name" | gzip -n > "$name.tar.gz"
+          rm -r "$name"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-page
+          path: dist/
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build, page]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -73,4 +106,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --prerelease --title "$GITHUB_REF_NAME" \
-            --notes "The liq2sol maker, for Debian 12 or later: x86_64, and aarch64 for a Raspberry Pi 4 or 5 with a 64-bit OS. For mainnet or the test networks, as its configs say; mainnet swaps are capped at 100 USDT. Installation, including a mainnet maker, is in README.md inside the archive. SHA256SUMS.asc, SwapMarket's signature, is added by hand after this."
+            --notes "The liq2sol maker, for Debian 12 or later: x86_64, and aarch64 for a Raspberry Pi 4 or 5 with a 64-bit OS. For mainnet or the test networks, as its configs say; mainnet swaps are capped at 100 USDT. Installation, including a mainnet maker, is in README.md inside the archive. liq2sol-page-${GITHUB_REF_NAME}.tar.gz is the taker page at this tag, built reproducibly, to run on your own machine if the site is ever gone (OFFLINE.md inside). SHA256SUMS.asc, SwapMarket's signature, is added by hand after this."

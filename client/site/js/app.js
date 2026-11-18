@@ -1038,6 +1038,9 @@ function copyable(cls, shown, value, name) {
   }, addressText(shown));
 }
 
+// Each payment address's QR code, once made, so a redraw shows it at once.
+const qrCache = new Map();
+
 async function qrView(text) {
   const { qrcode } = await import('../vendor/qrcode.js');
   const qr = qrcode(0, 'M');
@@ -1092,11 +1095,12 @@ function refundAddressInput(s) {
 
 // Whether each swap's fee coin is confirmed, so a redraw doesn't flash its button off while it looks again.
 const feeReady = new Map();
+const feeText = new Map();
 
 // Whether the fee coin has arrived. The button that needs it stays off until it is confirmed. It looks again by itself,
 // because the page doesn't redraw while the refund address is being typed.
 function feeCoinStatus(s, button) {
-  const line = h('p', { class: 'note fee-status' }, 'Checking for the fee coin…');
+  const line = h('p', { class: `note fee-status${feeReady.get(s.id) ? ' good-text' : ''}`, 'data-live': '' }, feeText.get(s.id) ?? 'Checking for the fee coin…');
   button.disabled = !feeReady.get(s.id);
   const check = () => esplora[0].readCoins(s.info.plain_fee_address, s.info.fee_script, s.secrets.blinding_key).then((coins) => {
     const fee = coins.filter((c) => c.is_lbtc && BigInt(c.amount) >= BigInt(NETWORK.refundFeeCoinSats));
@@ -1106,6 +1110,7 @@ function feeCoinStatus(s, button) {
         : 'No fee coin yet.';
     line.classList.toggle('good-text', !!ready);
     feeReady.set(s.id, !!ready);
+    feeText.set(s.id, line.textContent);
     button.disabled = !ready;
     return !!ready;
   }).catch(() => { line.textContent = 'Couldn’t check for the fee coin just now.'; return false; });
@@ -1162,7 +1167,7 @@ function refundCoinNote(s) {
 
 function refundLiquidView(s) {
   const input = refundAddressInput(s);
-  const button = h('button', { class: 'btn refund', onclick: act(s.id, (fresh) => engine.refundOnLiquid(fresh, input.value.trim())) }, 'Refund');
+  const button = h('button', { class: 'btn refund', onclick: act(s.id, (fresh) => engine.refundOnLiquid(fresh, (refundTo.get(s.id) ?? '').trim())) }, 'Refund');
   return [
     refundCoinNote(s),
     ...feeCoinParts(s, button),
@@ -1173,7 +1178,7 @@ function refundLiquidView(s) {
 
 function earlyRefundView(s) {
   const input = refundAddressInput(s);
-  const button = h('button', { class: 'btn early-go', onclick: act(s.id, (fresh) => engine.askEarlyRefund(fresh, input.value.trim())) }, s.maker_cancelled ? 'Get my refund' : 'Ask the maker');
+  const button = h('button', { class: 'btn early-go', onclick: act(s.id, (fresh) => engine.askEarlyRefund(fresh, (refundTo.get(s.id) ?? '').trim())) }, s.maker_cancelled ? 'Get my refund' : 'Ask the maker');
   return [
     s.maker_cancelled
       ? h('p', { class: 'good maker-cancelled' }, 'The maker cancelled, and won’t lock. Your coin can come back now.')
@@ -1194,8 +1199,9 @@ function swapBody(s) {
     case 'restored':
       return h('p', { class: 'status spin' }, s.status || 'Checking the chains to see how far this swap got…');
     case 'fund': {
-      const box = h('div', {});
-      qrView(s.info.address).then((qr) => box.append(qr)).catch(() => {});
+      const box = h('div', { 'data-live': '' });
+      if (qrCache.has(s.info.address)) box.append(qrCache.get(s.info.address).cloneNode(true));
+      else qrView(s.info.address).then((qr) => { qrCache.set(s.info.address, qr); box.append(qr.cloneNode(true)); }).catch(() => {});
       return [
         h('p', { class: 'note' }, `Send exactly this amount of ${from}, once, from any Liquid wallet:`),
         copyable('pay-amount', `${liquidUnits(s.terms.liquid_amount)} ${from}`, liquidUnits(s.terms.liquid_amount), 'Amount'),
@@ -1393,7 +1399,7 @@ function swapPrice(s) {
 // Whoever gets such a link can read them. Filled in afterwards, because the coin's transaction has to be fetched.
 function explorerLinks(s) {
   const link = (cls, href, text) => h('a', { class: `explorer ${cls}`, href, target: '_blank', rel: 'noopener noreferrer', title: 'Opens the explorer with this swap’s amounts unblinded. Anyone you share this link with can read them.' }, text);
-  const box = h('span', { class: 'explorer-links' }, s.escrow_address && link('explorer-solana', NETWORK.solanaExplorer(s.escrow_address), 'Solana'));
+  const box = h('span', { class: 'explorer-links', 'data-live': '' }, s.escrow_address && link('explorer-solana', NETWORK.solanaExplorer(s.escrow_address), 'Solana'));
   // A refund of a coin this page never read, such as a wrong one, still gets its link, without amounts.
   if (!s.coin?.txid && s.refund_txid) box.prepend(link('explorer-spend', `${NETWORK.explorer}/tx/${s.refund_txid}`, 'Liquid refund'));
   if (s.coin?.txid) {
@@ -1437,7 +1443,7 @@ const sol = (lamports) => `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
 // The history page redraws every few seconds, so this starts from the last known answer and only changes when the answer does,
 // or it would blink on every redraw.
 function reclaimButton(s) {
-  const box = h('div', { class: 'reclaim-box' });
+  const box = h('div', { class: 'reclaim-box', 'data-live': '' });
   if (s.direction !== 'S2L' || !['done', 'refunded'].includes(s.state)) return box;
   const show = (lamports) => {
     const has = box.querySelector('.reclaim');
@@ -1473,7 +1479,7 @@ function historyView() {
   if (!all.length) return h('div', { class: 'card' }, h('h2', {}, 'History'), h('p', { class: 'sub' }, 'Swaps from this browser appear here.'));
   const fact = (name, value) => h('div', {}, h('dt', {}, name), h('dd', {}, value));
   const rents = [];
-  const total = h('p', { class: 'note history-rent-total', hidden: true });
+  const total = h('p', { class: 'note history-rent-total', hidden: true, 'data-live': '' });
   const showTotal = (sum) => {
     total.hidden = !(sum > 0n);
     if (sum > 0n) total.textContent = `${sol(sum)} of rent can come back to your wallet. Open a swap marked below to reclaim it.`;
@@ -1482,7 +1488,7 @@ function historyView() {
   const items = all.map((s) => {
     const [from, to] = names[s.direction];
     const vetted = vettedMaker(NETWORK.name, s.maker);
-    const rentNote = h('span', { class: 'history-rent', hidden: true });
+    const rentNote = h('span', { class: 'history-rent', hidden: true, 'data-live': '' });
     const known = rentCache.get(s.id)?.lamports ?? 0n;
     if (known > 0n) {
       rentNote.textContent = `${sol(known)} rent to reclaim`;
@@ -1614,8 +1620,8 @@ function settingsDialog() {
 // ---- The faucet, on test networks only ----
 function faucetView() {
   const f = NETWORK.faucet;
-  const status = h('p', { class: 'note', id: 'faucet-status', role: 'status' });
-  const balance = h('p', { class: 'note', id: 'faucet-balance' });
+  const status = h('p', { class: 'note', id: 'faucet-status', role: 'status', 'data-live': '' });
+  const balance = h('p', { class: 'note', id: 'faucet-balance', 'data-live': '' });
   const showBalance = async () => {
     if (!wallet) return;
     const [units, lamports] = await Promise.all([
@@ -1728,7 +1734,9 @@ function patch(parent, nodes) {
 }
 
 // Makes `old` look like `node` in place, down to the text, and says whether it could. Something a person acts on (a button, link
-// or field) is kept only if it is exactly the same, so its handler is never one for something else.
+// or field) is kept only if it is exactly the same, so its handler is never one for something else. So is anything marked
+// data-live, which fills itself in after it is drawn: editing the one on screen would undo that, while the new one's filling went
+// to a copy nobody sees. Each starts from what it last showed, so a redraw usually finds it the same.
 const ACTED_ON = new Set(['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT', 'CANVAS', 'DIALOG']);
 function morph(old, node) {
   if (old.isEqualNode(node)) return true;
@@ -1737,7 +1745,7 @@ function morph(old, node) {
     old.nodeValue = node.nodeValue;
     return true;
   }
-  if (old.nodeType !== Node.ELEMENT_NODE || ACTED_ON.has(old.nodeName)) return false;
+  if (old.nodeType !== Node.ELEMENT_NODE || ACTED_ON.has(old.nodeName) || 'live' in old.dataset) return false;
   for (const { name } of [...old.attributes]) if (!node.hasAttribute(name)) old.removeAttribute(name);
   for (const { name, value } of [...node.attributes]) if (old.getAttribute(name) !== value) old.setAttribute(name, value);
   patch(old, [...node.childNodes]);

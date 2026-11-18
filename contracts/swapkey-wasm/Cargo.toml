@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 liq2sol-swapkey = { path = "../swapkey" }
 simplicityhl = "=0.9.0"
 wasm-bindgen = "0.2"
-rand = "0.8"
+rand = "0.9"
 # Browsers get randomness from crypto.getRandomValues, through this feature.
 getrandom = { version = "0.2", features = ["js"] }
 # And musig2's rand, which also needs the cfg in .cargo/config.toml.

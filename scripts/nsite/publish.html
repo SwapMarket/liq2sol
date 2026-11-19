@@ -27,7 +27,7 @@ const sha256 = async data => hex(await crypto.subtle.digest('SHA-256', data));
 const now = () => Math.floor(Date.now() / 1000);
 
 let pubkey = null;
-const files = await (await fetch('files.json')).json();   // [{path, sha256, type, size}]
+const files = await (await fetch('files.json', { cache: 'no-store' })).json();   // [{path, sha256, type, size}]
 const stored = new Map();                                  // sha256 -> Set(server)
 log(`${files.length} files, ${(files.reduce((a, f) => a + f.size, 0) / 1e6).toFixed(2)} MB`);
 
@@ -73,7 +73,7 @@ async function upload(server, f, bytes) {
 document.getElementById('upload').onclick = async () => {
   document.getElementById('upload').disabled = true;
   for (const f of files) {
-    const bytes = await (await fetch('site' + f.path)).arrayBuffer();
+    const bytes = await (await fetch('site' + f.path, { cache: 'no-store' })).arrayBuffer();
     if (await sha256(bytes) !== f.sha256) { log(`${f.path}: local bytes don't match files.json, stopping`, 'bad'); return; }
     const ok = new Set();
     for (const s of SERVERS) {

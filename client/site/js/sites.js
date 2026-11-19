@@ -4,7 +4,7 @@
 export const KEY36 = '1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bc';
 export const NPUB = 'npub1xhklzztd83v34zsf9da2gvfrctj5wcsvsx09er9v26jy7r0uq8yq4vme7d';
 
-// name: 'liq2sol', 'sol2base', 'eth2base', or '' for BTC Swaps.
+// name: 'liq2sol', 'sol2base', 'eth2base', 'sol2tron', or '' for BTC Swaps.
 export function siteUrl(name, hostname = location.hostname) {
   const [label, ...gateway] = hostname.split('.');
   if (gateway.length && (label === NPUB || (label.startsWith(KEY36) && /^[a-z0-9-]{1,13}$/.test(label.slice(KEY36.length))))) {

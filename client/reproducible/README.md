@@ -55,8 +55,8 @@ each path to its sha256. It is SwapMarket's named site `liq2sol`, under
   It also publishes to `relay.nsite.lol`, where nsite.lol looks. An event copied there later, with its old timestamp, was not picked
   up (2026-11-19, UNVERIFIED why): to update a gateway, sign a new manifest.
   It then signs a snapshot (kind 5128), which keeps each version's paths and hashes addressable after the next manifest replaces it.
-- **SwapMarket's other sites** are nsites under the same key: sol2base and eth2base as named sites, and BTC Swaps
-  (SwapMarket/swapmarket.github.io) as the root site, at `<npub>.<gateway>`. `scripts/publish-nsite.sh sol2base|eth2base|btc` takes
+- **SwapMarket's other sites** are nsites under the same key: sol2base, eth2base and sol2tron as named sites, and BTC Swaps
+  (SwapMarket/swapmarket.github.io) as the root site, at `<npub>.<gateway>`. `scripts/publish-nsite.sh sol2base|eth2base|sol2tron|btc` takes
   the site's latest GitHub Pages build from its deploy's artifact, refuses it unless every file is what GitHub Pages serves now, and
   publishes those bytes. BTC Swaps' docs stay on GitHub Pages. Each site's menu links to the others on the same gateway when it is
   opened on one under SwapMarket's key, and to GitHub Pages anywhere else (`client/site/js/sites.js`).

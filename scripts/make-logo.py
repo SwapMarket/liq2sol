@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Draws a logo: the SwapMarket icon and the site's name as outlines, so it looks the same in every browser.
 Needs fontTools (pip install fonttools) and Noto Sans Bold Italic. Run from the repo root.
-Usage: scripts/make-logo.py [liq2sol|sol2base|eth2base] [OUT]   (default liq2sol, into client/site/logo.svg; the sister sites
+Usage: scripts/make-logo.py [liq2sol|sol2base|eth2base|sol2tron] [OUT]   (default liq2sol, into client/site/logo.svg; the sister sites
 keep theirs as logo.svg in their own repositories)
 
 The icon is the one from SwapMarket/swapmarket.github.io (public/sm_icon.svg), kept here at scripts/sm_icon.svg.
@@ -16,12 +16,14 @@ ICON=open('scripts/sm_icon.svg').read()
 f=TTFont(FONT); gs=f.getGlyphSet(); cmap=f.getBestCmap(); upm=f['head'].unitsPerEm
 # The icon, in its own 500-unit box: ink spans x 3..483, y 19..494, and the long bottom edge is at y 441.5.
 IX0, IX1, IY0, IY1, EDGE = 3, 483, 19, 494, 441.5
-# Each chain's name in its colour: Liquid's teal, Solana's gradient, Base's blue, Ethereum's blue-violet. The 2 is white.
+# Each chain's name in its colour: Liquid's teal, Solana's gradient, Base's blue, Ethereum's blue-violet, Tron's red. The 2 is white.
 SOLANA=('#9945ff', '#14f195')
 LOGOS={
     'liq2sol': [('liq', '#46b3a3'), ('2', '#ffffff'), ('sol', SOLANA)],
     'sol2base': [('sol', SOLANA), ('2', '#ffffff'), ('base', '#3d82ff')],
     'eth2base': [('eth', '#8a9cf0'), ('2', '#ffffff'), ('base', '#3d82ff')],
+    # Tron's red (#ff060a), lifted a little so it reads on the dark navy.
+    'sol2tron': [('sol', SOLANA), ('2', '#ffffff'), ('tron', '#ff3a3f')],
 }
 name=sys.argv[1] if len(sys.argv) > 1 else 'liq2sol'
 out=sys.argv[2] if len(sys.argv) > 2 else 'client/site/logo.svg'

@@ -3,7 +3,7 @@
 # Alby. The key never comes near this script.
 #
 #   scripts/publish-nsite.sh liq2sol [COMMIT]      named site liq2sol, built here reproducibly from COMMIT (default HEAD)
-#   scripts/publish-nsite.sh sol2base | eth2base   named sites, from their latest GitHub Pages deploy
+#   scripts/publish-nsite.sh sol2base | eth2base | sol2tron   named sites, from their latest GitHub Pages deploy
 #   scripts/publish-nsite.sh btc                   BTC Swaps (SwapMarket/swapmarket.github.io) as the root site, from its latest
 #                                                  "Deploy main" build, without the docs, which stay on GitHub Pages
 #
@@ -57,6 +57,11 @@ case $site in
     same_as_live https://swapmarket.github.io/eth2base/
     meta='{"kind": 35128, "d": "eth2base", "title": "eth2base", "description": "Move USDC between Ethereum and Base with Circle'"'"'s CCTP.", "source": "https://github.com/SwapMarket/eth2base"}'
     ;;
+  sol2tron)
+    from_deploy SwapMarket/sol2tron "Deploy Pages" github-pages
+    same_as_live https://swapmarket.github.io/sol2tron/
+    meta='{"kind": 35128, "d": "sol2tron", "title": "sol2tron", "description": "Move USDT between Solana and Tron.", "source": "https://github.com/SwapMarket/sol2tron"}'
+    ;;
   btc)
     from_deploy SwapMarket/swapmarket.github.io "Deploy main" app-dist
     rm -rf "${work:?}/site/docs"
@@ -64,7 +69,7 @@ case $site in
     meta='{"kind": 15128, "title": "SwapMarket", "description": "Non-custodial swaps between Bitcoin, Lightning, Liquid and Rootstock, through competing providers.", "source": "https://github.com/SwapMarket/swapmarket.github.io"}'
     ;;
   *)
-    echo "usage: scripts/publish-nsite.sh liq2sol [COMMIT] | sol2base | eth2base | btc" >&2; exit 2 ;;
+    echo "usage: scripts/publish-nsite.sh liq2sol [COMMIT] | sol2base | eth2base | sol2tron | btc" >&2; exit 2 ;;
 esac
 
 python3 -I "$repo/scripts/nsite/files.py" "$work/site" > "$work/files.json"

@@ -8,7 +8,7 @@ import { CANCELLABLE, Engine, FINISHED, deriveSwap, phase, rulesJson } from './s
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
 import { captureConsole, clearLogs, log, logsCount, logsText } from './logs.js';
 import { makeRecovery, offerDownload, readRecovery, readRecoveryFiles, recoveryCodes } from './recovery.js';
-import { nsiteUrl, siteUrl } from './sites.js';
+import { nsiteGateway, nsiteUrl, siteUrl } from './sites.js';
 import { vettedMaker } from './vetted.js';
 import { connectExtension, connectWalletConnect, extensionWallets, openInWallets, restoreWalletConnect } from './wallet.js';
 
@@ -1903,6 +1903,7 @@ function navMenu() {
   // says without this, so this tab stays and keeps the swap going.
   for (const a of document.querySelectorAll('a[data-site]')) a.href = siteUrl(a.dataset.site);
   for (const a of document.querySelectorAll('a[data-nsite]')) a.href = nsiteUrl(a.dataset.nsite);
+  if (nsiteGateway()) for (const note of document.querySelectorAll('[data-nsite-note]')) note.hidden = true;
   for (const a of document.querySelectorAll('a[data-same-tab]')) {
     a.addEventListener('click', (e) => {
       if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;

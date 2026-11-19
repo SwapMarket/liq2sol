@@ -2,7 +2,7 @@
 // Links between SwapMarket's sites stay on the nsite gateway they were opened from, and go to GitHub Pages from anywhere else.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { KEY36, NPUB, NSITE_GATEWAY, nsiteUrl, siteUrl } from '../site/js/sites.js';
+import { KEY36, NPUB, NSITE_GATEWAY, nsiteGateway, nsiteUrl, siteUrl } from '../site/js/sites.js';
 
 test('on GitHub Pages and elsewhere, links go to GitHub Pages', () => {
   for (const host of ['swapmarket.github.io', '127.0.0.1', 'localhost', 'example.com']) {
@@ -34,4 +34,12 @@ test('the copy on Nostr is on the chosen gateway, from anywhere', () => {
   assert.equal(nsiteUrl(''), `https://${NPUB}.nwb.tf/`);
   assert.equal(nsiteUrl('sol2tron', 'nsite.lol'), `https://${KEY36}sol2tron.nsite.lol/`);
   for (const name of ['liq2sol', 'sol2base', 'eth2base', 'sol2tron']) assert.ok(`${KEY36}${name}`.length <= 63, 'a DNS label');
+});
+
+test('a page knows when it is already one of SwapMarket\'s nsites, so it can drop its link to Nostr', () => {
+  assert.equal(nsiteGateway(`${KEY36}liq2sol.nwb.tf`), 'nwb.tf');
+  assert.equal(nsiteGateway(`${NPUB}.nsite.lol`), 'nsite.lol');
+  for (const host of ['swapmarket.github.io', '127.0.0.1', `${'0'.repeat(50)}liq2sol.nwb.tf`, `${KEY36}liq2sol`, `x${KEY36}liq2sol.nwb.tf`]) {
+    assert.equal(nsiteGateway(host), null, host);
+  }
 });

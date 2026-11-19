@@ -13,11 +13,17 @@ export function nsiteUrl(name, gateway = NSITE_GATEWAY) {
   return `https://${name ? KEY36 + name : NPUB}.${gateway}/`;
 }
 
+// The gateway this page is served from, when it is one of SwapMarket's nsites; null anywhere else. A page on Nostr already needs no
+// link to its copy on Nostr.
+export function nsiteGateway(hostname = location.hostname) {
+  const [label, ...gateway] = hostname.split('.');
+  const ours = label === NPUB || (label.startsWith(KEY36) && /^[a-z0-9-]{1,13}$/.test(label.slice(KEY36.length)));
+  return gateway.length && ours ? gateway.join('.') : null;
+}
+
 // name: 'liq2sol', 'sol2base', 'eth2base', 'sol2tron', or '' for BTC Swaps.
 export function siteUrl(name, hostname = location.hostname) {
-  const [label, ...gateway] = hostname.split('.');
-  if (gateway.length && (label === NPUB || (label.startsWith(KEY36) && /^[a-z0-9-]{1,13}$/.test(label.slice(KEY36.length))))) {
-    return `https://${name ? KEY36 + name : NPUB}.${gateway.join('.')}/`;
-  }
+  const gateway = nsiteGateway(hostname);
+  if (gateway) return `https://${name ? KEY36 + name : NPUB}.${gateway}/`;
   return `https://swapmarket.github.io/${name ? `${name}/` : ''}`;
 }

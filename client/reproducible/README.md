@@ -48,13 +48,18 @@ each path to its sha256. It is SwapMarket's named site `liq2sol`, under
 - **WalletConnect** works only on origins in the Reown project's allowlist: `swapmarket.github.io` and the nsite.lol address.
 - **Blossom servers:** blossom.yakihonne.com and nostr.download hold every file. nostr.download labels HTML and JavaScript
   `text/plain`, so it is listed second. Many servers refuse HTML, JavaScript or WebAssembly.
-- **Publishing** is by hand, after a release, like signing it: `scripts/publish-nsite.sh [commit]` builds the commit and serves
+- **Publishing** is by hand, after a release, like signing it: `scripts/publish-nsite.sh liq2sol [commit]` builds the commit and serves
   `scripts/nsite/publish.html` on `http://127.0.0.1:8765`, which signs through a NIP-07 extension (Alby) holding SwapMarket's key.
   The key never reaches the repository, the script or CI, and the page refuses any other key. Gateways read the manifest from the
   key's own relays (kind 10002), which the page publishes to as well.
   It also publishes to `relay.nsite.lol`, where nsite.lol looks. An event copied there later, with its old timestamp, was not picked
   up (2026-11-19, UNVERIFIED why): to update a gateway, sign a new manifest.
   It then signs a snapshot (kind 5128), which keeps each version's paths and hashes addressable after the next manifest replaces it.
+- **SwapMarket's other sites** are nsites under the same key: sol2base and eth2base as named sites, and BTC Swaps
+  (SwapMarket/swapmarket.github.io) as the root site, at `<npub>.<gateway>`. `scripts/publish-nsite.sh sol2base|eth2base|btc` takes
+  the site's latest GitHub Pages build from its deploy's artifact, refuses it unless every file is what GitHub Pages serves now, and
+  publishes those bytes. BTC Swaps' docs stay on GitHub Pages. Each site's menu links to the others on the same gateway when it is
+  opened on one under SwapMarket's key, and to GitHub Pages anywhere else (`client/site/js/sites.js`).
 - **Frames.** Neither GitHub Pages nor the gateways forbid framing, and a meta CSP can't. So the page refuses to run inside another
   page, where an overlay could steer clicks, and offers a link to open it in its own tab.
 

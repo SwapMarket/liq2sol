@@ -1,21 +1,24 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Publish liq2sol nsite</title>
+<title>Publish an nsite</title>
 <style>
   body { font: 14px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2em auto; padding: 0 16px; }
   button { font-size: 15px; padding: .5em 1em; }
   pre { background: #f4f4f4; padding: .8em; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
   .ok { color: #070; } .bad { color: #b00; }
 </style>
-<h1>Publish liq2sol as a named nsite</h1>
-<p>Run by <code>scripts/publish-nsite.sh</code>. Uploads the reproducible build's files to Blossom servers and publishes a kind 35128 manifest (d = <code>liq2sol</code>),
-signed by your NIP-07 extension (Alby). The key never leaves the extension. Each upload asks for one signature, then one for the manifest and one for its snapshot.</p>
+<h1>Publish an nsite</h1>
+<p>Run by <code>scripts/publish-nsite.sh</code>. Uploads the site's files to Blossom servers and publishes its manifest (kind 35128 for a
+named site, 15128 for the root site), signed by your NIP-07 extension (Alby). The key never leaves the extension. Each upload asks for one signature, then one for the manifest and one for its snapshot.</p>
 <p><button id="connect">1. Connect Alby</button> <span id="who"></span></p>
 <p><button id="upload" disabled>2. Upload files</button></p>
 <p><button id="publish" disabled>3. Sign and publish the manifest</button></p>
 <pre id="log"></pre>
 <script type="module">
-const D_TAG = 'liq2sol';
+// What publish-nsite.sh is publishing: kind 35128 with a d tag for a named site, kind 15128 without one for the root site.
+const SITE = await (await fetch('site.json', { cache: 'no-store' })).json();
+const NAME = SITE.d ?? 'root';
+document.querySelector('h1').textContent = SITE.kind === 15128 ? `Publish ${SITE.title} as SwapMarket's root nsite` : `Publish ${SITE.title} as a named nsite`;
 // SwapMarket's key, npub1xhklzztd83v34zsf9da2gvfrctj5wcsvsx09er9v26jy7r0uq8yq4vme7d. Another key would publish a different site.
 const EXPECTED = '35edf1096d3c591a8a092b7aa43123c2e547620c819e5c8cac56a44f0dfc01c8';
 const SERVERS = ['https://blossom.primal.net', 'https://blossom.band', 'https://nostr.download', 'https://24242.io'];
@@ -60,7 +63,7 @@ async function has(server, sha) {
 
 async function upload(server, f, bytes) {
   const auth = await window.nostr.signEvent({
-    kind: 24242, created_at: now(), content: `Upload ${f.path} for the ${D_TAG} nsite`,
+    kind: 24242, created_at: now(), content: `Upload ${f.path} for the ${NAME} nsite`,
     tags: [['t', 'upload'], ['x', f.sha256], ['expiration', String(now() + 900)]],
   });
   const r = await fetch(`${server}/upload`, {
@@ -131,15 +134,15 @@ document.getElementById('publish').onclick = async () => {
   const aggregate = await sha256(new TextEncoder().encode(lines));
   // Sent as soon as it is signed: a gateway that polls skips an event arriving after the poll its created_at falls in.
   const event = await window.nostr.signEvent({
-    kind: 35128, created_at: now(), content: '',
+    kind: SITE.kind, created_at: now(), content: '',
     tags: [
-      ['d', D_TAG],
+      ...(SITE.kind === 35128 ? [['d', SITE.d]] : []),
       ...files.map(f => ['path', f.path, f.sha256]),
       ['x', aggregate, 'aggregate'],
       ...window.fullServers.map(s => ['server', s]),
-      ['title', 'liq2sol'],
-      ['description', 'Trustless, confidential atomic swaps between USDt on Liquid and USDT on Solana.'],
-      ['source', 'https://github.com/SwapMarket/liq2sol'],
+      ['title', SITE.title],
+      ['description', SITE.description],
+      ['source', SITE.source],
     ],
   });
   log('manifest ' + event.id + ', aggregate ' + aggregate);
@@ -147,7 +150,7 @@ document.getElementById('publish').onclick = async () => {
   // A snapshot (NIP-5A kind 5128, a regular event) keeps this version addressable after the next manifest replaces it.
   const snapshot = await window.nostr.signEvent({
     kind: 5128, created_at: now(), content: '',
-    tags: [['a', `35128:${event.pubkey}:${D_TAG}`], ...event.tags.filter(t => t[0] !== 'd')],
+    tags: [['a', `${SITE.kind}:${event.pubkey}:${SITE.d ?? ''}`], ...event.tags.filter(t => t[0] !== 'd')],
   });
   log('snapshot ' + snapshot.id);
   await send(snapshot);

@@ -5,7 +5,8 @@ import hashlib, json, os, sys
 root = sys.argv[1]
 types = {'.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
          '.svg': 'image/svg+xml', '.wasm': 'application/wasm', '.json': 'application/json',
-         '.png': 'image/png', '.ico': 'image/x-icon', '.txt': 'text/plain', '.md': 'text/markdown', '.ts': 'text/plain'}
+         '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif',
+         '.woff2': 'font/woff2', '.woff': 'font/woff', '.ico': 'image/x-icon', '.txt': 'text/plain', '.md': 'text/markdown', '.ts': 'text/plain'}
 out = []
 for d, _, names in os.walk(root):
     for n in sorted(names):

@@ -8,6 +8,7 @@ import { CANCELLABLE, Engine, FINISHED, deriveSwap, phase, rulesJson } from './s
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
 import { captureConsole, clearLogs, log, logsCount, logsText } from './logs.js';
 import { makeRecovery, offerDownload, readRecovery, readRecoveryFiles, recoveryCodes } from './recovery.js';
+import { siteUrl } from './sites.js';
 import { vettedMaker } from './vetted.js';
 import { connectExtension, connectWalletConnect, extensionWallets, openInWallets, restoreWalletConnect } from './wallet.js';
 
@@ -1900,6 +1901,7 @@ function navMenu() {
   menu.addEventListener('click', (e) => { if (e.target.closest('a')) set(false); });
   // BTC Swaps, sol2base and eth2base open in this tab, as parts of one site. While a swap is unfinished they open in a new one, as the link
   // says without this, so this tab stays and keeps the swap going.
+  for (const a of document.querySelectorAll('a[data-site]')) a.href = siteUrl(a.dataset.site);
   for (const a of document.querySelectorAll('a[data-same-tab]')) {
     a.addEventListener('click', (e) => {
       if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;

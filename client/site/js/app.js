@@ -1898,7 +1898,7 @@ function navMenu() {
   };
   burger.addEventListener('click', () => set(!menu.classList.contains('open')));
   menu.addEventListener('click', (e) => { if (e.target.closest('a')) set(false); });
-  // sol2base and eth2base open in this tab, as parts of one site. While a swap is unfinished they open in a new one, as the link
+  // BTC Swaps, sol2base and eth2base open in this tab, as parts of one site. While a swap is unfinished they open in a new one, as the link
   // says without this, so this tab stays and keeps the swap going.
   for (const a of document.querySelectorAll('a[data-same-tab]')) {
     a.addEventListener('click', (e) => {

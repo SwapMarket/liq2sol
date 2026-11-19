@@ -34,7 +34,6 @@ nav { background: var(--card); border-bottom: 1px solid rgb(255 255 255 / 8%); }
 .tab { color: var(--text); text-decoration: none; padding: 2px 14px; border-left: 1px solid rgb(255 255 255 / 15%); }
 #collapse { display: flex; align-items: center; flex-wrap: wrap; }
 .tab:hover, .tab.on { color: var(--primary); }
-.ext-icon { fill: currentColor; vertical-align: -2px; margin-left: 2px; }
 .net { display: table; margin: 0 auto 18px; font-size: .78rem; color: var(--muted); border: 1px dashed var(--dim); border-radius: 999px; padding: 2px 10px; }
 
 main { max-width: 960px; margin: 0 auto; padding: 14px 16px 16px; }
@@ -227,7 +226,6 @@ body.menu-open { overflow: hidden; }
   #collapse { display: none; }
   #collapse.open { display: flex; position: fixed; z-index: 999; inset: 0; background: var(--bg); align-items: center; justify-content: center; flex-direction: column; }
   #collapse.open .tab { display: block; border-left: 0; padding: 6px 24px; font-size: 26px; }
-  #collapse.open .ext-icon { width: 30px; height: 36px; vertical-align: -6px; }
 }
 }
 

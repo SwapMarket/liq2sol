@@ -19,7 +19,7 @@ jobs:
       matrix:
         site:
           - https://swapmarket.github.io/liq2sol/
-          - https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nsite.lol/
+          - https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nwb.tf/
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,7 +47,7 @@ jobs:
         run: |
           commit() { curl -fsSL "$1index.html" | grep -o 'id="build" href="https://github.com/SwapMarket/liq2sol/commit/[0-9a-f]\{12\}"' | grep -o '[0-9a-f]\{12\}"$' | tr -d '"'; }
           pages=$(commit https://swapmarket.github.io/liq2sol/)
-          nsite=$(commit https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nsite.lol/)
+          nsite=$(commit https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nwb.tf/)
           echo "GitHub Pages: $pages, nsite: $nsite"
           if [ "$pages" != "$nsite" ]; then
             echo "::warning title=The nsite is behind::GitHub Pages serves $pages and the nsite serves $nsite. Publish it with scripts/publish-nsite.sh."

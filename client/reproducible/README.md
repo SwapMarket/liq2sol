@@ -35,17 +35,19 @@ The page is also an nsite (NIP-5A, a draft): its files sit on Blossom servers, a
 each path to its sha256. It is SwapMarket's named site `liq2sol`, under
 `npub1xhklzztd83v34zsf9da2gvfrctj5wcsvsx09er9v26jy7r0uq8yq4vme7d` (hex `35edf109…f0dfc01c8`), at
 
-  https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nsite.lol/
+  https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nwb.tf/
 
 - **Whose it is.** The address's first 50 characters are the public key in base36, then the site name:
   `'%064x' % int('1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bc', 36)` is the hex key above. A gateway serves that key's manifest,
   so the address alone says whose site it is, not that the gateway serves it faithfully.
 - **Check it** like the main site: `scripts/check-page.sh <nsite address>`. The nsite has no `SHA256SUMS`, since NIP-5A paths need an
   extension. The manifest's `path` tags carry the same hashes.
-- **Gateways** (checked 2026-11-19): nsite.lol, nwb.tf and nsite.cloud serve it correctly. nsite.cloud tells browsers to cache it for a
+- **Gateways** (checked 2026-11-19): the footers link to nwb.tf (`NSITE_GATEWAY` in `client/site/js/sites.js`), which showed each new
+  manifest within minutes. nsite.lol served liq2sol's first manifest and never a later one, though its own relay held the newest; it
+  picked up the other sites, which it hadn't served before, at once (UNVERIFIED why). nsite.cloud tells browsers to cache it for a
   year, so returning visitors may not get a fix. nsite.run adds its own Content-Security-Policy, which blocks the WebAssembly, so the
   page can't start there. Each gateway is its own origin: swaps saved on one don't show on another, though recovery files work on all.
-- **WalletConnect** works only on origins in the Reown project's allowlist: `swapmarket.github.io` and the nsite.lol address.
+- **WalletConnect** works only on origins in the Reown project's allowlist: `swapmarket.github.io` and each site's nwb.tf address.
 - **Blossom servers:** blossom.yakihonne.com and nostr.download hold every file. nostr.download labels HTML and JavaScript
   `text/plain`, so it is listed second. Many servers refuse HTML, JavaScript or WebAssembly.
 - **Publishing** is by hand, after a release, like signing it: `scripts/publish-nsite.sh liq2sol [commit]` builds the commit and serves

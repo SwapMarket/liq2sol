@@ -2,7 +2,7 @@
 // Links between SwapMarket's sites stay on the nsite gateway they were opened from, and go to GitHub Pages from anywhere else.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { KEY36, NPUB, siteUrl } from '../site/js/sites.js';
+import { KEY36, NPUB, NSITE_GATEWAY, nsiteUrl, siteUrl } from '../site/js/sites.js';
 
 test('on GitHub Pages and elsewhere, links go to GitHub Pages', () => {
   for (const host of ['swapmarket.github.io', '127.0.0.1', 'localhost', 'example.com']) {
@@ -26,4 +26,12 @@ test('another key, or a lookalike, does not count', () => {
     `${KEY36}liq2sol`, `${KEY36}UPPERCASE.nsite.lol`, `${KEY36}waytoolongname.nsite.lol`, `x${KEY36}liq2sol.nsite.lol`]) {
     assert.equal(siteUrl('sol2base', host), 'https://swapmarket.github.io/sol2base/', host);
   }
+});
+
+test('the copy on Nostr is on the chosen gateway, from anywhere', () => {
+  assert.equal(NSITE_GATEWAY, 'nwb.tf');
+  assert.equal(nsiteUrl('liq2sol'), `https://${KEY36}liq2sol.nwb.tf/`);
+  assert.equal(nsiteUrl(''), `https://${NPUB}.nwb.tf/`);
+  assert.equal(nsiteUrl('sol2tron', 'nsite.lol'), `https://${KEY36}sol2tron.nsite.lol/`);
+  for (const name of ['liq2sol', 'sol2base', 'eth2base', 'sol2tron']) assert.ok(`${KEY36}${name}`.length <= 63, 'a DNS label');
 });

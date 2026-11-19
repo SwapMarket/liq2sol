@@ -36,7 +36,7 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
   `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU` (key `programs/.keys/escrow-confidential-program.json`). The user's mainnet maker
   (`main`) runs on a Raspberry Pi 4 with its own Elements node; the test makers run on their VPS. The user has done several mainnet swaps.
 - **The page is also an nsite** (since 2026-11-19), SwapMarket's named site `liq2sol` under `npub1xhklzztd…4vme7d`, at
-  https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nsite.lol/ (`client/reproducible/README.md`). The user publishes it
+  https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nwb.tf/ (`client/reproducible/README.md`). The user publishes it
   after a release with `scripts/publish-nsite.sh liq2sol`, signing in Alby; the key never comes here. sol2base, eth2base, sol2tron and BTC
   Swaps (the root site) publish the same way, from their GitHub Pages builds, and their menus stay on the gateway they were opened on.
 - **Releases** (`v0.xx`, latest v0.14) are built by `.github/workflows/release.yml` from signed tags, for Debian on x86_64 and aarch64.

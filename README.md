@@ -9,7 +9,7 @@ over Nostr. No custodian, no central operator, and a refund path for every user 
 
 - **The page:** https://swapmarket.github.io/liq2sol/. It opens on mainnet, and Settings switches to Liquid testnet and Solana
   devnet, which also have a faucet.
-- **The same page on Nostr:** https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nsite.lol/, an nsite signed by SwapMarket's key
+- **The same page on Nostr:** https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nwb.tf/, an nsite signed by SwapMarket's key
   (`client/reproducible/README.md`).
 - **The mainnet escrow:** `DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b`. It is immutable, so a fix needs a new program id.
 - **Makers:** signed releases for Debian on x86_64 and aarch64. `deploy/README.md` installs one.

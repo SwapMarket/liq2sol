@@ -72,15 +72,17 @@ async function upload(server, f, bytes) {
 
 document.getElementById('upload').onclick = async () => {
   document.getElementById('upload').disabled = true;
+  const refused = new Set();   // A server that refuses one file can't hold the site, so it isn't asked again.
   for (const f of files) {
     const bytes = await (await fetch('site' + f.path, { cache: 'no-store' })).arrayBuffer();
     if (await sha256(bytes) !== f.sha256) { log(`${f.path}: local bytes don't match files.json, stopping`, 'bad'); return; }
     const ok = new Set();
     for (const s of SERVERS) {
+      if (refused.has(s)) continue;
       try {
         if (!(await has(s, f.sha256))) await upload(s, f, bytes);
         ok.add(s);
-      } catch (e) { log(`${f.path} → ${s}: ${e.message}`, 'bad'); }
+      } catch (e) { refused.add(s); log(`${f.path} → ${s}: ${e.message}, so it is skipped from now on`, 'bad'); }
     }
     stored.set(f.sha256, ok);
     log(`${f.path}: on ${ok.size} servers`, ok.size ? 'ok' : 'bad');

@@ -9,7 +9,7 @@
 </style>
 <h1>Publish liq2sol as a named nsite</h1>
 <p>Run by <code>scripts/publish-nsite.sh</code>. Uploads the reproducible build's files to Blossom servers and publishes a kind 35128 manifest (d = <code>liq2sol</code>),
-signed by your NIP-07 extension (Alby). The key never leaves the extension. Each upload asks for one signature, then one for the manifest.</p>
+signed by your NIP-07 extension (Alby). The key never leaves the extension. Each upload asks for one signature, then one for the manifest and one for its snapshot.</p>
 <p><button id="connect">1. Connect Alby</button> <span id="who"></span></p>
 <p><button id="upload" disabled>2. Upload files</button></p>
 <p><button id="publish" disabled>3. Sign and publish the manifest</button></p>
@@ -119,8 +119,17 @@ async function writeRelays() {
 
 document.getElementById('publish').onclick = async () => {
   document.getElementById('publish').disabled = true;
+  const relays = await writeRelays();
+  const send = async ev => {
+    for (const url of relays) {
+      const r = await relayCall(url, ['EVENT', ev], d => d[0] === 'OK' && d[1] === ev.id);
+      const okMsg = (r.out ?? []).find(d => d[0] === 'OK');
+      log(`kind ${ev.kind} → ${url}: ${okMsg ? (okMsg[2] ? 'accepted' : 'refused: ' + okMsg[3]) : r.error ? 'could not connect' : 'no answer'}`, okMsg?.[2] ? 'ok' : 'bad');
+    }
+  };
   const lines = files.map(f => `${f.sha256} ${f.path}\n`).sort().join('');
   const aggregate = await sha256(new TextEncoder().encode(lines));
+  // Sent as soon as it is signed: a gateway that polls skips an event arriving after the poll its created_at falls in.
   const event = await window.nostr.signEvent({
     kind: 35128, created_at: now(), content: '',
     tags: [
@@ -134,12 +143,15 @@ document.getElementById('publish').onclick = async () => {
     ],
   });
   log('manifest ' + event.id + ', aggregate ' + aggregate);
-  for (const url of await writeRelays()) {
-    const r = await relayCall(url, ['EVENT', event], d => d[0] === 'OK' && d[1] === event.id);
-    const okMsg = (r.out ?? []).find(d => d[0] === 'OK');
-    log(`${url}: ${okMsg ? (okMsg[2] ? 'accepted' : 'refused: ' + okMsg[3]) : r.error ? 'could not connect' : 'no answer'}`, okMsg?.[2] ? 'ok' : 'bad');
-  }
-  log('\nevent:\n' + JSON.stringify(event));
+  await send(event);
+  // A snapshot (NIP-5A kind 5128, a regular event) keeps this version addressable after the next manifest replaces it.
+  const snapshot = await window.nostr.signEvent({
+    kind: 5128, created_at: now(), content: '',
+    tags: [['a', `35128:${event.pubkey}:${D_TAG}`], ...event.tags.filter(t => t[0] !== 'd')],
+  });
+  log('snapshot ' + snapshot.id);
+  await send(snapshot);
+  log('\nmanifest:\n' + JSON.stringify(event) + '\n\nsnapshot:\n' + JSON.stringify(snapshot));
   window.publishedEvent = event;
 };
 </script>

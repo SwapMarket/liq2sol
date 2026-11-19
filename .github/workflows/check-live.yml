@@ -1,0 +1,54 @@
+# Checks, every day, that each published copy of the page is exactly what the commit it names builds (scripts/check-page.sh), so a
+# changed file on GitHub Pages or on an nsite gateway shows up within a day. It also warns when the nsite is behind GitHub Pages,
+# since the nsite is published by hand.
+name: Check the live page
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        site:
+          - https://swapmarket.github.io/liq2sol/
+          - https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nsite.lol/
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The page may name any earlier commit.
+          fetch-depth: 0
+      # The image the deploy keeps. If the published commit used another recipe, check-page.sh builds that one instead.
+      - name: Reuse the toolchain image
+        id: image
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /tmp/page-builder.tar
+          key: page-builder-${{ hashFiles('client/reproducible/Dockerfile', 'client/reproducible/build-inside.sh', 'client/wasm/Cargo.lock') }}
+      - name: Load it
+        if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/page-builder.tar
+      - name: Rebuild the commit the page names, and compare every file
+        run: scripts/check-page.sh "${{ matrix.site }}"
+
+  # Not a failure: publishing the nsite after a release is a manual step, so for a while after each deploy it is expected to lag.
+  same-commit:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Compare the commits the two copies name
+        run: |
+          commit() { curl -fsSL "$1index.html" | grep -o 'id="build" href="https://github.com/SwapMarket/liq2sol/commit/[0-9a-f]\{12\}"' | grep -o '[0-9a-f]\{12\}"$' | tr -d '"'; }
+          pages=$(commit https://swapmarket.github.io/liq2sol/)
+          nsite=$(commit https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nsite.lol/)
+          echo "GitHub Pages: $pages, nsite: $nsite"
+          if [ "$pages" != "$nsite" ]; then
+            echo "::warning title=The nsite is behind::GitHub Pages serves $pages and the nsite serves $nsite. Publish it with scripts/publish-nsite.sh."
+          fi

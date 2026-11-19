@@ -1898,6 +1898,16 @@ function navMenu() {
   };
   burger.addEventListener('click', () => set(!menu.classList.contains('open')));
   menu.addEventListener('click', (e) => { if (e.target.closest('a')) set(false); });
+  // sol2base and eth2base open in this tab, as parts of one site. While a swap is unfinished they open in a new one, as the link
+  // says without this, so this tab stays and keeps the swap going.
+  for (const a of document.querySelectorAll('a[data-same-tab]')) {
+    a.addEventListener('click', (e) => {
+      if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      if (Object.values(loadSwaps()).some((s) => !FINISHED.includes(s.state))) return;
+      e.preventDefault();
+      location.href = a.href;
+    });
+  }
 }
 
 // A published page pins its WebAssembly's hash in index.html (client/stamp.mjs), and nothing runs on other bytes. A copy served
@@ -1912,7 +1922,19 @@ async function loadWasm() {
   return init({ module_or_path: bytes });
 }
 
+// Neither GitHub Pages nor the nsite gateways send X-Frame-Options, and a meta CSP can't set frame-ancestors. So the page won't run
+// inside another page, where an overlay could steer the user's clicks (clickjacking), and offers itself in its own tab instead.
+function framed() {
+  try { return window.top !== window.self; } catch { return true; }
+}
+
 async function main() {
+  if (framed()) {
+    $('view').replaceChildren(h('div', { class: 'card' },
+      h('p', {}, 'This page does not run inside another page.'),
+      h('p', {}, h('a', { href: location.href, target: '_blank', rel: 'noopener noreferrer' }, 'Open it in its own tab'))));
+    return;
+  }
   navMenu();
   // The deploy stamps the build. A copy served straight from the repo says so instead of showing the placeholder.
   const build = $('build');

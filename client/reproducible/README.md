@@ -18,6 +18,9 @@ scripts/check-page.sh
 It reads the commit from the page's footer, rebuilds it with `scripts/build-page.sh`, and compares every file the site serves with the
 rebuild. The first run builds the toolchain image, which takes about 20 minutes. Later runs take about 5.
 
+`.github/workflows/check-live.yml` runs it every day against GitHub Pages and the nsite, and warns when the nsite names an
+older commit than GitHub Pages.
+
 ## Build one commit
 
 ```sh
@@ -51,6 +54,9 @@ each path to its sha256. It is SwapMarket's named site `liq2sol`, under
   key's own relays (kind 10002), which the page publishes to as well.
   It also publishes to `relay.nsite.lol`, where nsite.lol looks. An event copied there later, with its old timestamp, was not picked
   up (2026-11-19, UNVERIFIED why): to update a gateway, sign a new manifest.
+  It then signs a snapshot (kind 5128), which keeps each version's paths and hashes addressable after the next manifest replaces it.
+- **Frames.** Neither GitHub Pages nor the gateways forbid framing, and a meta CSP can't. So the page refuses to run inside another
+  page, where an overlay could steer clicks, and offers a link to open it in its own tab.
 
 ## Limits
 

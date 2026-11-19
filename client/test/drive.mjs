@@ -1409,6 +1409,55 @@ async function pinnedFiles() {
   step('the published page runs as stamped, and refuses a changed script or WebAssembly');
 }
 
+// On mainnet, the menu's sol2base and eth2base links open in this tab, except while a swap is unfinished, when they open a new one
+// so this tab keeps the swap going.
+async function sisterLinks() {
+  for (const state of [null, 'fund', 'done']) {
+    const page = await newPage({ width: 1200, height: 1000 }, async (p) => {
+      await mainnetConfig(p);
+      await p.context().route('https://swapmarket.github.io/sol2base/', (r) => r.fulfill({ body: '<title>sol2base</title>', contentType: 'text/html' }));
+      await p.addInitScript((swaps) => {
+        if (!sessionStorage.getItem('seen')) {
+          sessionStorage.setItem('seen', '1');
+          localStorage.removeItem('liq2sol.network');
+          if (swaps) localStorage.setItem('liq2sol.swaps.mainnet', swaps);
+        }
+      }, state && JSON.stringify({ x: { id: 'x', state } }));
+    });
+    await page.locator('html[data-network="mainnet"]').waitFor({ state: 'attached', timeout: 30000 });
+    const opened = page.context().waitForEvent('page', { timeout: 5000 }).catch(() => null);
+    await page.locator('a.tab', { hasText: 'sol2base' }).click();
+    const other = await opened;
+    const unfinished = state === 'fund';
+    if (unfinished && (!other || await page.title() !== 'liq2sol')) throw new Error('with a swap unfinished, sol2base did not open in a new tab');
+    if (!unfinished) {
+      await page.waitForURL('https://swapmarket.github.io/sol2base/', { timeout: 10000 });
+      if (other) throw new Error(`with ${state ?? 'no'} swap, sol2base opened a new tab too`);
+    }
+    await page.context().close();
+  }
+  step('sol2base opens in this tab, or in a new one while a swap is unfinished');
+}
+
+// Framed by another site, the page runs nothing and only offers itself in its own tab, so an overlay can't steer clicks on it.
+async function refusesFrames() {
+  const other = await serve((req, res) => {
+    res.setHeader('content-type', 'text/html');
+    res.end(`<!doctype html><iframe src="http://127.0.0.1:${site.port}/" width="800" height="600"></iframe>`);
+  });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${other.port}/`);
+  const frame = page.frameLocator('iframe');
+  await frame.locator('a', { hasText: 'Open it in its own tab' }).waitFor({ timeout: 30000 });
+  await new Promise((r) => setTimeout(r, 2000));
+  if (await frame.locator('html[data-network]').count() || await frame.locator('#amount').count()) throw new Error('the page ran inside a frame');
+  if (await frame.locator('a', { hasText: 'Open it in its own tab' }).getAttribute('target') !== '_blank') throw new Error('the link opens inside the frame');
+  await context.close();
+  other.server.close();
+  step('inside another site\'s frame, the page runs nothing and offers itself in its own tab');
+}
+
 // The test config fills in these chains' endpoints over whichever network was chosen. On mainnet it keeps mainnet's name, so the
 // page holds these test chains to mainnet, and refuses them.
 const mainnetConfig = (p) => p.route('**/js/config.js', async (route) => {
@@ -1477,6 +1526,8 @@ async function look() {
   await pageLoading();
   await networkSwitch();
   await pinnedFiles();
+  await refusesFrames();
+  await sisterLinks();
   await walletConnectWait();
   await liveBook();
   const phone = await newPage({ width: 400, height: 800 });

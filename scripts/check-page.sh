@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Check the published page against its source: rebuild the commit it names, in the pinned image, and compare every file the site
-# serves with the rebuild, byte for byte. Usage: scripts/check-page.sh [SITE_URL]   (default https://swapmarket.github.io/liq2sol/)
+# serves with the rebuild, byte for byte. Usage: scripts/check-page.sh [SITE_URL]   (default https://swapmarket.github.io/liq2sol/;
+# the nsite's address works too)
 # Needs Docker, and this repository with that commit fetched.
 set -euo pipefail
 
@@ -25,7 +26,8 @@ while read -r want file; do
   got=$(sha256sum "$work/live" | cut -d' ' -f1)
   if [ "$got" = "$want" ]; then echo "same    $file"; else echo "DIFFERS $file"; bad=1; fi
 done < "$work/built/SHA256SUMS"
-curl -fsSL -o "$work/live" "${site}SHA256SUMS"
-if cmp -s "$work/live" "$work/built/SHA256SUMS"; then echo "same    SHA256SUMS"; else echo "DIFFERS SHA256SUMS"; bad=1; fi
+# The nsite has no SHA256SUMS, since NIP-5A paths need an extension; its signed manifest carries the same hashes.
+if ! curl -fsL -o "$work/live" "${site}SHA256SUMS"; then echo "absent  SHA256SUMS"
+elif cmp -s "$work/live" "$work/built/SHA256SUMS"; then echo "same    SHA256SUMS"; else echo "DIFFERS SHA256SUMS"; bad=1; fi
 
 if [ "$bad" = 0 ]; then echo "the published page is exactly commit $build, rebuilt here"; else echo "the published page is NOT what commit $build builds" >&2; exit 1; fi

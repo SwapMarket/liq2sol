@@ -1,0 +1,141 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Publish liq2sol nsite</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2em auto; padding: 0 16px; }
+  button { font-size: 15px; padding: .5em 1em; }
+  pre { background: #f4f4f4; padding: .8em; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
+  .ok { color: #070; } .bad { color: #b00; }
+</style>
+<h1>Publish liq2sol as a named nsite</h1>
+<p>Run by <code>scripts/publish-nsite.sh</code>. Uploads the reproducible build's files to Blossom servers and publishes a kind 35128 manifest (d = <code>liq2sol</code>),
+signed by your NIP-07 extension (Alby). The key never leaves the extension. Each upload asks for one signature, then one for the manifest.</p>
+<p><button id="connect">1. Connect Alby</button> <span id="who"></span></p>
+<p><button id="upload" disabled>2. Upload files</button></p>
+<p><button id="publish" disabled>3. Sign and publish the manifest</button></p>
+<pre id="log"></pre>
+<script type="module">
+const D_TAG = 'liq2sol';
+// SwapMarket's key, npub1xhklzztd83v34zsf9da2gvfrctj5wcsvsx09er9v26jy7r0uq8yq4vme7d. Another key would publish a different site.
+const EXPECTED = '35edf1096d3c591a8a092b7aa43123c2e547620c819e5c8cac56a44f0dfc01c8';
+const SERVERS = ['https://blossom.primal.net', 'https://blossom.band', 'https://nostr.download', 'https://24242.io'];
+const BASE_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net', 'wss://purplepag.es'];
+const logEl = document.getElementById('log');
+const log = (s, cls) => { const span = document.createElement('span'); if (cls) span.className = cls; span.textContent = s + '\n'; logEl.append(span); };
+const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+const sha256 = async data => hex(await crypto.subtle.digest('SHA-256', data));
+const now = () => Math.floor(Date.now() / 1000);
+
+let pubkey = null;
+const files = await (await fetch('files.json')).json();   // [{path, sha256, type, size}]
+const stored = new Map();                                  // sha256 -> Set(server)
+log(`${files.length} files, ${(files.reduce((a, f) => a + f.size, 0) / 1e6).toFixed(2)} MB`);
+
+document.getElementById('connect').onclick = async () => {
+  if (!window.nostr) { log('No NIP-07 extension found. Open this page in the browser with Alby.', 'bad'); return; }
+  const got = await window.nostr.getPublicKey();
+  if (got !== EXPECTED) { log(`the extension signs as ${got}, not SwapMarket's key ${EXPECTED}`, 'bad'); return; }
+  pubkey = got;
+  document.getElementById('who').textContent = 'pubkey ' + pubkey;
+  log('signing as ' + pubkey);
+  // Your own Blossom servers (kind 10063, BUD-03), such as Haven's, go first.
+  const own = [];
+  for (const url of ['wss://purplepag.es', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net']) {
+    const r = await relayCall(url, ['REQ', 's', { kinds: [10063], authors: [pubkey], limit: 1 }], d => d[0] === 'EOSE');
+    const ev = (r.out ?? []).find(d => d[0] === 'EVENT')?.[2];
+    if (ev) { for (const t of ev.tags) if (t[0] === 'server' && t[1]?.startsWith('https://')) own.push(t[1].replace(/\/$/, '')); break; }
+  }
+  const extra = new URLSearchParams(location.search).getAll('server');
+  SERVERS.unshift(...[...own, ...extra].filter(s => !SERVERS.includes(s)));
+  log(own.length ? 'your Blossom servers: ' + own.join(', ') : 'no Blossom server list (kind 10063) found for this key; add ?server=https://… to the address');
+  log('uploading to: ' + SERVERS.join(', '));
+  document.getElementById('upload').disabled = false;
+};
+
+async function has(server, sha) {
+  try { return (await fetch(`${server}/${sha}`, { method: 'HEAD' })).ok; } catch { return false; }
+}
+
+async function upload(server, f, bytes) {
+  const auth = await window.nostr.signEvent({
+    kind: 24242, created_at: now(), content: `Upload ${f.path} for the ${D_TAG} nsite`,
+    tags: [['t', 'upload'], ['x', f.sha256], ['expiration', String(now() + 900)]],
+  });
+  const r = await fetch(`${server}/upload`, {
+    method: 'PUT', body: bytes,
+    headers: { 'Content-Type': f.type, 'X-SHA-256': f.sha256, Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) },
+  });
+  if (!r.ok) throw new Error(`${r.status} ${r.headers.get('x-reason') ?? ''}`.trim());
+  const desc = await r.json();
+  if (desc.sha256 !== f.sha256) throw new Error(`the server stored ${desc.sha256}`);
+}
+
+document.getElementById('upload').onclick = async () => {
+  document.getElementById('upload').disabled = true;
+  for (const f of files) {
+    const bytes = await (await fetch('site' + f.path)).arrayBuffer();
+    if (await sha256(bytes) !== f.sha256) { log(`${f.path}: local bytes don't match files.json, stopping`, 'bad'); return; }
+    const ok = new Set();
+    for (const s of SERVERS) {
+      try {
+        if (!(await has(s, f.sha256))) await upload(s, f, bytes);
+        ok.add(s);
+      } catch (e) { log(`${f.path} → ${s}: ${e.message}`, 'bad'); }
+    }
+    stored.set(f.sha256, ok);
+    log(`${f.path}: on ${ok.size} servers`, ok.size ? 'ok' : 'bad');
+  }
+  // Only servers holding every file go into the manifest.
+  const full = SERVERS.filter(s => files.every(f => stored.get(f.sha256)?.has(s)));
+  log(`servers holding every file: ${full.join(', ') || 'none'}`, full.length ? 'ok' : 'bad');
+  if (full.length) { window.fullServers = full; document.getElementById('publish').disabled = false; }
+};
+
+function relayCall(url, msg, until, ms = 8000) {
+  return new Promise(resolve => {
+    let ws; const out = [];
+    const done = v => { try { ws.close(); } catch {} resolve(v); };
+    const timer = setTimeout(() => done({ timeout: true, out }), ms);
+    try { ws = new WebSocket(url); } catch { clearTimeout(timer); return resolve({ error: true }); }
+    ws.onopen = () => ws.send(JSON.stringify(msg));
+    ws.onerror = () => { clearTimeout(timer); done({ error: true, out }); };
+    ws.onmessage = m => { const d = JSON.parse(m.data); out.push(d); if (until(d)) { clearTimeout(timer); done({ out }); } };
+  });
+}
+
+async function writeRelays() {
+  // The gateways look the manifest up on the author's NIP-65 relays, so publish there too.
+  const relays = new Set(BASE_RELAYS);
+  const r = await relayCall('wss://purplepag.es', ['REQ', 'r', { kinds: [10002], authors: [pubkey], limit: 1 }], d => d[0] === 'EOSE');
+  const ev = (r.out ?? []).find(d => d[0] === 'EVENT')?.[2];
+  for (const t of ev?.tags ?? []) if (t[0] === 'r' && t[1]?.startsWith('wss://') && t[2] !== 'read') relays.add(t[1].replace(/\/$/, ''));
+  if (!ev) log('no NIP-65 relay list found for this key, using the default relays');
+  return [...relays];
+}
+
+document.getElementById('publish').onclick = async () => {
+  document.getElementById('publish').disabled = true;
+  const lines = files.map(f => `${f.sha256} ${f.path}\n`).sort().join('');
+  const aggregate = await sha256(new TextEncoder().encode(lines));
+  const event = await window.nostr.signEvent({
+    kind: 35128, created_at: now(), content: '',
+    tags: [
+      ['d', D_TAG],
+      ...files.map(f => ['path', f.path, f.sha256]),
+      ['x', aggregate, 'aggregate'],
+      ...window.fullServers.map(s => ['server', s]),
+      ['title', 'liq2sol'],
+      ['description', 'Trustless, confidential atomic swaps between USDt on Liquid and USDT on Solana.'],
+      ['source', 'https://github.com/SwapMarket/liq2sol'],
+    ],
+  });
+  log('manifest ' + event.id + ', aggregate ' + aggregate);
+  for (const url of await writeRelays()) {
+    const r = await relayCall(url, ['EVENT', event], d => d[0] === 'OK' && d[1] === event.id);
+    const okMsg = (r.out ?? []).find(d => d[0] === 'OK');
+    log(`${url}: ${okMsg ? (okMsg[2] ? 'accepted' : 'refused: ' + okMsg[3]) : r.error ? 'could not connect' : 'no answer'}`, okMsg?.[2] ? 'ok' : 'bad');
+  }
+  log('\nevent:\n' + JSON.stringify(event));
+  window.publishedEvent = event;
+};
+</script>

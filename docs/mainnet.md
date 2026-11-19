@@ -18,6 +18,7 @@ Mainnet support was approved on 2026-11-16, with four decisions by the user: a g
 | Escrow program | Deployed final on 2026-11-17, at `DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b`, in slot 470557839, with no upgrade authority. Its code (292,184 bytes, sha256 `824b218fba1be90c7d8ecf5a6faac9dd8e0b8b389245d510acd0e61701052e13`) is the build of commit 297cd7c with `--features mainnet`, reproduced independently. Its rent, 1.485 SOL, is locked for good. |
 | Mainnet by default | The page opens on mainnet (user's decision, 2026-11-17). Only a stored choice of test networks, or test swaps from before mainnet, keeps a browser on them. |
 | Mainnet on | The program id is set in `sol::MAINNET_PROGRAM` and the page's `MAINNET.programId`, so the switch works and a maker can be told `mainnet`. On mainnet the menu links to SwapMarket's BTC Swaps, sol2base and eth2base. |
+| A copy on Nostr | Since 2026-11-19 the page is also SwapMarket's nsite, at https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nsite.lol/ (`client/reproducible/README.md`). It is published by hand with Alby, and `scripts/check-page.sh` checks it like the main site. |
 | First swaps | SwapMarket's own maker has run on mainnet since 2026-11-17, from a Raspberry Pi with its own Elements node. The user completed several mainnet swaps with real wallets on 2026-11-17 and 2026-11-18, and one S→L swap was refunded during the rate-limit trouble that v0.14 fixed. |
 
 ## Left to do

@@ -35,6 +35,9 @@ The full brief is in `docs/prompt.md`. Read it first; it governs scope and worki
   `.github/workflows/pages.yml`, opens on mainnet, with test networks and their faucet behind Settings. The devnet escrow is
   `EcK819kqJT6pHzQVLbzbUnK6ieaiS9JVGubPhC6Q2puU` (key `programs/.keys/escrow-confidential-program.json`). The user's mainnet maker
   (`main`) runs on a Raspberry Pi 4 with its own Elements node; the test makers run on their VPS. The user has done several mainnet swaps.
+- **The page is also an nsite** (since 2026-11-19), SwapMarket's named site `liq2sol` under `npub1xhklzztd…4vme7d`, at
+  https://1cdzwdkc0uepk5ll8mhpcbyw3xh8gakldbfdq8fphhqnv503bcliq2sol.nsite.lol/ (`client/reproducible/README.md`). The user publishes it
+  after a release with `scripts/publish-nsite.sh`, signing in Alby; the key never comes here.
 - **Releases** (`v0.xx`, latest v0.14) are built by `.github/workflows/release.yml` from signed tags, for Debian on x86_64 and aarch64.
   After each build, `scripts/sign-release.sh <tag>` adds `SHA256SUMS.asc`; makers' `deploy/update.sh` installs nothing unsigned.
   `deploy/install.sh` sets up a new maker.

@@ -57,19 +57,26 @@ document.getElementById('connect').onclick = async () => {
   document.getElementById('upload').disabled = false;
 };
 
+// Every step has a time limit, so a server or a signature prompt that never answers is skipped instead of stalling the upload.
+const within = (ms, what, promise) => Promise.race([promise, new Promise((_, no) => setTimeout(() => no(new Error(`no answer to ${what} in ${ms / 1000} s`)), ms))]);
+
 async function has(server, sha) {
-  try { return (await fetch(`${server}/${sha}`, { method: 'HEAD' })).ok; } catch { return false; }
+  try { return (await fetch(`${server}/${sha}`, { method: 'HEAD', signal: AbortSignal.timeout(15000) })).ok; } catch { return false; }
 }
 
 async function upload(server, f, bytes) {
-  const auth = await window.nostr.signEvent({
+  const status = document.getElementById('who');
+  status.textContent = `waiting for Alby to sign the upload of ${f.path} to ${server}…`;
+  const auth = await within(90000, 'the signature request (is an Alby window waiting?)', window.nostr.signEvent({
     kind: 24242, created_at: now(), content: `Upload ${f.path} for the ${NAME} nsite`,
     tags: [['t', 'upload'], ['x', f.sha256], ['expiration', String(now() + 900)]],
-  });
+  }));
+  status.textContent = `uploading ${f.path} to ${server}…`;
   const r = await fetch(`${server}/upload`, {
-    method: 'PUT', body: bytes,
+    method: 'PUT', body: bytes, signal: AbortSignal.timeout(180000),
     headers: { 'Content-Type': f.type, 'X-SHA-256': f.sha256, Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) },
   });
+  status.textContent = '';
   if (!r.ok) throw new Error(`${r.status} ${r.headers.get('x-reason') ?? ''}`.trim());
   const desc = await r.json();
   if (desc.sha256 !== f.sha256) throw new Error(`the server stored ${desc.sha256}`);

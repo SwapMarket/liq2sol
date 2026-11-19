@@ -49,6 +49,8 @@ each path to its sha256. It is SwapMarket's named site `liq2sol`, under
   `scripts/nsite/publish.html` on `http://127.0.0.1:8765`, which signs through a NIP-07 extension (Alby) holding SwapMarket's key.
   The key never reaches the repository, the script or CI, and the page refuses any other key. Gateways read the manifest from the
   key's own relays (kind 10002), which the page publishes to as well.
+  It also publishes to `relay.nsite.lol`, where nsite.lol looks. An event copied there later, with its old timestamp, was not picked
+  up (2026-11-19, UNVERIFIED why): to update a gateway, sign a new manifest.
 
 ## Limits
 

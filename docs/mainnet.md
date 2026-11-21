@@ -11,7 +11,7 @@ Mainnet support was approved on 2026-11-16, with four decisions by the user: a g
 | Network choice in the maker | `"network": "mainnet"` in `signer.json` and `maker.json`. Both chains must agree with it, before any key is loaded (`sol::enter`). Per-swap limits above 100 USDT and regtest settings are refused. |
 | Network choice in the page | A switch in Settings. Each network has its own swaps, settings and logs, and switching reloads the page. It waits while a swap is in progress. Both chains must agree with the choice (`checkGenesis`, and again in the WebAssembly). |
 | Mainnet constants | Liquid genesis, Tether's USDt asset, L-BTC, Solana genesis and Tether's USDT mint, each checked against the chain. |
-| The cap | 100 USDT a swap: `MAINNET_MAX_PER_SWAP` for the maker, `maxSwapUnits` for the page, checked on the agreed terms. |
+| The cap | 1000 USDT a swap (user's decision, 2026-11-21; 100 from 2026-11-16 until then): `MAINNET_MAX_PER_SWAP` for the maker, `maxSwapUnits` for the page, checked on the agreed terms. |
 | `musig2` | Reviewed, with tests against libsecp256k1's verifier, on both backends. |
 | Page integrity | The deploy pins every script, the style sheet and the WebAssembly by hash in `index.html` (`client/stamp.mjs`). A changed file is refused, so `index.html` alone is what to check. |
 | Recovery files | Carry their network. A test network's file can't be restored on mainnet, or the reverse. |
@@ -45,7 +45,7 @@ An immutable program can never be fixed. A bug means a new program, a new addres
 ### 3. Running a mainnet maker
 
 - New keys and a new folder: never copy a test maker's keys or databases.
-- `"network": "mainnet"` in both configs, mainnet endpoints, and limits at or under 100 USDT.
+- `"network": "mainnet"` in both configs, mainnet endpoints, and limits at or under 1000 USDT.
 - Our own Liquid node (`LiquidSource::Node`) and a paid Solana RPC: public endpoints rate-limit and keep little history, and the closed-escrow check reads history after a deadline.
 - `page_to` set and tested, and something outside the machine that notices if the maker stops.
 

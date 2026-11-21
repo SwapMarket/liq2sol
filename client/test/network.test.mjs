@@ -60,7 +60,7 @@ test('mainnet pins the real ids, has no test tools, and caps a swap at 100 USDT'
   assert.equal(mainnet.walletConnectChain, `solana:${SOLANA_MAIN.slice(0, 32)}`, 'CAIP-2: the first 32 characters of the genesis');
   assert.equal(mainnet.faucet, null);
   assert.equal(mainnet.regtest, false);
-  assert.equal(mainnet.maxSwapUnits, 100000000n);
+  assert.equal(mainnet.maxSwapUnits, 1000000000n);
   assert.equal(testnet.maxSwapUnits, null);
   // Nothing of testnet's may leak through the shared defaults.
   for (const key of ['genesis', 'usdt', 'lbtc', 'mint', 'programId', 'solana', 'heliusTemplate', 'explorer', 'walletConnectChain', 'solanaChain', 'walletNetwork', 'label', 'name']) {

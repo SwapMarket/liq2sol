@@ -46,7 +46,7 @@ fn mainnet_constants_are_the_real_ones() {
     // Mainnet's address prefixes: "lq1" for confidential addresses and "ex1" for plain ones, not testnet's "tlq1" and "tex1".
     assert_eq!(*main.params, AddressParams::LIQUID);
     assert_eq!((main.params.blech_hrp.to_string(), main.params.bech_hrp.to_string()), ("lq".to_string(), "ex".to_string()));
-    assert_eq!(MAINNET_MAX_PER_SWAP, 100_000_000, "100 USDT, in units of 10^-6");
+    assert_eq!(MAINNET_MAX_PER_SWAP, 1_000_000_000, "1000 USDT, in units of 10^-6");
     assert_eq!(sol::MAINNET_MINT.to_string(), "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
     assert_eq!(sol::MAINNET_PROGRAM.map(|p| p.to_string()).as_deref(), Some("DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b"));
 }

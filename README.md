@@ -4,7 +4,7 @@ Trustless atomic swaps between **USDt on Liquid** and **USDT on Solana**: a MuSi
 claims and a Simplicity refund leaf on Liquid, an Anchor escrow on Solana, a Rust maker, a static taker page, and quotes
 over Nostr. No custodian, no central operator, and a refund path for every user that needs no server.
 
-**Status:** live on mainnet since 2026-11-17, with at most 100 USDT a swap. Nothing here has had an outside audit:
+**Status:** live on mainnet since 2026-11-17, with at most 1000 USDT a swap (100 until 2026-11-21). Nothing here has had an outside audit:
 `musig2`'s adaptor code has the project's own review (`docs/musig2-review.md`).
 
 - **The page:** https://swapmarket.github.io/liq2sol/. It opens on mainnet, and Settings switches to Liquid testnet and Solana

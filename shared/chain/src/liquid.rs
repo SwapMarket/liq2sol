@@ -65,9 +65,9 @@ impl NetworkConfig {
     }
 }
 
-/// The most one swap may move on mainnet, in Solana's USDT units: 100 USDT (user's decision, 2026-11-16). Makers can go
-/// lower, and only a new release can go higher.
-pub const MAINNET_MAX_PER_SWAP: u64 = 100_000_000;
+/// The most one swap may move on mainnet, in Solana's USDT units: 1000 USDT (user's decision, 2026-11-21; it was 100 from
+/// 2026-11-16). Makers can go lower, and only a new release can go higher.
+pub const MAINNET_MAX_PER_SWAP: u64 = 1_000_000_000;
 
 /// Hold a process to the network it was told. A mainnet genesis under "testnet" stops it, and so does anything but mainnet
 /// under "mainnet", on either chain, so a wrong endpoint or a wrong setting can't put real funds under test rules.

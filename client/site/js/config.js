@@ -81,8 +81,9 @@ const MAINNET = {
   faucet: null,
   openInWallets: ['Phantom', 'Solflare', 'Trust'],
   walletConnectHint: '',
-  // The most one swap may move, in USDT units of 10^-6: 100 USDT (user's decision, 2026-11-16). The maker's release has the same cap.
-  maxSwapUnits: 100000000n,
+  // The most one swap may move, in USDT units of 10^-6: 1000 USDT (user's decision, 2026-11-21; it was 100 from 2026-11-16). The
+  // maker's release has the same cap.
+  maxSwapUnits: 1000000000n,
 };
 
 export const NETWORKS = { testnet: TESTNET, mainnet: MAINNET };

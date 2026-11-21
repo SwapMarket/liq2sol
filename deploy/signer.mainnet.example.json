@@ -8,9 +8,9 @@
  },
  "solana_rpc": "https://mainnet.helius-rpc.com/?api-key=YOUR_HELIUS_KEY",
  "limits": {
-  "max_per_swap": 100000000,
+  "max_per_swap": 1000000000,
   "window_secs": 3600,
-  "max_per_window": 300000000,
+  "max_per_window": 3000000000,
   "confirmations": 2,
   "large_above": 100000000,
   "confirmations_large": 10,

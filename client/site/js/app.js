@@ -1663,7 +1663,7 @@ function networkRow() {
   const unfinished = Object.values(loadSwaps()).filter((s) => !FINISHED.includes(s.state)).length;
   const why = other === 'mainnet' && !mainnetAvailable() ? 'Mainnet is not available yet.'
     : unfinished ? `Finish or cancel your ${unfinished === 1 ? 'swap' : `${unfinished} swaps`} in progress first: this page has to keep watching ${unfinished === 1 ? 'it' : 'them'}.`
-      : other === 'mainnet' ? 'Mainnet uses real funds, up to 100 USDT a swap. Your test swaps and settings stay here for when you switch back.'
+      : other === 'mainnet' ? 'Mainnet uses real funds, up to 1000 USDT a swap. Your test swaps and settings stay here for when you switch back.'
         : 'Your mainnet swaps and settings stay here for when you switch back.';
   const go = h('button', {
     class: 'btn quiet', id: 'switch-network', disabled: (other === 'mainnet' && !mainnetAvailable()) || unfinished > 0,

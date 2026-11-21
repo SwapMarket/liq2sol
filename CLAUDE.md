@@ -82,7 +82,7 @@ Details and sources are in the docs. These are recorded because older assumption
 - **A process is told its network and both chains must agree** (`sol::enter`, the page's `checkGenesis`): mainnet's name never
   goes with test chains, nor test rules with mainnet chains. `"network": "mainnet"` in both maker configs; default testnet.
 - **Mainnet decisions (user's, 2026-11-16):** a guarded switch in Settings, with separate storage per network; the escrow program
-  immutable from the start; my own review of `musig2`, not an audit; at most 100 USDT a swap (`MAINNET_MAX_PER_SWAP`, the page's
+  immutable from the start; my own review of `musig2`, not an audit; at most 1000 USDT a swap since 2026-11-21, 100 before (`MAINNET_MAX_PER_SWAP`, the page's
   `maxSwapUnits`), which only a release can raise.
 - **The mainnet escrow is `DsgtATJzzejhSZweUsna77kU5vYFqrSojoEYUNmufi6b`,** deployed final from 297cd7c with `--features mainnet`
   (2026-11-17), set in `sol::MAINNET_PROGRAM` and the page's `MAINNET.programId`. It can never change: a fix means a new program id.

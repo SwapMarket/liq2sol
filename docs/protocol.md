@@ -396,6 +396,11 @@ The brief lists both. A reservation can't be enforced in Phase 1, because Solana
 | **2 blocks up to a per-swap limit, 10 blocks above it, plus a total exposure cap (accepted)** | Reduces rollback exposure for larger swaps at a small cost in speed. The September rollback shows depth doesn't remove the risk, so the cap carries the weight. |
 | 2 blocks always | The brief's value. Fastest. |
 
+**Changed on mainnet (user's decision, 2026-11-21):** 1 block up to 100 USDT and 2 above, with the cap raised to 1000 USDT a
+swap. Set by `confirmations`, `large_above` and `confirmations_large` in the maker's and signer's configs, and by `confirmationsFor` in
+the page. Faster, with more rollback exposure per swap: a reorganisation one block deep can undo a coin the maker or the taker has
+already acted on. Test networks keep 2 blocks for every size.
+
 ### D8. Program upgradeability
 
 | Option | Trade-off |

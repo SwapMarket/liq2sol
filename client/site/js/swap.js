@@ -1,7 +1,7 @@
 // One swap's state machine, from docs/protocol.md sections 4 and 5. It is resumed from storage after a reload, and each tick reads
 // the chains again, so nothing depends on this page having stayed open. Decisions about funds and secrets are in the WASM.
 import * as W from '../wasm/liq2sol_client_wasm.js';
-import { NETWORK } from './config.js';
+import { NETWORK, confirmationsFor } from './config.js';
 import { hexToBytes } from './chain.js';
 import { log } from './logs.js';
 import { saveSwap } from './store.js';
@@ -20,7 +20,7 @@ export const CANCELLABLE = ['recovery', 'fund', 'lock'];
 // for the payment's before the maker locks, and S→L for the maker's lock's before signing the claim.
 export function phase(s) {
   if (s.state !== 'await_maker') return s.state;
-  if (s.direction === 'L2S') return (s.coin?.confirmations ?? 0) < NETWORK.liquidConfirmations ? 'confirming' : 'await_maker';
+  if (s.direction === 'L2S') return (s.coin?.confirmations ?? 0) < confirmationsFor(s.terms) ? 'confirming' : 'await_maker';
   return s.maker_locked ? 'maker_confirms' : 'await_maker';
 }
 
@@ -302,7 +302,7 @@ export class Engine {
       // Once the maker has locked it won't release, so the page stops offering to ask.
       s.maker_locked = coins.length > 0;
       s.maker_confirmations = coins.length ? Math.max(...coins.map((c) => c.confirmations)) : 0;
-      const deep = coins.find((c) => c.confirmations >= NETWORK.liquidConfirmations);
+      const deep = coins.find((c) => c.confirmations >= confirmationsFor(s.terms));
       if (pastClaim || (escrow && slot >= escrow.deadline_slot)) {
         s.state = 'refund_wait';
       } else if (deep) {
@@ -320,7 +320,7 @@ export class Engine {
     const second = this.esplora[1];
     if (second) {
       const other = await this.exactCoins(second, s).catch(() => []);
-      if (!other.some((c) => c.txid === coin.txid && c.vout === coin.vout && c.confirmations >= NETWORK.liquidConfirmations)) {
+      if (!other.some((c) => c.txid === coin.txid && c.vout === coin.vout && c.confirmations >= confirmationsFor(s.terms))) {
         s.status = 'Waiting for the second Liquid source to see the maker’s coin.';
         return undefined;
       }

@@ -53,6 +53,8 @@ Details and sources are in the docs. These are recorded because older assumption
   use slots, and short-leg escrows also close on `LastRestartSlot`.
 - **Halts are asymmetric.** A halt on the chain holding the short leg lets the taker steal, because the long leg's clock
   keeps running: Liquid halt in S→L (mitigated by `extend`), Solana restart in L→S (mitigated by `close_on_restart`).
+- **Mainnet waits for 1 Liquid confirmation up to 100 USDT and 2 above** (user's decision, 2026-11-21; `confirmationsFor` in the page,
+  `large_above` in the configs). Test networks keep 2.
 - **Liquid's 2-block finality is not absolute.** The federation rolled back the chain in September 2026, after a roughly
   4-day stoppage.
 - **USDt can't pay Liquid fees** in practice: the mempool counts only the policy asset.

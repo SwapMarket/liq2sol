@@ -33,7 +33,11 @@ const TESTNET = {
   openInWallets: ['Phantom', 'Solflare'],
   walletConnectHint: 'This build needs Solana devnet: Phantom and Solflare list it, and Trust Wallet lists only mainnet.',
   pollMs: 15000,
+  // Liquid confirmations a swap's coin needs before the page acts on it: `liquidConfirmations`, or `liquidConfirmationsLarge` for a
+  // swap above `largeAboveUnits` (USDT units of 10^-6; null means one rule for every size). See confirmationsFor.
   liquidConfirmations: 2,
+  liquidConfirmationsLarge: 2,
+  largeAboveUnits: null,
   // docs/protocol.md section 3.
   rules: {
     l2s_min_blocks: 240, l2s_max_blocks: 360, s2l_min_blocks: 50, s2l_max_blocks: 150,
@@ -84,6 +88,10 @@ const MAINNET = {
   // The most one swap may move, in USDT units of 10^-6: 1000 USDT (user's decision, 2026-11-21; it was 100 from 2026-11-16). The
   // maker's release has the same cap.
   maxSwapUnits: 1000000000n,
+  // 1 confirmation up to 100 USDT, 2 above (user's decision, 2026-11-21), as the maker's mainnet example config.
+  liquidConfirmations: 1,
+  liquidConfirmationsLarge: 2,
+  largeAboveUnits: 100000000n,
 };
 
 export const NETWORKS = { testnet: TESTNET, mainnet: MAINNET };
@@ -111,6 +119,12 @@ function chosen() {
 }
 
 export const NETWORK = NETWORKS[chosen()];
+
+// The Liquid confirmations a swap's coin needs: more for a swap above `largeAboveUnits`, the size the agreed terms say it is.
+export function confirmationsFor(terms, net = NETWORK) {
+  const large = net.largeAboveUnits !== null && terms && BigInt(terms.solana_amount) > net.largeAboveUnits;
+  return large ? net.liquidConfirmationsLarge : net.liquidConfirmations;
+}
 
 // Switching reloads the page, so nothing built for one network is ever used on the other.
 export function chooseNetwork(name) {

@@ -124,7 +124,7 @@ and sizes to 2, with minimums rounded up and maximums and availability rounded d
 
 **A quote's time.** "Price holds for" counts down each second to the first of an order's quotes to expire. At zero, Accept gives way to Get a new price, because the maker would refuse an accept after its quote's expiry (`shared/rfq/src/rules.rs`). The count uses the device's clock, so a press in the last second or two can still be refused.
 
-**A swap under way.** Each step shows how long it took, and the current one counts up. The addresses involved link to the explorers. While the maker is due to act, the page counts Liquid confirmations: "Your payment has 1/2 confirmations" on L→S, and "The maker locked on Liquid: 1/2 confirmations" on S→L. A wallet request shows a panel saying where to approve it.
+**A swap under way.** Each step shows how long it took, and the current one counts up. The addresses involved link to the explorers. While the maker is due to act, the page counts Liquid confirmations: "Your payment has 0/1 confirmation" on L→S, and "The maker locked on Liquid: 1/2 confirmations" on S→L. How many it waits for depends on the swap's size (`confirmationsFor`: on mainnet 1 up to 100 USDT and 2 above). A wallet request shows a panel saying where to approve it.
 
 **Steps that wait.** Each swap's steps run one at a time (`withSwap`), so a request that never answered would hold back everything after it. Every chain request gives up after 30 s. A pressed Claim or Lock turns at once into what it is doing, and can't be pressed twice.
 

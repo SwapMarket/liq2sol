@@ -1,6 +1,6 @@
 // The page. It shows state and takes decisions from the user. js/swap.js and the WASM do the protocol.
 import init, * as W from '../wasm/liq2sol_client_wasm.js';
-import { NETWORK, checkGenesis, chooseNetwork, mainnetAvailable } from './config.js';
+import { NETWORK, checkGenesis, chooseNetwork, confirmationsFor, mainnetAvailable } from './config.js';
 import { Esplora, Solana, hexToBytes } from './chain.js';
 import { bpsAt, effectivePrice, planOrder, sendLimits } from './plan.js';
 import { Relays } from './relay.js';
@@ -1168,7 +1168,7 @@ function act(id, fn, label) {
 
 // A step's button, or what it is doing once pressed.
 // "1/2 confirmations", counting to the number a step waits for.
-const confirmations = (n) => `${Math.min(n ?? 0, NETWORK.liquidConfirmations)}/${NETWORK.liquidConfirmations} confirmations`;
+const confirmations = (n, terms) => { const need = confirmationsFor(terms); return `${Math.min(n ?? 0, need)}/${need} confirmation${need === 1 ? '' : 's'}`; };
 
 function stepButton(s, cls, text, disabled, fn, label) {
   if (pressed.has(s.id)) return h('p', { class: `status spin pressed` }, pressed.get(s.id));
@@ -1317,8 +1317,8 @@ function swapBody(s) {
       return [
         s.escrow_problem && h('p', { class: 'warn escrow-problem' }, `The maker locked, but the secret stays hidden: ${s.escrow_problem}. Your funds are safe, and can come back with a refund.`),
         h('p', { class: 'status spin confirmations' }, s.direction === 'L2S'
-          ? `Your payment has ${confirmations(s.coin?.confirmations)}.`
-          : s.maker_locked ? `The maker locked on Liquid: ${confirmations(s.maker_confirmations)}.` : 'Locked. Waiting for the maker to lock on Liquid.'),
+          ? `Your payment has ${confirmations(s.coin?.confirmations, s.terms)}.`
+          : s.maker_locked ? `The maker locked on Liquid: ${confirmations(s.maker_confirmations, s.terms)}.` : 'Locked. Waiting for the maker to lock on Liquid.'),
         (s.direction === 'L2S' || s.maker_locked) && s.status && h('p', { class: 'note early-status' }, s.status),
         s.direction === 'L2S' && s.coin && h('button', {
           class: 'btn quiet early-refund', title: 'If the maker hasn’t locked, it can cancel now, and you get your coin back without waiting. If it says no, nothing changes.',

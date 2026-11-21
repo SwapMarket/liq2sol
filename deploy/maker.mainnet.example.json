@@ -4,9 +4,9 @@
  "signer_socket": "run/signer.sock",
  "pages": "pages.log",
  "engine": {
-  "confirmations": 2,
+  "confirmations": 1,
   "large_above": 100000000,
-  "confirmations_large": 10,
+  "confirmations_large": 2,
   "max_per_swap": 1000000000,
   "max_open_l2s": 3000000000,
   "max_open_s2l": 3000000000,

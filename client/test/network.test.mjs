@@ -92,3 +92,16 @@ test('the page lets WalletConnect prove its domain, and allows no other frames',
   const bundle = readFileSync(new URL('../site/vendor/walletconnect.js', import.meta.url), 'utf8');
   for (const host of bundle.match(/https:\/\/verify\.walletconnect\.[a-z]+/g)) assert.ok(frames.includes(host), host);
 });
+
+test('Liquid confirmations: on mainnet 1 up to 100 USDT and 2 above it; on test networks always 2', async () => {
+  const { NETWORKS, confirmationsFor } = await load('mainnet');
+  const main = NETWORKS.mainnet, test = NETWORKS.testnet;
+  const terms = (units) => ({ solana_amount: String(units) });
+  assert.equal(confirmationsFor(terms(1000000), main), 1);
+  assert.equal(confirmationsFor(terms(100000000), main), 1, 'exactly 100 USDT is not above it');
+  assert.equal(confirmationsFor(terms(100000001), main), 2);
+  assert.equal(confirmationsFor(terms(1000000000), main), 2);
+  for (const units of [1000000, 100000001, 1000000000]) assert.equal(confirmationsFor(terms(units), test), 2);
+  // A swap whose terms aren't known yet gets the smaller number only on a network with one rule; mainnet's is the small one.
+  assert.equal(confirmationsFor(undefined, main), 1);
+});

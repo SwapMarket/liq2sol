@@ -65,7 +65,7 @@ Tags: `["d","liq2sol-v2-<network>"]`, `["expiration","<unix>"]`, `["t","liq2sol"
 
 A maker sets prices per direction and per size. A swap takes the first step whose `up_to` covers what the taker sends, in SOL-USDT base units, and that one rate prices the whole swap. Steps must rise, and the last must reach `max_sol_units`, or the maker won't start and takers ignore the offer. Because a rate applies to a whole swap, a taker could split an order to stay in a cheaper step, up to the client's 5 swaps per order, so a maker should price small steps knowing that.
 
-`min_sol_units` is the smallest a taker may send, so an order of exactly that size fills although its payout is less after the spread (user's decision, 2026-11-18; before v0.15 it applied to both sides). `max_sol_units` and the mainnet cap of 100 USDT apply to both sides.
+`min_sol_units` is the smallest a taker may send, so an order of exactly that size fills although its payout is less after the spread (user's decision, 2026-11-18; before v0.15 it applied to both sides). `max_sol_units` and the mainnet cap of 1000 USDT (100 before v0.19) apply to both sides.
 
 `available_*` is what the maker can pay now in that direction, in SOL-USDT base units, less what open swaps are counting on. It can exceed `max_sol_units`, which limits each swap, so an order can take several swaps from one maker. A maker doesn't quote above it, so a quote it can't fill never ties up a taker's funds. Publishing it reveals capacity, and `show_available_up_to` in the maker's config shows less.
 

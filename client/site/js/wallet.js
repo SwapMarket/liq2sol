@@ -83,15 +83,24 @@ function base58Decode(s) {
 }
 
 // Loaded only when someone picks WalletConnect, or used it last time, because it is large and needs Reown's relay.
-async function walletConnectClient(projectId) {
-  const { SignClient } = await import('../vendor/walletconnect.js');
-  return SignClient.init({
-    projectId,
-    metadata: {
-      name: 'liq2sol', description: 'Trustless swaps between USDt on Liquid and USDT on Solana',
-      url: new URL('.', location.href).href, icons: [],
-    },
-  });
+// One client for the page, per project. Each SignClient.init starts its own WalletConnect core on the same storage and relay, so with
+// two (one restoring the last session at load, one connecting) the wallet's answer could reach the one that hadn't asked. It dropped
+// it ("No matching key. proposal"), and the page never saw the wallet connect. The promise is kept, so calls that overlap share it.
+const clients = new Map();
+function walletConnectClient(projectId) {
+  if (!clients.has(projectId)) {
+    const made = import('../vendor/walletconnect.js').then(({ SignClient }) => SignClient.init({
+      projectId,
+      metadata: {
+        name: 'liq2sol', description: 'Trustless swaps between USDt on Liquid and USDT on Solana',
+        url: new URL('.', location.href).href, icons: [],
+      },
+    }));
+    // A failed start, such as the relay being unreachable, can be tried again.
+    made.catch(() => clients.delete(projectId));
+    clients.set(projectId, made);
+  }
+  return clients.get(projectId);
 }
 
 function walletConnectWallet(client, session) {

@@ -599,8 +599,10 @@ async function s2l() {
   if (rentAfter <= rentBefore) throw new Error(`no rent came back: ${rentBefore} -> ${rentAfter}`);
   await new Promise((r) => setTimeout(r, 6000));
   if (await item.locator('.history-rent').isVisible() || await page.locator('.history-rent-total').isVisible()) throw new Error('rent still shown after reclaiming it');
+  // The swap remembers it, which ticks its last steps: Reclaim the rent, then Done.
+  if (!(await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('liq2sol.swaps')))[0].rent_back))) throw new Error('the swap doesn\'t record that its rent is back');
   await page.locator('.tab[data-tab="swap"]').click();
-  step('the lock\'s rent comes back to the wallet from the history');
+  step('the lock\'s rent comes back to the wallet from the history, and the swap\'s Reclaim the rent step is ticked');
   await checkFinishedRestore(file);
   step('restoring a finished swap from its file shows it finished, and never offers to lock again');
   await checkClosedLock(file);

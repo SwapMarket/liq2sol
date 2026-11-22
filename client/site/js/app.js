@@ -831,7 +831,7 @@ async function acceptQuotes() {
 // ---- A swap under way ----
 const FLOW = {
   L2S: [['recovery', 'Save the recovery file'], ['fund', 'Pay the swap address'], ['confirming', 'Your payment confirms'], ['await_maker', 'The maker locks on Solana'], ['ready_claim', 'You claim on Solana'], ['done', 'Done']],
-  S2L: [['recovery', 'Save the recovery file'], ['lock', 'You lock on Solana'], ['await_maker', 'The maker locks on Liquid'], ['maker_confirms', 'The maker\'s lock confirms'], ['signing', 'Sign the claim together'], ['claiming', 'Publish the claim'], ['done', 'Done']],
+  S2L: [['recovery', 'Save the recovery file'], ['lock', 'You lock on Solana'], ['await_maker', 'The maker locks on Liquid'], ['maker_confirms', 'The maker\'s lock confirms'], ['signing', 'Sign the claim together'], ['claiming', 'Publish the claim'], ['rent', 'Reclaim the rent'], ['done', 'Done']],
 };
 
 // "45s", "3m 05s", "1h 02m".
@@ -844,12 +844,15 @@ function duration(secs) {
 
 function stepsView(s) {
   const flow = FLOW[s.direction];
-  const at = flow.findIndex(([k]) => k === phase(s));
+  let at = flow.findIndex(([k]) => k === phase(s));
   // A refund leaves this path, and a list with nothing marked would only confuse.
   if (at < 0 && s.state !== 'done') return null;
+  // S→L: paid, and the escrow's rent (about 0.002 SOL, which the taker paid) is the last step, until it is back.
+  const rentDue = s.direction === 'S2L' && s.state === 'done' && !s.rent_back;
+  if (rentDue) at = flow.findIndex(([k]) => k === 'rent');
   const began = (k) => s.step_at?.[k] ?? (k === 'recovery' ? s.created_at : undefined);
   return h('ol', { class: 'steps' }, flow.map(([k, text], i) => {
-    const done = i < at || s.state === 'done';
+    const done = i < at || (s.state === 'done' && !rentDue);
     const start = began(k);
     // A finished step shows how long it took, and the current one counts up, by itself, between redraws.
     const next = flow.slice(i + 1).map(([n]) => began(n)).find((t) => t !== undefined);
@@ -1543,16 +1546,27 @@ async function unclaimedRent(s) {
 
 const sol = (lamports) => `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
 
+// The rent is back, or there is none to come back: the escrow is closed, and closing it paid its rent to the wallet that paid it.
+// Remembered, so the swap's last step is ticked. Only a finished or refunded S→L swap whose escrow address is known can say so.
+async function noteRentBack(s) {
+  if (s.direction !== 'S2L' || s.rent_back || !s.escrow_address || !['done', 'refunded'].includes(s.state)) return;
+  const e = await solana.escrow(s.escrow_address, 'confirmed');
+  if (e && !(e.state !== 'Open' && e.rent_payer !== s.solana_owner)) return;
+  await withSwap(s.id, (x) => { x.rent_back = true; saveSwap(x); });
+  render();
+}
+
 // S→L locks pay about 0.002 SOL of rent into the escrow record. Once settled, the wallet that paid can have it back.
 // The history page redraws every few seconds, so this starts from the last known answer and only changes when the answer does,
-// or it would blink on every redraw.
+// or it would blink on every redraw. Until the maker has collected, which settles the escrow, it says it is waiting for that.
 function reclaimButton(s) {
   const box = h('div', { class: 'reclaim-box', 'data-live': '' });
-  if (s.direction !== 'S2L' || !['done', 'refunded'].includes(s.state)) return box;
+  if (s.direction !== 'S2L' || !['done', 'refunded'].includes(s.state) || s.rent_back) return box;
+  const waiting = () => h('p', { class: 'note reclaim-wait' }, 'The escrow’s rent comes back once the maker collects on Solana, usually within minutes.');
   const show = (lamports) => {
     const has = box.querySelector('.reclaim');
-    if (lamports > 0n && !has) box.append(button());
-    if (!(lamports > 0n) && has) box.replaceChildren();
+    if (lamports > 0n && !has) box.replaceChildren(button());
+    if (!(lamports > 0n) && !box.querySelector('.reclaim-wait')) box.replaceChildren(waiting());
   };
   const button = () => h('button', {
       class: 'btn quiet reclaim',
@@ -1562,8 +1576,10 @@ function reclaimButton(s) {
           if (!wallet) await connectWallet();
           await engine.reclaimRent(s);
           rentCache.set(s.id, { lamports: 0n, at: Date.now() });
+          await withSwap(s.id, (x) => { x.rent_back = true; saveSwap(x); });
           toast('Rent reclaimed.');
           box.replaceChildren();
+          render();
         } catch (err) {
           fail(err);
           ev.target.disabled = false;
@@ -1571,7 +1587,10 @@ function reclaimButton(s) {
       },
     }, 'Reclaim the rent');
   show(rentCache.get(s.id)?.lamports ?? 0n);
-  unclaimedRent(s).then(show).catch(() => {});
+  unclaimedRent(s).then((lamports) => {
+    show(lamports);
+    if (!(lamports > 0n)) noteRentBack(s).catch(() => {});
+  }).catch(() => {});
   return box;
 }
 

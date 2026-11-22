@@ -39,6 +39,11 @@ export function asV0(tx) {
 // handles v0 ones, so it gets those.
 const wantsV0 = (w) => w.name === 'Trust' || Object.keys(w.features).some((f) => f.startsWith('trust:'));
 
+// Over WalletConnect, Trust Wallet takes a legacy transaction, lets the person approve it, and never answers, so the page waits on a
+// signature already given (reported 2026-11-22; others saw Trust fail on legacy and sign v0, cowprotocol/cowswap#8693). It gets v0
+// there too. Other wallets keep what they have always been sent.
+export const walletConnectTransaction = (peerName, tx) => (/trust/i.test(peerName ?? '') ? asV0(tx) : tx);
+
 // silent asks the wallet to reconnect only if it already trusts this page, with no prompt.
 export async function connectExtension(w, silent = false) {
   const { accounts } = await w.features['standard:connect'].connect(silent ? { silent: true } : undefined);
@@ -113,12 +118,14 @@ function walletConnectWallet(client, session) {
     name: session.peer.metadata.name,
     address,
     sign: async (tx) => {
+      // What the wallet signs, which a signature alone must go back into.
+      const sent = walletConnectTransaction(session.peer?.metadata?.name, tx);
       const res = await client.request({
         topic: session.topic, chainId: chain,
-        request: { method: 'solana_signTransaction', params: { transaction: bytesToB64(tx) } },
+        request: { method: 'solana_signTransaction', params: { transaction: bytesToB64(sent) } },
       });
       if (res.transaction) return b64ToBytes(res.transaction);
-      const signed = tx.slice();
+      const signed = sent.slice();
       signed.set(base58Decode(res.signature), 1);
       return signed;
     },

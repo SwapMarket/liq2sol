@@ -192,3 +192,28 @@ test('a fill won’t give up so much that it falls below its own maker’s minim
   assert.equal(p.fills.length, 1, '6 would be below the top maker’s minimum of 20');
   assert.ok(p.unfilled > 0n);
 });
+
+test('largestFor: the most one maker takes now, limited by what it can pay as well as by its limit per swap', async () => {
+  const { largestFor, receiveFor } = await import('../site/js/plan.js');
+  const usdt = (n) => BigInt(Math.round(n * 1e6));
+  const tiers = [{ up_to: usdt(100), bps: 50 }, { up_to: usdt(1000), bps: 40 }];
+  const maker = (available, max = usdt(1000)) => ({ maker: 'm', tiers, min: usdt(1), max, available });
+
+  // Plenty of inventory: its limit per swap.
+  assert.equal(largestFor(maker(usdt(5000))), usdt(1000));
+  // Less inventory than its limit: the most it can pay for, at the rate for that size, and no more.
+  const short = largestFor(maker(usdt(993.193911)));
+  assert.ok(short < usdt(1000));
+  assert.ok(receiveFor(short, 40) <= usdt(993.193911), 'it can pay for the largest');
+  // Rounded down a little, as the planner does, so never above it: 0.00001 USDT more is more than it can pay.
+  assert.ok(receiveFor(short + 10n, 40) > usdt(993.193911), 'and close to it');
+  // A smaller limit than inventory: the limit.
+  assert.equal(largestFor(maker(usdt(5000), usdt(500))), usdt(500));
+  // Inventory so low that only the smaller step fits: something it can pay for at that step's rate. The planner steps down from the
+  // top tier, so this can be a few cents under the most it could pay for at the smaller step's rate: an understatement, never more.
+  const small = largestFor(maker(usdt(50)));
+  assert.ok(small >= usdt(50) && small <= usdt(100) && receiveFor(small, 50) <= usdt(50));
+  // Below its own minimum: nothing.
+  assert.equal(largestFor(maker(usdt(0.5))), null);
+  assert.equal(largestFor(maker(0n)), null);
+});

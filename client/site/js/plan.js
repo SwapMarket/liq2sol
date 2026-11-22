@@ -45,6 +45,14 @@ function fillFor(m, wanted, room, maxSpreadBps) {
 }
 
 /**
+ * The most a taker can send this maker in one swap: within its limit per swap and what it can pay now, at the rate for that size.
+ * Null if it can't take even its minimum.
+ */
+export function largestFor(m) {
+  return fillFor(m, m.max, m.available, 10000)?.send ?? null;
+}
+
+/**
  * @param total what the taker wants to send
  * @param makers [{ maker, tiers: [{ up_to, bps }], min, max, available }], in any order
  * @param first a maker to prefer over everything, if the taker picked one for this order

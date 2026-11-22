@@ -2,7 +2,7 @@
 import init, * as W from '../wasm/liq2sol_client_wasm.js';
 import { NETWORK, checkGenesis, chooseNetwork, confirmationsFor, mainnetAvailable } from './config.js';
 import { Esplora, Solana, hexToBytes } from './chain.js';
-import { bpsAt, effectivePrice, planOrder, sendLimits } from './plan.js';
+import { bpsAt, effectivePrice, largestFor, planOrder, sendLimits } from './plan.js';
 import { Relays } from './relay.js';
 import { CANCELLABLE, Engine, FINISHED, deriveSwap, phase, rulesJson } from './swap.js';
 import { loadSettings, loadSwaps, removeSwap, saveSettings, saveSwap, withSwap } from './store.js';
@@ -257,6 +257,13 @@ function slot(el, key, build) {
   el.replaceChildren(...[build()].flat().filter(Boolean));
 }
 
+// The sizes this maker takes now: from its minimum up to the most it can pay for, which can be below its limit per swap.
+function sizeRange(o, direction, tiers) {
+  const largest = largestFor({ maker: o.maker, tiers, min: BigInt(o.offer.min_sol_units), max: capped(BigInt(o.offer.max_sol_units)), available: available(o, direction) });
+  if (largest === null) return 'none now';
+  return `≥${size(sizeUp(o.offer.min_sol_units))}\n≤${size(sizeDown(largest))}`;
+}
+
 // What to show for one maker: with an order typed in, the price and size of that order, and otherwise what the maker quotes.
 function bookCells(o, direction, send, fills) {
   const tiers = tiersOf(o, direction);
@@ -269,7 +276,7 @@ function bookCells(o, direction, send, fills) {
   return {
     rate: tiers.length > 1 ? tiers.map((t, i) => (i ? `>${size(sizeDown(tiers[i - 1].up_to))}` : `≤${size(sizeDown(t.up_to))}`) + `: ${price(t.bps)}`).join('\n') : price(tiers[0].bps),
     ladder,
-    size: `≥${size(sizeUp(o.offer.min_sol_units))}\n≤${size(sizeDown(o.offer.max_sol_units))}`,
+    size: sizeRange(o, direction, tiers),
   };
 }
 

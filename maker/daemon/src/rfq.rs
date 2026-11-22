@@ -19,6 +19,9 @@ use liq2sol_rfq::relay::{Relay, RelayEvent};
 use liq2sol_rfq::rules::{self, MakerRules, RateLimit};
 use liq2sol_rfq::wrap;
 use liq2sol_signer::{Call, Client, Reply, SwapTerms};
+use liq2sol_swapkey::solana_point_of;
+use liq2sol_chain::sol::escrow_pda;
+use anchor_lang::prelude::Pubkey;
 use nostr::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -388,9 +391,13 @@ impl Handler {
         None
     }
 
-    /// L→S. The signer promises never to lock, or refuses because it already has. The refund is signed later, on request.
+    /// L→S: the signer promises never to lock, or refuses because it already has. The refund is signed later, on request.
+    /// S→L: see `cancel_s2l`.
     fn on_cancel(&mut self, sender: &PublicKey, id: &str, a: CancelAsk, now: u64) -> Option<Event> {
         let terms = self.swap_for(sender, id, &a.lock_point)?;
+        if terms.direction == engine::Direction::S2L {
+            return self.cancel_s2l(sender, id, terms, a, now);
+        }
         let swap = terms.lock_point.id();
         let body = match self.signer.call(&Call::Cancel { terms }) {
             Ok(Reply::Nothing) => {
@@ -404,6 +411,36 @@ impl Handler {
                 eprintln!("rfq: cancel refused: {other:?}");
                 Body::RfqReject(Reject { reason: "this maker can't cancel now".into() })
             }
+        };
+        self.reply(sender, id, body, now).ok().map(|(e, _)| e)
+    }
+
+    /// S→L, before the taker locks: the taker cancelled, so give the swap up now rather than at the end of its lock window, which
+    /// frees what it held of our Liquid for other takers. We lock only after seeing the taker's lock, so nothing of ours is promised
+    /// and the signer isn't asked. Refused once the taker has locked, or when Solana can't be read, since the swap must go on then.
+    fn cancel_s2l(&mut self, sender: &PublicKey, id: &str, terms: SwapTerms, a: CancelAsk, now: u64) -> Option<Event> {
+        let swap = terms.lock_point.id();
+        let waiting = matches!(self.store.state(&swap), Ok(Some((_, engine::State::WatchLock))));
+        let taker_locked = (|| -> Result<bool, String> {
+            let taker = Pubkey::from_str(&terms.taker_solana).map_err(|e| e.to_string())?;
+            let point = solana_point_of(&terms.lock_point.0).map_err(|e| e.to_string())?;
+            Ok(self.sol.escrow(&escrow_pda(&taker, &point))?.is_some())
+        })();
+        let body = match (waiting, taker_locked) {
+            (true, Ok(false)) => {
+                if let Err(e) = self.store.commit_step(&swap, &engine::State::Abandoned, &[]) {
+                    eprintln!("rfq: couldn't mark {} abandoned: {e}", a.lock_point);
+                    return None;
+                }
+                println!("{} cancelled before the taker locked, at the taker's request", a.lock_point);
+                Body::Cancelled(Cancelled { lock_point: a.lock_point })
+            }
+            (_, Ok(true)) => Body::RfqReject(Reject { reason: "the taker has locked already".into() }),
+            (_, Err(e)) => {
+                eprintln!("rfq: cancel of {}: can't read Solana: {e}", a.lock_point);
+                Body::RfqReject(Reject { reason: "this maker can't cancel now".into() })
+            }
+            (false, _) => Body::RfqReject(Reject { reason: "this maker can't cancel now".into() }),
         };
         self.reply(sender, id, body, now).ok().map(|(e, _)| e)
     }

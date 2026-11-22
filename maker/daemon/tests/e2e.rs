@@ -1840,6 +1840,41 @@ fn rfq_s2l_release(w: &mut World) -> Res<()> {
     Ok(())
 }
 
+/// S→L, before the taker locks: the taker cancels, and the maker gives the swap up at once, rather than at the end of its lock
+/// window, which frees the Liquid it held for it. Once the taker has locked, a cancel is refused and the swap goes on.
+fn rfq_s2l_cancel(w: &mut World) -> Res<()> {
+    let cancel = |a: &S2lAgreed| Body::CancelAsk(msg::CancelAsk { lock_point: a.chosen.lock_point.to_hex() });
+
+    let mut a = s2l_agreed(w)?;
+    let id = a.chosen.swap_id();
+    let ask = cancel(&a);
+    send_body(&mut a.relay, &a.me, &w.maker_nostr, &a.negotiation, NETWORK, ask)?;
+    let got = early_answer(&mut a.relay, &a.me, &w.maker_nostr, &a.negotiation)?;
+    check(matches!(got.envelope.body, Body::Cancelled(_)), "the maker confirms the cancel")?;
+    w.wait_state(&id, "the maker dropping the swap", 30, |state| matches!(state, State::Abandoned))?;
+
+    // The taker has locked: the cancel is refused, and the swap is still on.
+    let mut b = s2l_agreed(w)?;
+    let id = b.chosen.swap_id();
+    let recipient = Pubkey::from_str(&b.terms.maker_solana).map_err(|e| e.to_string())?;
+    // A deadline too close for the maker's gate keeps it from locking on Liquid while the test asks.
+    let deadline = w.sol.slot()? + 90;
+    w.sol.lock(&w.taker_sol, point_64(&b.chosen.lock_point), recipient, RFQ_SEND, deadline, false)?;
+    let escrow = escrow_pda(&w.taker_sol.pubkey(), &point_64(&b.chosen.lock_point));
+    w.wait_for("the lock to finalize", 60, || w.sol.escrow(&escrow))?;
+    let ask = cancel(&b);
+    send_body(&mut b.relay, &b.me, &w.maker_nostr, &b.negotiation, NETWORK, ask)?;
+    let got = early_answer(&mut b.relay, &b.me, &w.maker_nostr, &b.negotiation);
+    check(got.is_err_and(|e| e.contains("locked already")), "having locked, the taker can't cancel")?;
+    check(matches!(w.state(&id)?, State::WatchLock), "and the maker still has the swap")?;
+
+    // Tidy up: the taker asks for its lock back, and the maker releases it.
+    let ask = release_ask(&b);
+    send_body(&mut b.relay, &b.me, &w.maker_nostr, &b.negotiation, NETWORK, ask)?;
+    w.wait_for("the maker to release the lock", 60, || Ok(w.sol.escrow(&escrow)?.filter(|e| e.state == EscrowState::Refunded)))?;
+    Ok(())
+}
+
 /// A coin of the wrong amount: the maker never locks for it, and can still hand it back early, through the same cancel.
 fn rfq_early_refund_wrong_coin(w: &mut World) -> Res<()> {
     const SHORT: u64 = 100;
@@ -2096,6 +2131,7 @@ fn the_daemon_runs_real_swaps() {
         ("RFQ early refund", rfq_early_refund),
         ("RFQ wrong coin refunded early", rfq_early_refund_wrong_coin),
         ("RFQ S2L release", rfq_s2l_release),
+        ("RFQ S2L cancel", rfq_s2l_cancel),
         ("browser client", browser_client),
     ];
     let filter = std::env::var("SCENARIO").unwrap_or_default();

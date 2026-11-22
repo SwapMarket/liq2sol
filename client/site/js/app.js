@@ -1428,6 +1428,8 @@ function cancelCard(shown) {
       const problem = problems.find(Boolean);
       if (problem) throw new Error(`This can't be cancelled, because ${problem}.`);
       await Promise.all(swaps.map((s) => withSwap(s.id, (fresh) => engine.set(fresh, { state: 'cancelled', status: '' }))));
+      // So each maker frees what it held for these swaps now, not at the end of its lock window.
+      for (const s of swaps) engine.tellCancelled(s);
       ui.openOrder = null;
       render();
     } catch (e) {

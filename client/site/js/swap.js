@@ -468,6 +468,17 @@ export class Engine {
 
   // ---- An early refund, if the maker agrees ----
 
+  // The taker cancelled before paying or locking: tell the maker, so it frees what it held for this swap now rather than at the end
+  // of its lock window. Best effort: the swap is cancelled here either way, and a maker that can't (an older one, on S→L) just waits.
+  tellCancelled(s) {
+    if (!s.maker || !s.secrets?.lock_point) return;
+    try {
+      this.send(s, { type: 'cancel-ask', body: { lock_point: s.secrets.lock_point } });
+    } catch (e) {
+      console.warn('telling the maker about a cancel', e?.message ?? e);
+    }
+  }
+
   // First the maker promises never to lock. The fee coin and the address can come afterwards, without a race.
   async askCancel(s) {
     // Paid, or holding only a coin of the wrong asset or amount, which the maker never locks for.

@@ -95,6 +95,7 @@ jobs:
               {"name": "RFQ early refund", "run": "e2e", "scenario": "RFQ early refund"},
               {"name": "RFQ wrong coin refunded early", "run": "e2e", "scenario": "RFQ wrong coin refunded early"},
               {"name": "RFQ S2L release", "run": "e2e", "scenario": "RFQ S2L release"},
+              {"name": "RFQ S2L cancel", "run": "e2e", "scenario": "RFQ S2L cancel"},
               {"name": "browser look", "run": "e2e", "scenario": "browser client", "browser": "look,cancelling,faucet"},
               {"name": "browser swaps", "run": "e2e", "scenario": "browser client", "browser": "l2s,s2l,split"},
               {"name": "browser refunds", "run": "e2e", "scenario": "browser client", "browser": "rescue,early,release"},

@@ -483,3 +483,18 @@ Before the maker locks on Liquid, the taker can ask for its Solana lock back wit
 3. The program pays the tokens back to the taker's own refund account, so the maker can only say yes or no. The taker still paid the escrow's rent, and closes it afterwards to get that back.
 
 The maker reads escrows at `finalized`, so a request made straight after locking is turned down, and the page lets the taker ask again. A maker that is healthy locks within seconds of that, so this mostly helps when a maker has stopped filling. As with L→S, refusal or silence changes nothing, and the deadline refund remains.
+
+## Cancelling before anything is paid or locked
+
+A taker that cancels a swap before paying (L→S) or locking (S→L) sends `cancel-ask`, so the maker frees what it held for the swap
+at once, not at the end of its lock window (30 Liquid blocks in the example configs). The page sends it after cancelling, and doesn't
+wait for the answer: the swap is cancelled on the page either way.
+
+- **L→S** is the first step of the early refund above. The signer records that it will never lock, and the maker gives the swap up
+  and answers `cancelled`.
+- **S→L** (from v0.20): the maker locks only after seeing the taker's lock, so there is nothing of its own to promise and the signer
+  isn't asked. If the swap is still waiting for the taker and no escrow for it is on Solana, the maker gives the swap up and answers
+  `cancelled`. If the taker has locked, it answers `rfq-reject` and the swap goes on, as it does when Solana can't be read. A taker
+  that cancels and then locks anyway gets its lock back only through the escrow's timed refund. The page never does that.
+
+A maker before v0.20 turns down an S→L `cancel-ask`, so it holds its Liquid until the window ends, as before.

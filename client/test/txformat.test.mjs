@@ -1,14 +1,9 @@
-// node --test client/test/wallet.test.mjs
+// node --test client/test/txformat.test.mjs
 // What each wallet is sent to sign over WalletConnect: Trust Wallet gets v0, everyone else the transaction as built.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
-globalThis.location = { reload: () => {} };
-// The Wallet Standard handshake runs when wallet.js loads; no wallet answers here.
-globalThis.window = { addEventListener: () => {}, dispatchEvent: () => true };
-globalThis.CustomEvent ??= class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
-const { asV0, walletConnectTransaction } = await import('../site/js/wallet.js');
+import { asV0, walletConnectTransaction } from '../site/js/txformat.js';
 
 // A legacy transaction: one empty signature slot, then a message whose first byte (the number of required signatures) is below 0x80.
 const message = Uint8Array.from([1, 0, 1, 2, ...new Array(32 * 2).fill(7), ...new Array(32).fill(9), 1, 1, 2, 0, 1, 0]);

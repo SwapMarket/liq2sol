@@ -151,7 +151,7 @@ jobs:
         run: |
           cargo build-sbf --arch v3 --manifest-path solana-escrow/Cargo.toml
           cargo build-sbf --arch v3 --manifest-path devnet-faucet/Cargo.toml
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: programs
           path: |
@@ -247,7 +247,7 @@ jobs:
           tar czf dist/binaries.tar.gz maker/target/debug/liq2sol-maker maker/target/debug/liq2sol-signer \
             maker/target/debug/e2e-suite maker/target/debug/process-suite \
             cli/target/debug/liq2sol-cli cli/target/debug/failures-suite client/site/wasm
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries
           path: dist/binaries.tar.gz
@@ -347,7 +347,7 @@ jobs:
           esac
       - name: Keep the logs
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logs-${{ matrix.name }}
           path: |

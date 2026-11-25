@@ -43,7 +43,7 @@ jobs:
       # A marker saved only when this job succeeds, so a failure can't be skipped on the next run. The key covers everything these tests build.
       - name: Skip the native tests if they already passed on this code
         id: passed
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/wasm/.native-tests-passed
           key: native-tests-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('client/wasm/**', 'contracts/swapkey/**', 'shared/chain/**', 'shared/rfq/**', 'programs/solana-escrow/**', 'programs/devnet-faucet/**') }}
@@ -69,7 +69,7 @@ jobs:
           persist-credentials: false
       - name: Reuse the toolchain image
         id: image
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/page-builder.tar
           key: page-builder-${{ hashFiles('client/reproducible/Dockerfile', 'client/reproducible/build-inside.sh', 'client/wasm/Cargo.lock') }}
